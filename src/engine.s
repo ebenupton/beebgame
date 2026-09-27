@@ -280,6 +280,7 @@ crtcb:     .res 2                   ; build_sections: the buffer's CRTC base
         .segment "TILBSS"           ; bank 6: the tile blitter's and the ring work's (the
                                     ; gather's arrays are low RAM's); boot zeroes it
 BUF_CY:    .res 2
+        .assert FLAT0 + NFLAT + 2 = 256, error, "the fills are the ids from FLAT0 to 255: NFLAT flat tiles, then the two solids (assets.inc)"
 FLATTAB:   .res 2*(NFLAT+2)         ; the level's flat tiles: (even line, odd line) by
                                     ; id - FLAT0, the loader's; the solids are the last two
         .segment "ENGBSS"           ; bank 7: mark_dirty and draw_dirty are there

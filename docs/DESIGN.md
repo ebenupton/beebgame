@@ -523,8 +523,13 @@ is a level tile id:
 | half1 .. half2-1 | half tiles whose bottom row is a fill |
 | half2 .. mir0-1 | half tiles whose two rows are the same |
 | mir0 .. (TILEMIRROR only) | full tiles drawn mirrored from another's slot |
-| FLAT0 = 250 .. 253 | flat tiles: one colour's dither, two bytes alternating down every character |
+| FLAT0 .. 253 | NFLAT flat tiles: one colour's dither, two bytes alternating down every character |
 | 254, 255 | the last two flat tiles, the solids: for a level that has a second |
+
+How many flat tiles a level may have is the game's parameter, NFLAT (assets.inc; FLAT0
+= 254 - NFLAT, asserted).  So NFLAT + 3 ids are fills, costing no bank 6 room beyond
+FLATTAB's two bytes each; the more there are, the fewer ids are left for the tiles.
+(Cleo's is 4.)
 
 The packer may give tiles that look the same the same id, or not: the game's two
 per-tile tables (LV_ATTR0, LV_ALTCLS) are read by id, so tiles the game treats

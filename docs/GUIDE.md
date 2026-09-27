@@ -565,7 +565,7 @@ checks): build them from the Model B's layout.
 | Constant | Meaning |
 |---|---|
 | `TOFF` | tile id k is in slot k + TOFF of bank 6 (2, or 4 with TILEMIRROR) |
-| `FLAT0`, `NFLAT` | the flat tiles' first id and count (the last two are the solids) |
+| `FLAT0`, `NFLAT` | the fill ids: NFLAT flat tiles from FLAT0, then the two solids at 254 and 255, so FLAT0 = 254 - NFLAT (asserted) |
 | `MAXMIR` | mirrored tiles at most (TILEMIRROR only; else 0) |
 | `BOXID0`, `BOXN` | the first box id, and how many boxes (*Sprite ids, and boxes*) |
 | `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once |
@@ -616,7 +616,11 @@ the blitters' (`DESIGN.md`, *The tiles* and *The sprites*).  In short:
 - Tile id 0 is the level's solid colour; the rest are full tiles (all 64 bytes
   stored), half tiles (one character row of the two stored, the other a fill), flat
   tiles (a colour's dither, two bytes alternating down the scanlines) and, if you need
-  them, mirrored ones.  A level has at most 250 distinct ids.
+  them, mirrored ones.  The top NFLAT + 2 ids are the flat tiles and the two solids,
+  so a level has at most 254 - NFLAT ids for everything else.  A flat tile costs two
+  bytes in bank 6 rather than 64: choose NFLAT for the most flat tiles a level uses
+  (Cleo's packer takes it from the environment, `NFLAT=n sh build.sh`, and stores a
+  level's surplus flat tiles as full ones).
 - Mirrored images go in bank 4 (it has the table that reverses a byte's four screen
   pixels), boxes in bank 5 (it has the copy blitter), and an image and its mask in the
   same bank.
