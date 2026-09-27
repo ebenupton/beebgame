@@ -314,8 +314,8 @@ the flip; your logic for the next frame runs while it waits.
 
 **The status bar** is two character rows outside the ring, at `BARADDR`.  Its template
 (BAR, your asset) is loaded with the game's image; set `BARDIRTY` when a number
-changes and draw it in `hook_hud`.  Cleo's `redraw_hud` draws digits into the bar
-from `digits_art`, remembering what each slot shows (`BARCACHE`), which is why its
+changes and draw it in `hook_hud`.  Cleo's `redraw_hud` draws digits into the bar from
+`digits_art`, remembering what each slot shows (`BARCACHE`), which is why its
 `hook_image` resets that cache.
 
 **Ending.**  When the game is over, `lda #n / jmp go_menu`.  Between levels, just go

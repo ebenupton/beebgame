@@ -39,85 +39,10 @@ format.
 | `test/lib/` | `harness.mjs` (a frame-exact jsbeeb driver: breaks at `frame_top`, bank- and image-aware, render-work meter, scene fingerprints), `boards.mjs` (write-select boards emulated on jsbeeb) |
 | `test/` | `test_levelfile.py` (`python3 -m unittest discover test`) |
 
-## A game on beebgame
-
-A game is one ca65 assembly: its root source includes the engine's, in this order,
-and its own around them (Cleo's `src/main.s` is the example):
-
-    .include "cpu.inc"
-    .include "defs.inc"
-    .include "engine.s"
-    ...the game's code...
-    .include "low.s"
-    .include "disc.s"
-    .if BHW
-    .include "mirror.s"
-    .endif
-    .include "banks.s"
-    ...the game's tables...
-    .include "init.s"
-
-### Hooks: what the engine calls
-
-| Symbol | When |
-|---|---|
-| `hook_title` | start-up: the menus' image is in (jumped to, stack reset) |
-| `hook_play` | `go_game` has loaded the game's image (jumped to, stack reset; interrupts off, the disc still open for the first level load) |
-| `hook_over` | `go_menu` has loaded the menus' image; A is `go_menu`'s A (jumped to, stack reset) |
-| `hook_image` | called just after the game's image is loaded, before `hook_play` |
-| `hook_hud` | called by `render_frame` while BARDIRTY is set: draw the bar |
-
-### Data and constants the game provides
-
-- `keymap.inc` (on the include path): `KEYN`, and `keytab`/`keybits`, a key number and
-  the `K_` bit it sets for each of KEYN keys.
-- `sfxtab`: the sound effects, a word per effect (SFXREQ = its number, from 1), each
-  steps of (latch, data, volume, frames) ending $FF, placed resident with
-  `PLACEH "CODE", "KRNCODE"`.
-- `MUSIC_ADDR`: the tune (`tools/midi2snd.py`'s output) in the menus' image.
-- `assets.inc` (generated into the build directory by the game's asset step): TOFF,
-  FLAT0, NFLAT, MAXMIR, BOXID0, BOXN, MAXSPRDEF, BINMAXDEF, SPRC_BASE, SPRC_LEN,
-  SPRC5_BASE, SPRC5_LEN, SPRX_LEN, SPR5_MIRROR, SPR4_COPY, MAP5, B4_CODE_END,
-  B5_CODE_END; and `imgtab.bin` (the sprite items' places in the shared files).
-- The disc files the loader reads, by these names: BAR (the bar template), SPRC (the
-  sprites every level draws), SPRX (the rest), TILES0-2 (the tile set), L0-L15 (the
-  levels, written with `tools/levelfile.py`): `docs/DESIGN.md`, *The level files*.
-
-### Segments the game fills
-
-| Segment | Where |
-|---|---|
-| ZPGAME | zero page, after the engine's |
-| LGCDATA, LGCCODE, LGCBSS | bank 7, the game's image (below the engine's code and variables) |
-| MNUCODE, MNUDATA, MNUBSS | bank 7, the menus' image (after the engine's music player) |
-| LOWBSS | low RAM, shared with the engine: a few bytes |
-
-The engine's API is its labels: `go_game`, `go_menu` (A passes to `hook_over`),
-`load_level_b`, `render_frame`, `addsprite`, `mark_dirty`, `calc_ring`,
-`menu_sections`, `ringaddr7`, `set_palette`, `blank_palette`, `music_start`,
-`music_stop`, `div10_16`, `selbb`, the map access `maprow`/`mapbyte`/`mapput`, and the
-variables in `defs.inc` and at the top of `engine.s` (window, keys, vsyncs, NSPR,
-BARDIRTY, SFXREQ...).
-
-## Building
-
-`tools/build.sh` is run from the game's directory, which gets `build/`:
-
-    GAME_MAIN=src/main.s GAME_SRC=src DISC_TITLE=CLEO DISC_OUT=build/cleo.ssd \
-    GAME_ASSETS="python3 tools/assets.py" \
-    GAME_MUSIC="python3 beebgame/tools/midi2snd.py tune.mid build/MUSIC" \
-    sh beebgame/tools/build.sh
-
-`GAME_ASSETS` runs once per machine (TARGET, BD set). The driver assembles the game
-twice, for the Model B (BHW=1, 6502) and the Master (BHW=0, 65C02), links the Master
-pinned to the Model B's addresses, builds the load-time program, the boot loader and
-each machine's bank pieces, patches and bank 7 images, settles the sector table and
-writes one disc.  Needs cc65 (`ca65`, `ld65`, `od65`) and Python 3.
-
 ## Status
 
 Extracted from Cleo on 27 September 2026 (Cleo commit 8483965), with the game's side
-of every coupling moved behind the hooks above; Cleo builds against it and its test
+of every coupling moved behind hooks (`docs/GUIDE.md`); Cleo builds against it and its test
 sweep is identical before and after.  The level file format is the engine's
 (`tools/levelfile.py`); what fills it -- choosing and packing the tiles, placing the
 sprites -- is still the game's packer (Cleo's `tools/assets.py` and `convert.py`
