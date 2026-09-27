@@ -84,18 +84,18 @@ It is off by default: no level needs it.
 
 | Range | Use |
 |---|---|
-| $00-$77 | the engine's (ZEROPAGE): defs.inc's (NSPR, BARDIRTY, SFXREQ, mtmp -- cpu.inc's scratch --, the ring and mirror state, the sprite prologue's hand-over, curR7, SECIDX), then engine.s's; LDPROG's 17 bytes (LDZP) are the sprite prologue's scratch, dead during a load |
-| $78-$7E | the Model B's own, the engine's (ZPHW: `jv`, the gather's shape); a gap on the Master |
-| $7F-$EC | the game's (ZPGAME: Cleo's logic.s state, `seed` and temporaries; $ED-$EF free) |
+| $00-$79 | the engine's (ZEROPAGE): defs.inc's (NSPR, BARDIRTY, SFXREQ, mtmp -- cpu.inc's scratch --, the ring and mirror state, the sprite prologue's hand-over, curR7, SECIDX), then engine.s's (`mapptr`, maprow's result, among them); LDPROG's 17 bytes (LDZP) are the sprite prologue's scratch, dead during a load |
+| $7A-$80 | the Model B's own, the engine's (ZPHW: `jv`, the gather's shape); a gap on the Master |
+| $81-$EE | the game's (ZPGAME: Cleo's logic.s state, its bin walk, `seed` and temporaries; $EF free) |
 | $F0-$FF | the MOS's zero page, but $F4 and $FC: the engine's hottest scalars |
 
 Once the game has the machine only two of the MOS's zero-page bytes are still touched:
 $F4, the MOS's copy of ROMSEL, which the interrupt restores from, and $FC, where the
 MOS's interrupt entry keeps A (every handler returns with `lda $FC / rti`).  The rest,
 in segments ZPF0 ($F0-$F3), ZPF5 ($F5-$FB) and ZPFD ($FD-$FF), holds scalars that were
-absolute and are among the most accessed (`test/hotvars.mjs` counts them): MAPSTRIDE,
-mapshr, MUSTICK, rowbit, dpass, spclip, NSTARL, NOTHL, halfhi, MUSON, and on
-the Model B crtcb.  `boot` zeroes them.  On the Model B the arithmetic gather's shape
+absolute and are among the most accessed (Cleo's `test/hotvars.mjs` counts them):
+MAPSTRIDE, mapshr, MUSTICK, rowbit, dpass, spclip, halfhi, MUSON, and on the Model B
+crtcb ($F9-$FB free).  `boot` zeroes them.  On the Model B the arithmetic gather's shape
 (half0-2, halfhi5, halfsub) and `jv`, the vector the 6502's `jmp (abs,x)` goes
 through, are in the ZEROPAGE segment.
 
@@ -187,7 +187,7 @@ $8000.
 | the row loop (SPR4CODE: `ds_entry`, the masked and mirrored-masked blitters) | $8000-$83AE | $8000-$8391 |
 | SPRC's bank-4 part (the resident sprites, 9,148 bytes) | $83AF-$A76A | same |
 | the level's sprites, images and masks | $A76B-$BAFF | same |
-| SWAPTAB (four-dot reversal) | $BB00-$BBFF | same |
+| SWAPTAB (the reversal of a byte's four screen pixels) | $BB00-$BBFF | same |
 | MASKTAB0-3 | $BC00-$BFFF | same |
 
 ### Bank 5: sprites and the map
@@ -342,19 +342,21 @@ kinds gets the kind with more; two boards at once are not handled.
 
 ## The display
 
-MODE 1, 80 characters (160 game pixels) wide, each square game pixel a 2x2 block of
-MODE 1 dots.  The palette is logical 0-3 = black, cyan, magenta, yellow; the colours
-come from a dither per game pixel (`tools/convert.py`): for each pixel the four-dot
-combination of C, M, Y and K nearest its colour, laid in kernel order (top left,
-bottom right, top right, bottom left) so that two inks of two make a checker.  The
-dither has no position term, so a tile or sprite reversed left to right with each
-byte's two pixels swapped is exact.
+Two units, always named (`docs/GUIDE.md`, *The concepts*): a **screen
+pixel** is MODE 1's, 320 to a line, two bits, four to a byte; a **game pixel** is the
+game's square pixel, 2 screen pixels wide and 2 scanlines tall.  MODE 1, 80 characters
+(160 game pixels) wide.  The palette is logical 0-3 = black, cyan, magenta, yellow;
+the colours come from a dither per game pixel (Cleo's `tools/convert.py`): for each
+game pixel the combination of four screen pixels in C, M, Y and K nearest its colour,
+laid in kernel order (top left, bottom right, top right, bottom left) so that two
+inks of two make a checker.  The dither has no position term, so a tile or sprite
+reversed left to right with each byte's two game pixels swapped is exact.
 
 Horizontal scrolling is by whole characters (two game pixels) through the CRTC start
 address.  Vertical scrolling is by a game pixel, two scanlines (`wfine` = 0, 2, 4 or 6
 lines into the character row), through a *rupture*: the frame is several CRTC frames, each
 section reprogrammed from a chain of VIA T1 interrupts and the whole re-phased at every
-vsync.  The window is `wx`, `wy` in map pixels; `wcx` = wx/2 and `wcy` = wy/4 in
+vsync.  The window is `wx`, `wy` in game pixels (map coordinates); `wcx` = wx/2 and `wcy` = wy/4 in
 characters and character rows; the ring offset of the window's top-left character is
 `ringS` and its slot `barq` (`calc_ring`).
 
@@ -589,7 +591,7 @@ every item's image and mask address, so this needs nothing of the loader.  The s
 is deterministic and cached (`build/sprpack.cache`).  Cleo's images are 300-700 bytes,
 so their rows carry once whatever the placement: that is the floor.
 
-The sprite list (SPRLIST in low RAM: one array per field -- id, x and y in map pixels)
+The sprite list (SPRLIST in low RAM: one array per field -- id, x and y in game pixels, map coordinates)
 is built by the logic, at most MAXSPR = 24.  Each buffer keeps a record per sprite
 drawn (10 bytes: id, position, the screen rectangle, whether it was clipped).
 `match_sprites` marks a sprite KEEP 2 when it is the same id in the same place as the
@@ -611,14 +613,18 @@ reads the image bytes; `ds_entry` sets the write bank and patches its own dispat
 Ids from BOXID0 + BOXN (118) are "nothing can disturb it" aliases of the ids BOXN
 below them.
 
-The masked blitter: a byte is two game pixels and every bit is a pixel, so there is no
-room for a transparency tag and the mask is a plane of its own, one bit a game pixel,
+The masked blitter: a byte is two game pixels and every bit belongs to a screen pixel,
+so there is no room for a transparency tag and the mask is a plane of its own, one bit
+a game pixel,
 four columns to a byte, column-group major so the mask pointer walks like the image
 pointer.  MASKTAB0-3 turn a mask byte into the AND mask for the column of that phase
 ($FF, $CC, $33, $00) with no shifting; they are 1K aligned so the phase is the page's
 low two bits, and at the same address in both sprite banks.  The two scanlines of a
-pixel row share a mask, so lines go in pairs.  Mirrored images use SWAPTAB (four-dot
-reversal) on both the data and the mask, and only bank 4 has it, so the packer puts
+game-pixel row share a mask, so lines go in pairs.  A sprite's screen position is in
+whole bytes across (`drawsprite`'s c0 = sx >> 1: 2 game pixels, 4 screen pixels) and
+game pixels down (2 scanlines); the mask's finer grain across is the sprite's
+outline, not its position.  Mirrored images use SWAPTAB (the reversal of a byte's four
+screen pixels) on both the data and the mask, and only bank 4 has it, so the packer puts
 every mirrored image there.  The box stars and trampolines are opaque boxes drawn by
 the copy blitter, which only bank 5 has.
 

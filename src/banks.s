@@ -30,7 +30,7 @@ ringmodtab:                         ; A = a map char row (brought under RINGROWS
 ; MASKTAB0..3 at the same address in both banks that hold sprite data, so the
 ; prologue in bank 7 can name a mask page for either; SWAPTAB in bank 4 alone
 ; (bank 5 draws nothing mirrored: the packer keeps such images out, and that page
-; holds the map instead).  MODE 1: four pixels a byte, two bits each.
+; holds the map instead).  MODE 1: four screen pixels a byte, two bits each.
 .macro MASK4 f                      ; AND mask by pair: keep what is NOT opaque
   .if f = 0
         .byte $FF

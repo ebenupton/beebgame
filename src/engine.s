@@ -68,7 +68,7 @@ VISROWS   = 30                    ; visible char rows: 240 lines = 120 game px (
   .endif
 BUFROWS   = VISROWS + 1           ; rows held: the visible ones plus the bottom partial's
 ; The camera follows the player one for one (Cleo's), so her fall speed is also how far the window
-; moves in a frame.  A char row is four map pixels: a play decision.
+; moves in a frame.  A char row is four game pixels: a play decision.
 MAXDWY    = 8
 ROWBYTES  = ROWCHARS*8
 RINGCHARS = ROWCHARS*RINGROWS
@@ -125,9 +125,8 @@ CRTCBASE  = RINGBASE / 8          ; the CRTC counts characters, so the ring star
 CRTCB_A   = CRTCBASE              ; each buffer's ring base, as the CRTC counts: one ring,
 CRTCB_B   = CRTCBASE              ; main and shadow (ACCCON D picks)
   .endif
-WINPX     = ROWCHARS*2            ; window width in pixels
+WINPX     = ROWCHARS*2            ; window width in game pixels
 VISLINES  = VISROWS*8
-BINMAX    = BINMAXDEF             ; from the objects' grid cells and the walk rectangle
 MAXREC    = MAXSPRDEF             ; (assets.inc)
 MAXSPR    = MAXSPRDEF
 
@@ -159,8 +158,8 @@ w16:      .res 2                  ; scratch words
 w16b:     .res 2
 
 ; window (map coords) for the frame being rendered
-wx:       .res 2                  ; window x in map px (even)
-wy:       .res 2                  ; window y in map px
+wx:       .res 2                  ; window x in game pixels, map coordinates (even)
+wy:       .res 2                  ; window y in game pixels, map coordinates
 wcx:      .res 2                  ; window x in map chars (wx/2)
 wcy:      .res 1                  ; window y in map char rows (wy/4)
 wfine:    .res 1                  ; fine scanline offset 0,2,4,6
@@ -217,7 +216,7 @@ sp_cnt:   .res 1                  ; sprite column countdown
         .assert sp_rp - LDZP >= 17, error, "the loader's zero page runs past the prologue's scratch"
                                   ; the mask walk aliases zp the blit no longer needs;
                                   ; the rest of it is defs.inc's (sp_mh, sp_mrp...)
-mptr    = w16                    ; this column group's mask bytes, one per pixel row
+mptr    = w16                    ; this column group's mask bytes, one per game-pixel row
 mtab    = tmp3                    ; MASKTAB page for this column's phase (tmp3 = 0, tmp4 = page)
 sp_msk  = tmp4c8                  ; the AND mask of the pair being drawn
 sp_id   = sp_ext                  ; the sprite id, until sp_ext is set a few lines later
@@ -230,7 +229,7 @@ barq:     .res 1                  ; row slot q = S/80
 ; level geometry
 maplw:    .res 1                  ; log2 map width in tiles
 maplh:    .res 1
-mapw:     .res 2                  ; map width in px
+mapw:     .res 2                  ; map width in game pixels
 maph:     .res 2
 maxwx:    .res 2                  ; mapw - WINPX
 maxwy:    .res 2                  ; maph - VISLINES/2
@@ -267,8 +266,6 @@ MUSTICK:   .res 1                   ; a frame's tune step is due: the vsync's so
 rowbit:    .res 1                   ; the char row being drawn, as a flag bit (1, 2)
 dpass:     .res 1                   ; draw_sprites' pass
 spclip:    .res 1                   ; set at every window edge a sprite is cut against
-NSTARL:    .res 1                   ; the cached bin walk's lengths: stars,
-NOTHL:     .res 1                   ;   everything else
 halfhi:    .res 1                   ; the halves' page (the loader's), for @hfill
         .segment "ZPFD": zeropage   ; $FD-$FF
 MUSON:     .res 1                   ; the tune plays: the interrupt stub steps it
@@ -326,7 +323,7 @@ ISRT2:     .res 1
 SPRLIST:                          ; (a label, not an equate: the tools read labels.txt)
 SPR_ID:    .res MAXSPR            ; the sprite draw list, one array per field (index =
 SPR_XL:    .res MAXSPR            ;  the sprite's number, so no stride to multiply by):
-SPR_XH:    .res MAXSPR            ;  id, x lo/hi, y lo/hi in map px
+SPR_XH:    .res MAXSPR            ;  id, x lo/hi, y lo/hi in game pixels (map coordinates)
 SPR_YL:    .res MAXSPR
 SPR_YH:    .res MAXSPR
 DISPSECT:  .res 1
@@ -807,7 +804,7 @@ drawrect:
   .if TILEMIRROR                    ; (cpu.inc: off by default -- no level needs a mirror)
         ; ---- a mirrored full tile: its source's chars right to left, each byte's two
         ; game pixels swapped -- ((b & $33) << 2) | ((b & $CC) >> 2); the dither is per
-        ; game pixel, so a pixel's dots move as one.  A char at a time through spnext,
+        ; game pixel, so a game pixel's dots move as one.  A char at a time through spnext,
         ; which folds at the ring end: rare tiles (the packer mirrors only what the
         ; bank cannot hold, the least used first), so no unrolled copy.
 @mir:   lda GATHERL,x
@@ -1119,7 +1116,7 @@ match_sprites:
         cmpz rp                     ; (zp): offset 0 needs no index register
         beq @same
         ; two box-star frames at the same place overwrite each other exactly -- every
-        ; pixel opaque, and each box covers the art of the frame before it -- so a
+        ; game pixel opaque, and each box covers the art of the frame before it -- so a
         ; frame change there needs no erase either
         cmp #BOXID0
         bcc @next
@@ -1132,7 +1129,7 @@ match_sprites:
         bcc @next
         lda #1                      ; 1 = a different frame of the same thing
         bne @pos
-@same:  lda #2                      ; 2 = identical, so its pixels are already right
+@same:  lda #2                      ; 2 = identical, so its screen pixels are already right
 @pos:   sta tmp3
   .if BHW
         iny                         ; Y = 0 on both ways in (cmpz, ldaz)
@@ -1155,7 +1152,7 @@ match_sprites:
         cmp (rp),y
         bne @next
         lda tmp3                    ; (X is still the sprite's number)
-        sta KEEP,x                  ; same pixels in the same place: skip the erase
+        sta KEEP,x                  ; same screen pixels in the same place: skip the erase
 @next:  lda rp
         clc
         adc #10
@@ -1216,7 +1213,7 @@ erase_old:                          ; go to bank 6's drawrect_clip through callb
 ; ============================================================================
 ; Sprites
 ; ============================================================================
-; add sprite to draw list: A = id, spx/spy = map px
+; add sprite to draw list: A = id, spx/spy = game pixels (map coordinates)
         .segment "ENGCODE"          ; bank 7, with the logic that calls it
 addsprite:
         ldx NSPR
@@ -1257,7 +1254,7 @@ draw_sprites:
         beq @next
         cpy #BOXID0+BOXN            ; a box star the logic says nothing can disturb, and
         bcc @write                  ; the same frame already in the same place: if
-        lda KEEP,x                  ; nothing has been repainted under it, its pixels
+        lda KEEP,x                  ; nothing has been repainted under it, its screen pixels
                                     ; are still right, so leave it alone
         cmp #2
         bne @write
@@ -1303,7 +1300,7 @@ draw_sprites:
 @rpc:   inc rp+1
         jmp @rpb
 
-; draw one sprite: A = id ; spx, spy = map px (ref point)
+; draw one sprite: A = id ; spx, spy = game pixels, map coordinates (ref point)
 ; The directory is the level's, in bank 7 at SPR_TABLE (ldprog.s); the data is in
 ; bank 4, or bank 5 when the entry's flag bit 4 is set.
         .segment "ENGCODE"          ; bank 7, with the records and SPRMASK
@@ -1365,7 +1362,7 @@ drawsprite:
         sta sp_lines
         sta sp_ext
         lsr
-        sta sp_mh                   ; mask bytes per column group = pixel rows
+        sta sp_mh                   ; mask bytes per column group = game-pixel rows
         lda sp_flags
         and #2
         bne :+
@@ -1634,11 +1631,11 @@ drawsprite:
         bne @mul
 @mdone: sta sp_rp
         stx mtab                    ; X = 0 here: the MASKTAB pages are indexed by the mask byte
-        lda w16+1                   ; the same offset in pixel rows (signed >> 1)
+        lda w16+1                   ; the same offset in game-pixel rows (signed >> 1)
         asl                         ; C = the sign
         ror w16+1
         ror w16
-        ; mask row pointer = mask plane + (first image column / 4) * pixel rows + that offset
+        ; mask row pointer = mask plane + (first image column / 4) * game-pixel rows + that offset
         lda sp_c
         lsr
         lsr
@@ -1696,7 +1693,7 @@ drawsprite:
   .endif
 .else
   .if k = 0
-        beq done                    ; 0: both pixels transparent, no store
+        beq done                    ; 0: both game pixels transparent, no store
         bpl masked                  ; (N from the load: cmp would set it from the subtraction)
         cmp #$C0
         bcc opaque                  ; bit7 alone: single opaque byte
@@ -1704,13 +1701,13 @@ drawsprite:
 masked: cmp #$41                    ; and the mirror image of that: this and the next 7
         beq blank                   ; all transparent, so the cell is left alone
   .else
-        bmi opaque                  ; bit 7: both pixels opaque (see encode_sprite).  Tested
+        bmi opaque                  ; bit 7: both game pixels opaque (see encode_sprite).  Tested
         beq done                    ; before the transparent case because the sprite data is
                                     ; 45.7% opaque against 24.1% transparent, and both read
                                     ; the same load's flags -- $00 is never negative
         cmp #$41                    ; a blank-run tag reached below line 0 (the packer marks
         bne :+                      ; every line a run covers): the rest of this cell is all
-        jmp blank                   ; transparent, so skip it -- $41 else draws a red pixel
+        jmp blank                   ; transparent, so skip it -- $41 else draws a stray game pixel
 :
   .endif
         tax
@@ -1864,7 +1861,7 @@ pl:     lda (ptr),y
         sta (sp),y
 .else
 pl:     lda (ptr),y
-        bmi po                      ; bit 7: both pixels opaque.  Tested before the
+        bmi po                      ; bit 7: both game pixels opaque.  Tested before the
         beq ps                      ; transparent case for the same reason SPRLINE does
                                     ; it -- 45.7% opaque against 24.1% transparent, and
                                     ; both read this load's flags ($00 is never negative)
@@ -1896,14 +1893,14 @@ ps:     cpy tmp2
 .endmacro
 
 ; ---- MODE 1 masked blitter.  A col entry has no spare bit, so the mask is a plane of
-; its own: one bit per game pixel, a data byte's two pixels as a 2-bit pair, four
+; its own: one bit per game pixel, a data byte's two game pixels as a 2-bit pair, four
 ; horizontally adjacent columns packed into one byte (column 4g+j in bits 7-2j, 6-2j),
-; column-group-major: for group g, one byte per pixel row -- the shape of the data, so
+; column-group-major: for group g, one byte per game-pixel row -- the shape of the data, so
 ; mptr walks like ptr.  MASKTAB0..3 turn a whole mask byte into the AND mask for the
 ; column of that phase, no shifting: $FF (both transparent) $CC $33 $00 (both opaque).
-; The two scanlines of a pixel row share a mask, so lines go in pairs, and a sprite's
+; The two scanlines of a game-pixel row share a mask, so lines go in pairs, and a sprite's
 ; first line in a cell is always even (refy is a multiple of 4 game px).  The data has
-; 0 in transparent pixels, so screen = (screen AND mask) OR data.  Mirrored: the pair's
+; 0 in transparent game pixels, so screen = (screen AND mask) OR data.  Mirrored: the pair's
 ; mask is SWAPTAB of the table's answer ($33 <-> $CC), and the data byte is swapped.
 .macro MLINE mirror                 ; masked store of line Y
   .if mirror
@@ -1939,7 +1936,7 @@ ps:     cpy tmp2
   .endif
         tay
         lda (mtab),y
-        beq opq                     ; $00: both pixels opaque, plain stores
+        beq opq                     ; $00: both game pixels opaque, plain stores
         cmp #$FF
         beq done                    ; both transparent
   .if mirror
@@ -3725,7 +3722,7 @@ crtc_init:
 
         .segment "KRNCODE"          ; the kernel (the menus call it too)
 set_palette:
-        ; MODE 1: a pixel's two bits land in bits 3 and 1 of the palette index, the other
+        ; MODE 1: a screen pixel's two bits land in bits 3 and 1 of the palette index, the other
         ; two bits are don't-cares, so all 16 entries are written: logical 0..3 = K C M Y
         ldx #15
 :       txa

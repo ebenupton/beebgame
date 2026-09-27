@@ -40,6 +40,155 @@ Three facts about the machines shape everything you write:
    itself.  Your menus are a second image of bank 7 that the engine swaps in over
    your game, so the two can never call each other.
 
+## The concepts
+
+The engine works in several units at once, and most mistakes in a new game are
+mixing two of them.  This section defines them and then shows how the tiles, the
+sprites and their masks are laid out in memory.  Throughout this guide, and the
+engine's other documents, the word "pixel" never stands alone: it is always a
+**screen pixel** or a **game pixel**.
+
+### Screen pixels, game pixels, scanlines
+
+A **screen pixel** is MODE 1's: 320 across a scanline, one of four colours (two
+bits).  A **scanline** is one line of the display.
+
+A **game pixel** is the game's square pixel: **2 screen pixels wide and 2 scanlines
+tall**.  Everything the game sees -- positions, speeds, sizes, the map -- is in game
+pixels.  The playfield is 160 game pixels wide on both machines (320 screen pixels),
+and 84 game pixels tall on the Model B (168 scanlines) or 120 on the Master (240).
+
+A game pixel's colour is not one of the four: it is a 2x2 **dither** of its four
+screen pixels, chosen from black, cyan, magenta and yellow to come nearest the colour
+the artist meant (Cleo's `tools/convert.py` does this).  So a game pixel can show
+many more than four colours, and it is the smallest thing the art can change.
+
+### Bytes, characters, character rows
+
+MODE 1 packs **4 screen pixels into a byte** -- that is 2 game pixels across and 1
+scanline down.  Screen pixel i of a byte (0 the leftmost) keeps its colour's high bit
+in bit 7-i and its low bit in bit 3-i.
+
+The screen is built from **characters**: a character is 8 bytes stacked, one byte a
+scanline -- 4 screen pixels (2 game pixels) wide, 8 scanlines (4 game pixels) tall.
+A **character row** is 80 characters side by side: 640 bytes, the full width.
+
+| Unit | Screen pixels across | Scanlines down | Game pixels across x down | Bytes |
+|---|---|---|---|---|
+| screen pixel | 1 | 1 | half x half | a quarter |
+| game pixel | 2 | 2 | 1 x 1 | half a byte on each of 2 scanlines |
+| byte | 4 | 1 | 2 x half | 1 |
+| character | 4 | 8 | 2 x 4 | 8 |
+| tile | 16 | 16 | 8 x 8 | 64 |
+| character row | 320 | 8 | 160 x 4 | 640 |
+
+### Where things are: the coordinates
+
+- **Map coordinates** are in game pixels from the map's top left: the window's
+  position (`wx`, `wy`) and every sprite's (`spx`, `spy`).
+- **Tile coordinates** are map coordinates divided by 8: the map is a grid of
+  1 << lw by 1 << lh tiles (its header's lw and lh), one byte (a tile id) each.
+- **Character coordinates** are what the display scrolls by: `wcx` = wx / 2
+  (character columns, 2 game pixels each) and `wcy` = wy / 4 (character rows, 4 game
+  pixels each).
+
+What can move by how much:
+
+| What | Across | Down |
+|---|---|---|
+| the window (`wx`, `wy`) | 2 game pixels (a character column: `wx` must be even) | 1 game pixel (2 scanlines) |
+| a sprite (`spx`, `spy`) | 2 game pixels: the engine drops the low bit of its screen x | 1 game pixel |
+| a tile | 8 game pixels (it is on the map's grid) | 8 game pixels |
+
+So a sprite drawn one game pixel further right each frame appears to move every
+other frame.  A game that needs smoother movement across must keep a second image
+shifted by one game pixel and choose between them itself.
+
+### A tile
+
+A tile is 8 x 8 game pixels: 4 characters across, 2 character rows down, 64 bytes, in
+the screen's own order -- the top character row's four characters (8 bytes each, a
+scanline a byte), then the bottom row's:
+
+```text
+bytes  0-7   8-15  16-23  24-31      scanlines 0-7    (game-pixel rows 0-3)
+bytes 32-39 40-47  48-55  56-63      scanlines 8-15   (game-pixel rows 4-7)
+      char0 char1  char2  char3      each 2 game pixels (4 screen pixels) wide
+```
+
+The two scanlines of a game-pixel row are separate bytes, because the dither puts
+different screen pixels on each.  Tiles are opaque: a tile covers its 8 x 8 game
+pixels completely, and the level's tile ids say which tile goes where.
+
+### A sprite's image
+
+A sprite is a rectangle `W` bytes wide -- 2W game pixels, 4W screen pixels -- and
+`lines` scanlines tall (2 for each game-pixel row: `lines` = 2 x h).  Its image is
+stored **column by column**: all `lines` bytes of column 0, top to bottom, then
+column 1, and so on.  A 6 x 4 game-pixel sprite is 3 bytes wide and 8 scanlines tall:
+
+```text
+image bytes, column-major (W = 3, lines = 8, 24 bytes):
+  column 0: bytes  0-7    game pixels 0-1 across, scanlines 0-7
+  column 1: bytes  8-15   game pixels 2-3 across
+  column 2: bytes 16-23   game pixels 4-5 across
+```
+
+A transparent game pixel is stored as 0 (its four screen pixels black).  That alone
+cannot say "transparent", because black is a colour; the mask does.
+
+### A sprite's mask
+
+The mask has **one bit per game pixel**: 1 opaque, 0 transparent.  It cannot be finer
+(a single screen pixel cannot be transparent on its own) and it need not be, since a
+game pixel is the smallest thing the art changes.
+
+- Each image column (2 game pixels) has a 2-bit pair: its left game pixel in the
+  pair's high bit.
+- Four columns' pairs pack into one mask byte: column 4g+j at bits 7-2j and 6-2j.
+- There is one mask byte per game-pixel row, which both of that row's scanlines use.
+- The plane is stored by **column group**: all the rows of columns 0-3, then all the
+  rows of columns 4-7...  It is a quarter of the image's width in bytes and half its
+  height, and the blitter's mask pointer steps through it as its image pointer steps
+  through the image.
+
+For the 6 x 4 game-pixel sprite above -- one column group, 4 game-pixel rows:
+
+```text
+mask bytes (4):   bits 7 6 | 5 4 | 3 2 | 1 0
+                  col 0    | col 1 | col 2 | (col 3: none, 0)
+                  L  R     | L  R  | L  R
+row 0 (scanlines 0, 1):  one byte
+row 1 (scanlines 2, 3):  one byte   ...and so on for rows 2 and 3
+```
+
+When the sprite is drawn, each column's pair becomes the AND mask for its screen
+byte: 00 keeps the byte ($FF), 01 keeps its left half ($CC, the right game pixel
+opaque), 10 keeps its right half ($33), 11 replaces it ($00).  The screen byte becomes
+(screen AND mask) OR image.
+
+Sprites with ids from `BOXID0` up are **boxes**: opaque rectangles with no mask,
+drawn by a plain copy (Cleo's box stars and trampolines, whose backgrounds are baked
+into the art).
+
+### A sprite's directory entry
+
+Each sprite id has an 8-byte entry in the level's directory: the image's address
+(filled in by the level writer), then six bytes of geometry:
+
+| Byte | Field | Unit |
+|---|---|---|
+| 2 | W, the width | bytes (2 game pixels each) |
+| 3 | h, the height | game pixels |
+| 4 | refx, the reference point across (signed) | game pixels |
+| 5 | refy, the reference point down (signed) | game pixels |
+| 6 | flags: bit 0 drawn mirrored, bit 1 every scanline stored (else one a game-pixel row, drawn twice), bit 3 a box (copied, no mask), bit 4 in bank 5 | |
+| 7 | lines, the scanlines stored | scanlines |
+
+The sprite's top left lands at (`spx` - refx, `spy` - refy) in map coordinates, so the
+reference point is where the game says the sprite is: Cleo's player's feet, for
+instance.  Its mask's address is in SPRMASK, by id.
+
 ## Step 1: make the project
 
 Make a repository with beebgame as a submodule, and lay it out like Cleo's:
@@ -152,7 +301,7 @@ Two rules:
           .segment "ZPGAME": zeropage
   BINI:     .res 1
   frame:    .res 2
-  px:       .res 2                  ; player x, y (px)
+  px:       .res 2                  ; player x, y (game pixels, map coordinates)
   ...
   ```
 
@@ -269,7 +418,7 @@ Cleo's `load_level`, shortened:
 ```asm
 load_level:
         jsr load_level_b            ; the disc: everything into the banks
-        ...                         ; mapw = 8 << lw, maph = 8 << lh (px), from
+        ...                         ; mapw = 8 << lw, maph = 8 << lh (game pixels), from
         ldx LV_HDR+HDR_LW           ;  the header: HDR_ offsets are the engine's
         stx maplw                   ;  (levelfmt.inc)
         ...
@@ -321,10 +470,11 @@ Label `frame_top` exactly as Cleo does: the test harness runs frame to frame by 
 
 **A frame of logic** does three things the engine reads:
 
-- **The window.**  Set `wx`, `wy` (map pixels; `wx` even) and keep them within
+- **The window.**  Set `wx`, `wy` (game pixels, map coordinates; `wx` even) and keep them within
   `0..maxwx`, `0..maxwy` (Cleo's `clamp_window`).  `render_frame` scrolls to them.
 - **The sprites.**  Empty the list (`stz NSPR`), then for each sprite set `spx`, `spy`
-  (map pixels, the sprite's reference point) and `lda #id / jsr addsprite`.  At most
+  (game pixels, map coordinates: the sprite's reference point; across, the sprite
+  lands on the even game pixel at or left of it) and `lda #id / jsr addsprite`.  At most
   `MAXSPR` a frame (your asset step sets it: Step 8).  `render_frame` erases what moved,
   keeps what did not and draws the rest.
 - **The map.**  Read and write it through `maprow` (A = a tile row: `mapptr` = the row),
@@ -405,11 +555,15 @@ checks): build them from the Model B's layout.
 | `FLAT0`, `NFLAT` | the flat tiles' ids (250, 4) |
 | `MAXMIR` | mirrored tiles at most (TILEMIRROR only; 0) |
 | `BOXID0`, `BOXN` | the first opaque "box" sprite id, and how many (103, 15) |
-| `MAXSPRDEF`, `BINMAXDEF` | the sprite list's size, and your logic's bin size (24, 18) |
+| `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once (24) |
 | `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | where SPRC goes, and the files' lengths |
 | `SPR5_MIRROR`, `SPR4_COPY` | 0: nothing mirrored in bank 5, nothing opaque in bank 4 |
 | `MAP5` | the map's place in bank 5 ($9C00) |
 | `B4_CODE_END`, `B5_CODE_END` | where the engine's sprite-bank code ends: your sprites start there |
+
+Your asset step may add your own constants to `assets.inc` for your own sources
+(Cleo adds BINMAXDEF, its bin walk's list size, and its title pieces' TP_ and
+TBUF_LEN); the engine reads only the ones above.
 
 `B4_CODE_END` and `B5_CODE_END` are the engine's, not yours: take them from the
 engine version you build against (Cleo's `tools/assets.py` has the current ones).  If
@@ -444,16 +598,14 @@ in `DESIGN.md`, *The level files*.
 **The tiles and the sprites** are the part to be most careful with: their layouts are
 the blitters' (`DESIGN.md`, *The tiles* and *The sprites*).  In short:
 
-- A tile is 8x8 game pixels, 64 bytes (4 characters by 2 character rows, MODE 1: four
-  pixels a byte).  Id 0 is the level's solid colour; the rest are full tiles, half
-  tiles (one row stored, the other a fill), flat tiles (two bytes of dither) and, if
-  you need them, mirrored ones.  A level has at most 250 distinct ids.
-- A sprite image is column major: each column of `lines` bytes in turn, a byte two
-  game pixels wide.  Its mask is a plane of its own, one bit a game pixel.  Its
-  directory entry is 6 bytes of geometry -- width in bytes, height, reference point x
-  and y, flags (bit 0 mirrored, bit 3 opaque), lines -- which `lf.directory` completes
-  with the address and bank.  Mirrored images go in bank 4, opaque ones (the boxes,
-  ids from `BOXID0`) in bank 5.
+- A tile's 64 bytes and a sprite's image, mask and directory entry are laid out as
+  *The concepts* shows.
+- Tile id 0 is the level's solid colour; the rest are full tiles (all 64 bytes
+  stored), half tiles (one character row of the two stored, the other a fill), flat
+  tiles (a colour's dither, two bytes alternating down the scanlines) and, if you need
+  them, mirrored ones.  A level has at most 250 distinct ids.
+- Mirrored images go in bank 4 (it has the table that reverses a byte's four screen
+  pixels), boxes (ids from `BOXID0`) in bank 5 (it has the copy blitter).
 
 Today the engine has no tile packer or sprite placer of its own beyond `sprpack.py`
 (which orders a bank's images to save page crossings).  **Start from Cleo's**:
