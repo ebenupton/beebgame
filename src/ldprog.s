@@ -20,6 +20,7 @@ TILEMIRROR = 0
         .endif
         .include "defs_ld.inc"      ; the addresses the game exports (build.sh)
         .include "files.inc"        ; the disc's sector table (mkdfs.py table)
+        .include "levelfmt.inc"     ; the level file's sections and header (tools/levelfile.py)
 ROMSEL     = $FE30
 ROMSEL_CPY = $F4
 ACCCON     = $FE34                  ; (the Master: bit 2, X, puts the CPU's
@@ -87,7 +88,7 @@ F_IMG7_N   = F_IMG7M_N
         FILE name
   .endif
 .endmacro
-PAGE0_SECS = 2                      ; (512 bytes: 256 lo, 256 hi)
+PAGE0_SECS = LV_PAGE0_SECS          ; (512 bytes: 256 lo, 256 hi)
 ftab:   FILE "SPRX"                 ; 0: the sprites placed per level (imgtab's file 0)
         FILE "SPRC"                 ; 1: the sprites every level draws: banks 4 and 5
         FILE "SPRC"                 ; 2: (unused)
@@ -220,7 +221,7 @@ lv_load:
         stx dst+1
         jsr readfile
         ; ---- the tables: the section table's offsets are from the file's start
-        lda #0
+        lda #SEC_HDR
         jsr section                 ; the header
         lda #32
         sta cnt
@@ -231,10 +232,10 @@ lv_load:
         sta dst+1
         ldx PB_LVL
         jsr bcopy
-        lda #1
+        lda #SEC_OBJS
         jsr section                 ; the objects: 6 a piece, nobj of them
         lda #0                      ; (cnt+1 is 0 still: the header's copy set it)
-        ldx LV_HDR+6
+        ldx LV_HDR+HDR_NOBJ
         beq @objdone
 :       clc
         adc #6
@@ -249,7 +250,7 @@ lv_load:
         sta dst+1                   ; the first render)
         ldx PB_LVL
         jsr bcopy
-        lda #2
+        lda #SEC_ATTR
         jsr section
         .assert <LV_ATTR0 = 0, error, "dst's low byte is 0 still"
         lda #>LV_ATTR0
@@ -260,7 +261,7 @@ lv_load:
         .assert LV_ALTCLS = LV_ATTR0 + $100, error, "copy256 leaves dst at LV_ALTCLS"
         jsr copy256
         ; ---- the shape: maprow's shift, the row stride
-        lda LV_HDR+22
+        lda LV_HDR+HDR_MAPSHR
         sta mapshr
         stx MAPSTRIDE+1             ; X = 0: copy256 ends in bcopy
         ldx LV_HDR                  ; lw: stride = 1 << lw
@@ -274,7 +275,7 @@ lv_load:
         ; (the stream is not terminated: what follows it in the file is the next section)
         lda LV_HDR                  ; lw + lh - 8 (at least 2: a map is at least 1K)
         clc
-        adc LV_HDR+1
+        adc LV_HDR+HDR_LH
         sbc #7                      ; (C = 0: - 8)
         tax
         lda #1
@@ -283,7 +284,7 @@ lv_load:
         bne :-
         adc #>MAP5                  ; (C = 0: at most 8K) the page after the map
         sta mapend
-        lda #6
+        lda #SEC_MAP
         jsr section
         .assert <MAP5 = 0, error, "dst's low byte is 0 still"
         lda #>MAP5
@@ -294,7 +295,7 @@ lv_load:
         ; tiles by the tile list (the files: each one's number and its full tiles; then
         ; each tile's index in its file), the half tiles by the half list (index,
         ; row | the file's place in the list << 1)
-        lda #4
+        lda #SEC_TILES
         jsr section
         ldy #0
         lda (src),y
@@ -312,7 +313,7 @@ lv_load:
         lda #>(TILES + (TOFF+1)*64)
         sta tbase+1
         sty fnum
-@file:  lda #4
+@file:  lda #SEC_TILES
         jsr section
         lda fnum
         asl
@@ -322,7 +323,7 @@ lv_load:
         tay
         lda tfi,y
         jsr stage
-        lda #4
+        lda #SEC_TILES
         jsr section
         lda fnum
         asl
@@ -354,21 +355,21 @@ lv_load:
 :       dec nt
         jmp @tile
 @halves:                            ; this file's half tiles, to their slots: HALFOFF
-        lda LV_HDR+28               ; slots into the halves' page
+        lda LV_HDR+HDR_HALFOFF               ; slots into the halves' page
         asl
         asl
         asl
         asl
         asl
         sta hdst
-        lda LV_HDR+27
+        lda LV_HDR+HDR_HALFPAGE
         sta hdst+1
         lda #0
         sta item
 @half:  lda item
-        cmp LV_HDR+23
+        cmp LV_HDR+HDR_NHALF
         beq @nextfile
-        lda #8
+        lda #SEC_HALVES
         jsr section
         lda item
         asl
@@ -405,20 +406,20 @@ lv_load:
 :
         ; ---- the halves' fill pairs, where the halves end (hdst): the fill indexes
         ; them by the slot from the halves' page, so its operands sit 2*HALFOFF below
-        lda #9
+        lda #SEC_HPAIR
         jsr section
         lda hdst
         sta dst
         lda hdst+1
         sta dst+1
-        lda LV_HDR+23               ; two bytes a half
+        lda LV_HDR+HDR_NHALF               ; two bytes a half
         asl
         sta cnt
         lda #0
         sta cnt+1
         ldx PB_TILES
         jsr bcopy                   ; (bank 7 back after it)
-        lda LV_HDR+28
+        lda LV_HDR+HDR_HALFOFF
         asl
         eor #$FF
         sec
@@ -428,26 +429,26 @@ lv_load:
         sbc #0
         tay
         ; ---- the tile shape, into banks 5 and 6 (read here, with bank 7 in)
-        lda LV_HDR+27
+        lda LV_HDR+HDR_HALFPAGE
         sta sv_halfhi
-        lda LV_HDR+31               ; the solid's fill byte (id 0)
+        lda LV_HDR+HDR_SOLIDFILL               ; the solid's fill byte (id 0)
         sta sv_solid
   .if BHW                           ; the arithmetic gather's (bank 5): the Master's
-        lda LV_HDR+24               ; gather is its table, LV_PAGE0
+        lda LV_HDR+HDR_HALF0               ; gather is its table, LV_PAGE0
         sta sv_half0
    .if TILEMIRROR
         clc                         ; half0 - HALFOFF - 1: the gather's borrow (C clear
    .else                            ; after its mirror test)
         sec                         ; half0 - HALFOFF (C set: no mirror test)
    .endif
-        sbc LV_HDR+28
+        sbc LV_HDR+HDR_HALFOFF
         sta sv_halfsub
-        lda LV_HDR+25
+        lda LV_HDR+HDR_HALF1
         sta sv_half1
-        lda LV_HDR+26
+        lda LV_HDR+HDR_HALF2
         sta sv_half2
    .if TILEMIRROR
-        lda LV_HDR+29
+        lda LV_HDR+HDR_MIR0
         sta sv_mir0
    .endif
   .endif
@@ -486,13 +487,13 @@ lv_load:
         jsr pgbank
   .if BHW && TILEMIRROR
         ; ---- MIRTAB: each mirrored tile's source slot
-        lda #10
+        lda #SEC_MIR
         jsr section
         lda #<MIRTAB
         sta dst
         lda #>MIRTAB
         sta dst+1
-        lda LV_HDR+30
+        lda LV_HDR+HDR_NMIR
         sta cnt
         lda #0
         sta cnt+1
@@ -552,7 +553,7 @@ lv_load:
 @unkeep:
         jsr unkeep
   .endif
-@sfile: lda #5
+@sfile: lda #SEC_PLACE
         jsr section
         lda src
         sta lp
@@ -605,7 +606,7 @@ lv_load:
         bne @pl                     ; (lp+1 is never 0)
 @plend:
         ; ---- the directory and SPRMASK, as the packer finished them
-        lda #11
+        lda #SEC_DIR
         jsr section
         lda #<SPR_TABLE             ; bank 7, beside the prologue that reads it
         sta dst
@@ -617,7 +618,7 @@ lv_load:
         sta cnt+1
         ldx PB_LVL
         jsr bcopy
-        lda #12
+        lda #SEC_SMASK
         jsr section
         lda #<SPRMASK
         sta dst
@@ -630,7 +631,7 @@ lv_load:
         ldx PB_LVL
         jsr bcopy
         ; ---- the flat tiles' pairs, into bank 6 with the blitter's fill
-        lda #7
+        lda #SEC_FLAT
         jsr section
         lda #<FLATTAB
         sta dst
@@ -648,7 +649,7 @@ lv_load:
         ; ---- the Master: the gather's table, to main RAM, and the screens
         ; (main and shadow) cleared of what the load staged there -- a ring row the
         ; window has not reached yet must not show it
-        lda #13
+        lda #SEC_PAGE0
         jsr section
         lda #<LV_PAGE0
         sta dst
@@ -794,7 +795,7 @@ sv_halfsub: .res 1
 sv_mir0:    .res 1
    .endif
   .endif
-section:                            ; A = section 0..13 -> src = its start in the staged file
+section:                            ; A = a section (SEC_) -> src = its start in the staged file
         asl                         ; (C = 0: A < 128)
         tay
         lda STAGE_LVL,y

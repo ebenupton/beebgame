@@ -33,8 +33,9 @@ loader, the level file format.
 |---|---|
 | `src/` | the engine: `cpu.inc` (the 6502/65C02 macros, bank-number and write-board patch records), `defs.inc` (the memory map), `engine.s` (display, blitters, records, interrupt, sound, kernel), `low.s` (low RAM: the bank crossings, the Model B's interrupt stub), `disc.s` (the driver, the image swap), `mirror.s` (the Model B's mirror row), `banks.s` (the engine's tables), `init.s` (start-up), `ldprog.s` (the load-time program), `loader.s` (the boot loader), `ldconst.s`, `pads.inc` |
 | `cfg/` | the linker maps: `modelb.cfg`, `master.cfg` (with the game's segments in them), `ldprog.cfg`, `loader.cfg` |
-| `tools/` | `build.sh` (the build driver), `mkdfs.py` (DFS images and the sector table), `pincfg.py` (the Master's link pinned to the Model B's addresses), `layoutcheck.py` (fails the build if the machines' data do not lie alike), `pagecheck.py` (branches that cross a page), `sprpack.py` (sprite placement against page crossings), `midi2snd.py` (MIDI to the music player's stream) |
+| `tools/` | `build.sh` (the build driver), `mkdfs.py` (DFS images and the sector table), `pincfg.py` (the Master's link pinned to the Model B's addresses), `layoutcheck.py` (fails the build if the machines' data do not lie alike), `pagecheck.py` (branches that cross a page), `sprpack.py` (sprite placement against page crossings), `levelfile.py` (the level file format: the writer, a reader and checker, and the loader's constants), `midi2snd.py` (MIDI to the music player's stream) |
 | `test/lib/` | `harness.mjs` (a frame-exact jsbeeb driver: breaks at `frame_top`, bank- and image-aware, render-work meter, scene fingerprints), `boards.mjs` (write-select boards emulated on jsbeeb) |
+| `test/` | `test_levelfile.py` (`python3 -m unittest discover test`) |
 
 ## A game on beebgame
 
@@ -78,7 +79,7 @@ and its own around them (Cleo's `src/main.s` is the example):
   B5_CODE_END; and `imgtab.bin` (the sprite items' places in the shared files).
 - The disc files the loader reads, by these names: BAR (the bar template), SPRC (the
   sprites every level draws), SPRX (the rest), TILES0-2 (the tile set), L0-L15 (the
-  levels): `docs/DESIGN.md`, *The level files*.
+  levels, written with `tools/levelfile.py`): `docs/DESIGN.md`, *The level files*.
 
 ### Segments the game fills
 
@@ -115,6 +116,7 @@ writes one disc.  Needs cc65 (`ca65`, `ld65`, `od65`) and Python 3.
 
 Extracted from Cleo on 27 September 2026 (Cleo commit 8483965), with the game's side
 of every coupling moved behind the hooks above; Cleo builds against it and its test
-sweep is identical before and after.  The level packer is still Cleo's
-(`tools/assets.py` there): it writes the engine's level format but from Cleo's data
-model, and is the next thing to split.  No licence has been chosen yet.
+sweep is identical before and after.  The level file format is the engine's
+(`tools/levelfile.py`); what fills it -- choosing and packing the tiles, placing the
+sprites -- is still the game's packer (Cleo's `tools/assets.py` and `convert.py`
+`pack_tiles`), the next thing to split.  No licence has been chosen yet.

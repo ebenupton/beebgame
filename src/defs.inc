@@ -71,6 +71,9 @@ sp_mbase: .res 2
 curR7:    .res 1                    ; two hot scalars (profiled: ~41 and ~35 accesses a
 SECIDX:   .res 1                    ;  frame): the chain's R7 and step
 
+        .include "levelfmt.inc"     ; the level file's sections and header fields
+                                    ; (tools/levelfile.py, written by the build)
+
 ; ---------------------------------------------------------------- display
 LINE      = 64                      ; T1 ticks in one scanline
 BARCRTC   = BARADDR / 8

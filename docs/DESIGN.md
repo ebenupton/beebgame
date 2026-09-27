@@ -86,7 +86,7 @@ It is off by default: no level needs it.
 |---|---|
 | $00-$77 | the engine's (ZEROPAGE): defs.inc's (NSPR, BARDIRTY, SFXREQ, mtmp -- cpu.inc's scratch --, the ring and mirror state, the sprite prologue's hand-over, curR7, SECIDX), then engine.s's; LDPROG's 17 bytes (LDZP) are the sprite prologue's scratch, dead during a load |
 | $78-$7E | the Model B's own, the engine's (ZPHW: `jv`, the gather's shape); a gap on the Master |
-| $7F-$EC | the game's (ZPGAME): BINI (defs.inc), then logic.s's state, `seed` and its temporaries ($ED-$EF free) |
+| $7F-$EC | the game's (ZPGAME: Cleo's logic.s state, `seed` and temporaries; $ED-$EF free) |
 | $F0-$FF | the MOS's zero page, but $F4 and $FC: the engine's hottest scalars |
 
 Once the game has the machine only two of the MOS's zero-page bytes are still touched:
@@ -104,7 +104,7 @@ through, are in the ZEROPAGE segment.
 | Range | Model B | Master | Use |
 |---|---|---|---|
 | $0100-$013F | | | the stack, 64 bytes |
-| LOWBSS | $0140-$01F8 | $0140-$01F0 | what more than one bank reads: the sprite list (SPRLIST), the buffers' state (BUF_CX, BUF_BOTOK, DIRTYCNT), PBANK/PBOARD, BARCACHE, DISPSECT/NEXTSECT, ctgt, GATHERH (= MAPBUF), the mirror's notes (Model B), sprc_ok, sprx_ok, title_res |
+| LOWBSS | $0140-$01F8 | $0140-$01F0 | what more than one bank reads: the sprite list (SPRLIST), the buffers' state (BUF_CX, BUF_BOTOK, DIRTYCNT), PBANK/PBOARD, DISPSECT/NEXTSECT, GATHERH, the mirror's notes (Model B), sprc_ok, sprx_ok; and the game's few bytes (Cleo's BARCACHE) |
 | $0204-$0205 | | | IRQ1V, which the game points at its handler |
 | LOWCODE | $0206-$02E4 | $0206-$02A4 | the crossings, the map helpers, pagelogic; the Model B's interrupt stub |
 | LOWBSS2 | $02E5-$02F9 | $02A5-$02B9 | GATHERL |
@@ -724,14 +724,23 @@ menus' and jumps to `menu_over`; `go_title` (start-up) loads them and jumps to
 
 ## The level files
 
-The game's packer writes them (Cleo's is its `tools/assets.py`); `ldprog.s` reads
-them.  A level file starts with a table of 14 section offsets:
+The format has one definition, `tools/levelfile.py`.  A game's packer builds a
+`levelfile.Level` in the engine's terms and `encode()` writes it (Cleo's packer is its
+`tools/assets.py`); `ldprog.s` reads it, taking the section numbers (SEC_) and the
+header's offsets (HDR_) from `levelfmt.inc`, which the build writes from
+`levelfile.py inc`, so the writer and the reader cannot drift apart.  The build also
+runs `levelfile.py check` over every level file (the table, the sections in order,
+the header's counts against the sections, the stages' sizes), and
+`test/test_levelfile.py` tests the writer against its reader
+(`python3 -m unittest discover test`).
+
+A level file starts with a table of 14 section offsets:
 
 | # | Section |
 |---|---|
-| 0 | header, 32 bytes: lw, lh, start, exit, nobj, the special tiles' ids (vanish, flower), then the tile shape (+22 mapshr, +23 the half count, +24-26 half0-2, +27 the halves' page, +28 HALFOFF, +29 mir0, +30 the mirror count) |
-| 1 | the objects, 6 bytes each (at most 149) |
-| 2, 3 | attr and altcls by tile id, 256 each |
+| 0 | the header, 32 bytes (below) |
+| 1 | the objects, 6 bytes each (at most 149): the game's, copied to LV_OBJS |
+| 2, 3 | two tables by tile id, 256 each: the game's, copied to LV_ATTR0 and LV_ALTCLS |
 | 4 | the tile list: the files, each with its full-tile count, then each full tile's index in its file |
 | 5 | the sprite placement list: item, bank (4 or 5), image address, mask address; $FF |
 | 6 | the map, RLE: c < 128, c+1 literals; c >= 128, the next byte c-126 times |
@@ -743,8 +752,15 @@ them.  A level file starts with a table of 14 section offsets:
 | 12 | SPRMASK, 103 x 2 |
 | 13 | LV_PAGE0, 512 bytes, sector aligned at the end |
 
-It asserts the file fits the Model B's STAGE_LVL (8K, without LV_PAGE0) and the
-Master's stage (20K).
+The header (LV_HDR): the engine's fields are lw and lh (+0, +1: log2 of the map's
+size in tiles), the objects' count (+6) and the tile set's shape (+20..+31,
+`levelfile.Shape`: +21 the tile count, +22 mapshr = 8 - lw, +23 the half count,
++24-26 half0-2, +27 the halves' page, +28 HALFOFF, +29 mir0, +30 the mirror count,
++31 the solid's fill byte); +2..+5 and +7..+19 are the game's (Cleo's: the start,
+the exit, the special tiles).  `encode()` refuses a game field in the engine's bytes.
+
+The file must fit the Model B's STAGE_LVL (8K, without LV_PAGE0) and the Master's
+stage (20K).
 
 ## Timing
 

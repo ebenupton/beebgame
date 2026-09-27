@@ -44,12 +44,14 @@ for t in modelb master; do
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
     [ "$TILEMIRROR" = 1 ] && sed -i.bak 's#start = \$8000, size = \$0700#start = $8000, size = $0800#; s#start = \$8000, size = \$0300#start = $8000, size = $0340#' $BD/game.cfg
     for f in BANKS MENU GAME IMG7 LDPROG; do [ -f $BD/$f ] || : > $BD/$f; done
+    python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc     # (the loader's: one definition)
 done
 # what both machines read goes on the disc once (the Model B's copy): the packs agree
 # (the files the engine's loader reads, by these names: ldprog.s)
 for f in SPRX SPRC BAR L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15; do
     cmp -s build/modelb/$f build/master/$f || { echo "build/modelb/$f and build/master/$f differ: the level layout is not one"; exit 1; }
 done
+python3 $BG/tools/levelfile.py check $(for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do echo build/modelb/L$l; done)
 
 # the disc's file list, in disc order: the boot files, each machine's pieces, the
 # shared files together, the levels after them.  A game's start reads LDPROG, the
