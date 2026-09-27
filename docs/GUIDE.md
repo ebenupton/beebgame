@@ -44,17 +44,19 @@ Three facts about the machines shape everything you write:
 
 Make a repository with beebgame as a submodule, and lay it out like Cleo's:
 
-    mygame/
-      beebgame/          the engine (git submodule add https://github.com/ebenupton/beebgame beebgame)
-      build.sh           your build: sets beebgame's driver going
-      src/               your 6502 sources
-        main.s           the root: the engine's sources and yours, and the hooks
-        keymap.inc       your keys
-      assets/            your source art, levels and music, in the repository: the
-                         build reads nothing from outside it
-      tools/             your asset pipeline
-      test/              your tests, on beebgame's harness
-      build/             generated
+```text
+mygame/
+  beebgame/          the engine (git submodule add https://github.com/ebenupton/beebgame beebgame)
+  build.sh           your build: sets beebgame's driver going
+  src/               your 6502 sources
+    main.s           the root: the engine's sources and yours, and the hooks
+    keymap.inc       your keys
+  assets/            your source art, levels and music, in the repository: the
+                     build reads nothing from outside it
+  tools/             your asset pipeline
+  test/              your tests, on beebgame's harness
+  build/             generated
+```
 
 Cleo's `src/` has `main.s`, `logic.s` (the game's logic and HUD), `game.s` (the game
 loop), `menu.s` (the menus), `gamedata.s` (its tables) and `keymap.inc`; its
@@ -67,14 +69,16 @@ Your `build.sh` sets a few variables and runs the engine's driver, which assembl
 everything twice (once per machine), builds the loaders and writes the disc.  Cleo's,
 whole:
 
-    #!/bin/sh
-    set -e
-    cd "$(dirname "$0")"
-    [ -f beebgame/tools/build.sh ] || { echo "beebgame is missing: git submodule update --init"; exit 1; }
-    export GAME_MAIN=src/main.s GAME_SRC=src DISC_TITLE=CLEO DISC_OUT=build/cleo.ssd GAME_NAME=Cleo
-    export GAME_MUSIC="python3 beebgame/tools/midi2snd.py assets/v500/thm.mid build/MUSIC"
-    export GAME_ASSETS="python3 tools/assets.py"
-    exec sh beebgame/tools/build.sh
+```sh
+#!/bin/sh
+set -e
+cd "$(dirname "$0")"
+[ -f beebgame/tools/build.sh ] || { echo "beebgame is missing: git submodule update --init"; exit 1; }
+export GAME_MAIN=src/main.s GAME_SRC=src DISC_TITLE=CLEO DISC_OUT=build/cleo.ssd GAME_NAME=Cleo
+export GAME_MUSIC="python3 beebgame/tools/midi2snd.py assets/v500/thm.mid build/MUSIC"
+export GAME_ASSETS="python3 tools/assets.py"
+exec sh beebgame/tools/build.sh
+```
 
 - `GAME_MAIN`, `GAME_SRC`: your root source and your include directory.
 - `GAME_ASSETS`: your asset step, run once per machine with `TARGET` (`modelb` or
@@ -92,27 +96,29 @@ loop while you work on code.
 A game is one ca65 assembly.  Your `main.s` includes the engine's sources in a fixed
 order with yours between, then defines the five hooks the engine calls.  Cleo's:
 
-            .include "cpu.inc"          ; (-D BHW=0: the Master)
-            .include "defs.inc"
-            .include "engine.s"
-            .include "logic.s"          ; ---- Cleo's
-            .include "game.s"
-            .include "menu.s"           ; ----
-            .include "low.s"
-            .include "disc.s"
-      .if BHW                           ; (the Master's CRTC folds its ring itself)
-            .include "mirror.s"
-      .endif
-            .include "banks.s"          ; (the engine's tables, then the game's)
-            .include "gamedata.s"       ; Cleo's
-            .include "init.s"
+```asm
+        .include "cpu.inc"          ; (-D BHW=0: the Master)
+        .include "defs.inc"
+        .include "engine.s"
+        .include "logic.s"          ; ---- Cleo's
+        .include "game.s"
+        .include "menu.s"           ; ----
+        .include "low.s"
+        .include "disc.s"
+  .if BHW                           ; (the Master's CRTC folds its ring itself)
+        .include "mirror.s"
+  .endif
+        .include "banks.s"          ; (the engine's tables, then the game's)
+        .include "gamedata.s"       ; Cleo's
+        .include "init.s"
 
-    hook_title = game_main              ; start-up, the menus' image in (menu.s)
-    hook_play  = level_loop             ; a game starts, the game's image in (game.s)
-    hook_over  = menu_over              ; a game has ended, the menus' image in; A = 0 lost,
-                                        ; 1 won (menu.s)
-    hook_image = bar_bg                 ; the game's image has come in (logic.s)
-    hook_hud   = redraw_hud             ; render_frame, BARDIRTY set: the bar's digits (logic.s)
+hook_title = game_main              ; start-up, the menus' image in (menu.s)
+hook_play  = level_loop             ; a game starts, the game's image in (game.s)
+hook_over  = menu_over              ; a game has ended, the menus' image in; A = 0 lost,
+                                    ; 1 won (menu.s)
+hook_image = bar_bg                 ; the game's image has come in (logic.s)
+hook_hud   = redraw_hud             ; render_frame, BARDIRTY set: the bar's digits (logic.s)
+```
 
 | Hook | Called | What it does |
 |---|---|---|
@@ -131,8 +137,8 @@ Put everything in the game's segments; the engine's linker maps place them.
 | Segment | What | Where |
 |---|---|---|
 | `ZPGAME` | your zero page (about 110 bytes) | after the engine's |
-| `LGCCODE`, `LGCDATA` | your game's code and tables | bank 7, the game's image |
-| `LGCBSS` | your game's variables (zeroed each time the image loads) | bank 7, the game's image |
+| `GAMECODE`, `GAMEDATA` | your game's code and tables | bank 7, the game's image |
+| `GAMEBSS` | your game's variables (zeroed each time the image loads) | bank 7, the game's image |
 | `MNUCODE`, `MNUDATA`, `MNUBSS` | your menus, and their art and tune | bank 7, the menus' image |
 | `LOWBSS` | a few bytes both images see | low RAM, shared with the engine: keep it small |
 
@@ -142,11 +148,13 @@ Two rules:
   reference as absolute (a byte and a cycle more), so put your zero page ahead of
   your code, in the first of your sources `main.s` includes, as Cleo's `logic.s` does:
 
-            .segment "ZPGAME": zeropage
-    BINI:     .res 1
-    frame:    .res 2
-    px:       .res 2                  ; player x, y (px)
-    ...
+  ```asm
+          .segment "ZPGAME": zeropage
+  BINI:     .res 1
+  frame:    .res 2
+  px:       .res 2                  ; player x, y (px)
+  ...
+  ```
 
 - **The game's image and the menus' image cannot call each other.**  Both are at
   the same addresses in bank 7, one at a time.  Anything both need (Cleo: nothing
@@ -165,49 +173,53 @@ address), `menu_sections` (the display, without the status bar), `set_palette`,
 `blank_palette`, `music_start`, `music_stop`, and `vsyncs`, `flipreq` and `keys`.
 Cleo's two helpers are a pattern to copy:
 
-    menu_begin:                         ; window at (0,0), buffer 0, cleared, palette black
-            jsr blank_palette
-    :       lda flipreq                 ; the game may still have a flip pending
-            bne :-
-            sta wx                      ; A = 0
-            sta wx+1
-            sta wy
-            sta wy+1
-            sta wcx
-            sta wcx+1
-            sta wcy
-            sta wfine
-            sta curbuf
-            jsr selbb                   ; (bank 6's select_backbuf, through low RAM)
-            jsr calc_ring
-            jmp clear_ring              ; (zero the ring: Cleo's)
+```asm
+menu_begin:                         ; window at (0,0), buffer 0, cleared, palette black
+        jsr blank_palette
+:       lda flipreq                 ; the game may still have a flip pending
+        bne :-
+        sta wx                      ; A = 0
+        sta wx+1
+        sta wy
+        sta wy+1
+        sta wcx
+        sta wcx+1
+        sta wcy
+        sta wfine
+        sta curbuf
+        jsr selbb                   ; (bank 6's select_backbuf, through low RAM)
+        jsr calc_ring
+        jmp clear_ring              ; (zero the ring: Cleo's)
 
-    menu_show:                          ; display buffer 0, palette on
-            stz curbuf
-            jsr menu_sections
-        .if .not BHW
-            stz NEXTBUF                 ; (the Master: its handler's flip reads it)
-        .endif
-            stz NEXTSECT
-            inc flipreq
-    :       lda flipreq
-            bne :-
-            inc curbuf
-            jmp set_palette
+menu_show:                          ; display buffer 0, palette on
+        stz curbuf
+        jsr menu_sections
+    .if .not BHW
+        stz NEXTBUF                 ; (the Master: its handler's flip reads it)
+    .endif
+        stz NEXTSECT
+        inc flipreq
+:       lda flipreq
+        bne :-
+        inc curbuf
+        jmp set_palette
+```
 
 For input, wait a vsync and take the keys newly down (`keys` holds `K_LEFT`, `K_RIGHT`,
 `K_UP`, `K_DOWN`, `K_FIRE`, set by the interrupt from your key map):
 
-    menu_keys:
-            lda vsyncs
-    :       cmp vsyncs
-            beq :-
-            lda keys
-            tax
-            eor lastkeys
-            and keys
-            stx lastkeys
-            rts
+```asm
+menu_keys:
+        lda vsyncs
+:       cmp vsyncs
+        beq :-
+        lda keys
+        tax
+        eor lastkeys
+        and keys
+        stx lastkeys
+        rts
+```
 
 Cleo draws text a glyph at a time through `ringaddr7`, and pictures (its logo, big
 Cleo) from run-length streams copied a character row at a time; everything in its
@@ -220,22 +232,26 @@ title unless it is already playing.
 **Starting a game.**  Set up the game's state in zero page -- it survives the swap --
 and `jmp go_game`.  The engine loads the game's image and jumps to `hook_play`:
 
-    new_game:
-            stz level
-            ...
-            lda #3
-            sta lives
-            sta health
-            ...
-            jmp go_game
+```asm
+new_game:
+        stz level
+        ...
+        lda #3
+        sta lives
+        sta health
+        ...
+        jmp go_game
+```
 
 **After a game.**  Your game ends with `lda #n / jmp go_menu`; the engine loads the
 menus' image and jumps to `hook_over` with n in A.  Cleo's shows its win or lose
 screen and goes back to the title:
 
-    menu_over:
-            jsr winlose                 ; A = 0 lost, 1 won
-            jmp title_loop
+```asm
+menu_over:
+        jsr winlose                 ; A = 0 lost, 1 won
+        jmp title_loop
+```
 
 ## Step 6: the game
 
@@ -250,18 +266,20 @@ straight on and ends by turning them on -- nothing before it may wait on a vsync
 the engine reads `mapw`, `maph`, `maxwx`, `maxwy`, `maplw`, `maplh`, which you set.
 Cleo's `load_level`, shortened:
 
-    load_level:
-            jsr load_level_b            ; the disc: everything into the banks
-            ...                         ; mapw = 8 << lw, maph = 8 << lh (px), from
-            ldx LV_HDR+HDR_LW           ;  the header: HDR_ offsets are the engine's
-            stx maplw                   ;  (levelfmt.inc)
-            ...
-            ldx LV_HDR+HDR_LH
-            stx maplh
-            ...                         ; maxwx = mapw - WINPX, maxwy = maph - VISLINES/2
-            jsr lvreset                 ; the records and the buffers' state
-            sta NSPR                    ; A = 0: the sprite list empty
-            rts
+```asm
+load_level:
+        jsr load_level_b            ; the disc: everything into the banks
+        ...                         ; mapw = 8 << lw, maph = 8 << lh (px), from
+        ldx LV_HDR+HDR_LW           ;  the header: HDR_ offsets are the engine's
+        stx maplw                   ;  (levelfmt.inc)
+        ...
+        ldx LV_HDR+HDR_LH
+        stx maplh
+        ...                         ; maxwx = mapw - WINPX, maxwy = maph - VISLINES/2
+        jsr lvreset                 ; the records and the buffers' state
+        sta NSPR                    ; A = 0: the sprite list empty
+        rts
+```
 
 Your own header fields and objects are there too: `LV_HDR` (your bytes: +2..+5,
 +7..+19), `LV_OBJS` (6 bytes an object), and the two per-tile tables `LV_ATTR0` and
@@ -269,33 +287,35 @@ Your own header fields and objects are there too: `LV_HDR` (your bytes: +2..+5,
 
 **The level loop:**
 
-    level_loop:
-            jsr blank_palette           ; hide the loading and the first frame's build-up
-            ldx level
-            jsr load_level
-            jsr level_init              ; (Cleo's: the objects, the player, the camera)
-            lda #1
-            sta BARDIRTY                ; the bar on the first render
-            jsr game_frame              ; render both buffers before the palette comes back
-            jsr render_frame
-            jsr game_frame
-            jsr render_frame
-            jsr set_palette
-            lda vsyncs
-            sta logicvs
-    frame_loop:
-            lda vsyncs                  ; a rendered frame every VSPEG vsyncs (3: 16.7 Hz)
-            sec
-            sbc logicvs
-            cmp #VSPEG
-            bcc fl_wait
-            lda vsyncs
-            sta logicvs
-    frame_top:                          ; once a rendered frame, before the logic reads
-            jsr game_frame              ;  the keys: the test harness breaks here
-            ...
-            jsr render_frame
-            jmp frame_loop
+```asm
+level_loop:
+        jsr blank_palette           ; hide the loading and the first frame's build-up
+        ldx level
+        jsr load_level
+        jsr level_init              ; (Cleo's: the objects, the player, the camera)
+        lda #1
+        sta BARDIRTY                ; the bar on the first render
+        jsr game_frame              ; render both buffers before the palette comes back
+        jsr render_frame
+        jsr game_frame
+        jsr render_frame
+        jsr set_palette
+        lda vsyncs
+        sta logicvs
+frame_loop:
+        lda vsyncs                  ; a rendered frame every VSPEG vsyncs (3: 16.7 Hz)
+        sec
+        sbc logicvs
+        cmp #VSPEG
+        bcc fl_wait
+        lda vsyncs
+        sta logicvs
+frame_top:                          ; once a rendered frame, before the logic reads
+        jsr game_frame              ;  the keys: the test harness breaks here
+        ...
+        jsr render_frame
+        jmp frame_loop
+```
 
 Label `frame_top` exactly as Cleo does: the test harness runs frame to frame by it.
 
@@ -331,27 +351,33 @@ level.
 **Keys:** `src/keymap.inc`, on your include path, gives the key numbers the interrupt
 scans and the `K_` bit each sets.  Cleo's:
 
-    ; Z and cursor left K_LEFT, X and cursor right K_RIGHT, : and cursor up K_UP,
-    ; RETURN and SPACE K_FIRE, / and cursor down K_DOWN
-    KEYN = 10
-    keytab:  .byte $61,$19, $42,$79, $48,$39,$49, $68,$29, $62
-    keybits: .byte K_LEFT,K_LEFT, K_RIGHT,K_RIGHT, K_UP,K_UP,K_FIRE, K_DOWN,K_DOWN, K_FIRE
+```asm
+; Z and cursor left K_LEFT, X and cursor right K_RIGHT, : and cursor up K_UP,
+; RETURN and SPACE K_FIRE, / and cursor down K_DOWN
+KEYN = 10
+keytab:  .byte $61,$19, $42,$79, $48,$39,$49, $68,$29, $62
+keybits: .byte K_LEFT,K_LEFT, K_RIGHT,K_RIGHT, K_UP,K_UP,K_FIRE, K_DOWN,K_DOWN, K_FIRE
+```
 
 **Sound effects:** `sfxtab`, a word per effect, each a list of SN76489 steps (the
 channel's latch byte, its data byte, its volume byte, and how many frames to hold)
 ending `$FF`.  It must be resident, so place it with `PLACEH`:
 
-            PLACEH "CODE", "KRNCODE"    ; bank 7's kernel on the Model B, main RAM on the Master
-    sfxtab: .word sfx_jump, sfx_star, sfx_throw, sfx_hit, sfx_kill, sfx_power, sfx_die
-    sfx_jump: .byte $C0|8, 12, $D0, 2,  $C0|4, 9, $D2, 2,  $C0|0, 7, $D4, 2,  $C0|8, 5, $D6, 3, $FF
+```asm
+        PLACEH "CODE", "KRNCODE"    ; bank 7's kernel on the Model B, main RAM on the Master
+sfxtab: .word sfx_jump, sfx_star, sfx_throw, sfx_hit, sfx_kill, sfx_power, sfx_die
+sfx_jump: .byte $C0|8, 12, $D0, 2,  $C0|4, 9, $D2, 2,  $C0|0, 7, $D4, 2,  $C0|8, 5, $D6, 3, $FF
+```
 
 **Music:** `beebgame/tools/midi2snd.py <in.mid> <out>` turns a MIDI file into the player's
 stream (a melody and two voices of backing).  Put it in your menus' image at
 `MUSIC_ADDR`:
 
-            .segment "MNUDATA"
-    MUSIC_ADDR:
-            .incbin "music.bin"
+```asm
+        .segment "MNUDATA"
+MUSIC_ADDR:
+        .incbin "music.bin"
+```
 
 ## Step 8: the assets
 
@@ -394,20 +420,22 @@ in the engine's terms: the map as tile ids, the tile set's shape and lists, the
 sprites' placements and directory, and your own header fields, objects and tile
 tables.  Cleo's, from `tools/assets.py`:
 
-    import levelfile as lf       # (beebgame/tools on sys.path)
+```python
+import levelfile as lf       # (beebgame/tools on sys.path)
 
-    ghdr = {HDR_STARTX: L['start'][0], HDR_STARTY: L['start'][1],
-            HDR_EXITX: L['exit'][0], HDR_EXITY: L['exit'][1]}          # Cleo's own fields
-    placement = lf.placement([(item, bank, img_addr, mask_addr), ...])  # images this level loads
-    directory, smask = lf.directory(entries, masks)                     # 118 entries, 103 masks
-    data = lf.encode(lf.Level(lw=L['lw'], lh=L['lh'], game_header=ghdr,
-                              shape=lf.Shape(**T['B']['shape']),
-                              objects=bytes(objs), tile_tables=(bytes(attr), bytes(acls)),
-                              tiles=T['B']['tiles'], placement=placement, map=mapb,
-                              flat=T['flat'], halves=T['halves'], hpair=T['hpair'],
-                              mir=T['B']['mir'], directory=directory, masks=smask,
-                              page0=T['B']['page0']))
-    open(os.path.join(OUT, 'L%d' % n), 'wb').write(data)
+ghdr = {HDR_STARTX: L['start'][0], HDR_STARTY: L['start'][1],
+        HDR_EXITX: L['exit'][0], HDR_EXITY: L['exit'][1]}          # Cleo's own fields
+placement = lf.placement([(item, bank, img_addr, mask_addr), ...])  # images this level loads
+directory, smask = lf.directory(entries, masks)                     # 118 entries, 103 masks
+data = lf.encode(lf.Level(lw=L['lw'], lh=L['lh'], game_header=ghdr,
+                          shape=lf.Shape(**T['B']['shape']),
+                          objects=bytes(objs), tile_tables=(bytes(attr), bytes(acls)),
+                          tiles=T['B']['tiles'], placement=placement, map=mapb,
+                          flat=T['flat'], halves=T['halves'], hpair=T['hpair'],
+                          mir=T['B']['mir'], directory=directory, masks=smask,
+                          page0=T['B']['page0']))
+open(os.path.join(OUT, 'L%d' % n), 'wb').write(data)
+```
 
 `encode()` checks the sizes and limits (the objects, the stages, the map, the header's
 engine fields); the build runs `levelfile.py check` on every level too.  The format is
@@ -436,8 +464,10 @@ reads Cleo's data (its `assets/v500` sheets and levels, its object types) with y
 
 ## Step 9: build and run
 
-    git submodule update --init
-    sh build.sh
+```sh
+git submodule update --init
+sh build.sh
+```
 
 The build prints a line per level from your asset step, the bank pieces, `layout: the
 data sits alike on both machines`, and the disc.  Boot it in jsbeeb or BeebEm
@@ -449,7 +479,7 @@ What stops a build, and what to do:
 |---|---|
 | `Symbol 'hook_...' is undefined` | a hook is missing from `main.s` (Step 3) |
 | ld65's `Memory area overflow` in `B7` or `B7M` | your game's image, or your menus', is full (the limits below) |
-| `the game image's variables run into its code` | LGCBSS and the engine's variables have met your code: trim either |
+| `the game image's variables run into its code` | GAMEBSS and the engine's variables have met your code: trim either |
 | `bank 4's code must end where its sprites start` | `B4_CODE_END` (or B5) in your assets.inc is not this engine's |
 | `a bank-number or write-bank site in the menus' image` | your menus used `bankimm`/`wrsel`: read the bank from PBANK (`ldpbank`) instead |
 | `layout: n differences` | a variable sits at different addresses on the two machines: something you put in a shared segment differs by `BHW` |
@@ -462,17 +492,19 @@ What stops a build, and what to do:
 Subclass `Harness` to name your game's state for the scene fingerprint, and write
 the way into a level.  Cleo's `test/harness.mjs`:
 
-    import { Harness, loadLabels, loadBanks, dbgPath } from "../beebgame/test/lib/harness.mjs";
-    export * from "../beebgame/test/lib/harness.mjs";
+```js
+import { Harness, loadLabels, loadBanks, dbgPath } from "../beebgame/test/lib/harness.mjs";
+export * from "../beebgame/test/lib/harness.mjs";
 
-    export class CleoHarness extends Harness {
-      gameScene() {
-        const A = this.A;
-        return [["px", A.px, 2], ["py", A.py, 2], ["vx", A.vx, 2], ["vy", A.vy, 2],
-                ["frame", A.frame, 2], ["health", A.health, 1], ["hurt", A.hurt, 1],
-                ["level", A.level, 1], ["score", A.score, 3]];
-      }
-    }
+export class CleoHarness extends Harness {
+  gameScene() {
+    const A = this.A;
+    return [["px", A.px, 2], ["py", A.py, 2], ["vx", A.vx, 2], ["vy", A.vy, 2],
+            ["frame", A.frame, 2], ["health", A.health, 1], ["hurt", A.hurt, 1],
+            ["level", A.level, 1], ["score", A.score, 3]];
+  }
+}
+```
 
 Its `open()` boots the disc, patches the title's `jsr title_menu` to start a game,
 waits for the engine's `game_in` (the game's image just in) to choose the level, and

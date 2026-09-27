@@ -1,13 +1,13 @@
 """Every branch in a build's code that crosses a page when taken (+1 cycle), with its
 source line (and the line inside a macro) -- to place PADs by.  Static: how often each
 is taken is the game's profiler's to say (Cleo's test/cycprof.mjs).
-    python3 tools/pagecheck.py <build dir> [segments=SPR4CODE,SPR5CODE,MAP5CODE,TIL6ENT,TILCODE,LGCCODE,ENGCODE,KRNCODE]"""
+    python3 tools/pagecheck.py <build dir> [segments=SPR4CODE,SPR5CODE,MAP5CODE,TIL6ENT,TILCODE,GAMECODE,ENGCODE,KRNCODE]"""
 import os, re, sys
 
 ALL = os.environ.get('ALL') == '1'          # every branch, crossing or not (for tools/padtune)
 
 bd = sys.argv[1]
-want = (sys.argv[2] if len(sys.argv) > 2 else 'SPR4CODE,SPR5CODE,MAP5CODE,TIL6ENT,TILCODE,LGCCODE,ENGCODE,KRNCODE').split(',')
+want = (sys.argv[2] if len(sys.argv) > 2 else 'SPR4CODE,SPR5CODE,MAP5CODE,TIL6ENT,TILCODE,GAMECODE,ENGCODE,KRNCODE').split(',')
 dbg = open(bd + '/game.dbg' if os.path.exists(bd + '/game.dbg') else bd + '/cleo.dbg').read()
 files = {m.group(1): m.group(2) for m in re.finditer(r'^file\tid=(\d+),name="([^"]+)"', dbg, re.M)}
 segs = {}

@@ -94,6 +94,6 @@ mirror_copy:
         jmp @cb
 
 ; ---------------------------------------------------------------- the CRTC
-        .segment "LGCHW"            ; (after the shared)
+        .segment "KRNHW"            ; (after the shared)
 crtcbm:   .res 2                    ; the buffer being built: its mirror redirect (base -
                                     ; RINGCHARS; its CRTC base, crtcb, is zero page's)

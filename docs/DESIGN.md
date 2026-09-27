@@ -5,7 +5,7 @@ BBC Master 128, one disc for both.  This document is the detail behind the READM
 Addresses are from a build's linker maps (`build/modelb/map.txt`,
 `build/master/map.txt`) and the sources they come from; where the two machines
 differ, both are given.  The game in the examples, and whose figures they are, is
-Cleo, the reference game: its code and tables are the game's segments (LGC*, MNU*,
+Cleo, the reference game: its code and tables are the game's segments (GAME*, MNU*,
 ZPGAME), everything else is the engine's.
 
 ## One structure, two machines
@@ -48,7 +48,7 @@ The data lies alike too.  `tools/build.sh` links the Model B first and then the 
 every shared segment pinned at the Model B's address (`tools/pincfg.py`): the
 Master's shorter code leaves gaps, and every table and variable -- zero page, low RAM,
 each bank -- is at the same address on both.  What one machine alone has goes in
-segments after the shared ones (ZPHW, LOWHW, LGCHW: the Model B's `jmp (abs,x)`
+segments after the shared ones (ZPHW, LOWHW, KRNHW: the Model B's `jmp (abs,x)`
 vector, its gather's shape, its mirror bookkeeping, its handler's state).
 `tools/layoutcheck.py` compares the two builds' debug info and fails the build on any
 difference; only code labels (a CMOS instruction is shorter) and the start-up pieces
@@ -62,7 +62,7 @@ pads (`src/pads.inc`, the `PAD` macro) before the blitters, found with
 pads keep `copy_partial`'s and `blank_below`'s loops each in a page: the engine's
 code ends at the kernel on the Model B, so its pad (PADB_BB) is after them and places
 what is before it; the Master's runs on from the Model B's start, so its pad
-(PADM_CP) is before them.  LGCBSS and ENGBSS are page aligned, so the crossings of
+(PADM_CP) is before them.  GAMEBSS and ENGBSS are page aligned, so the crossings of
 their tables' indexed reads do not move with anything in front of them.  `SAMEPAGE` asserts the hot loops' branches at link time;
 the game's profiler (Cleo's `test/cycprof.mjs`) measures what the branches and crossings cost a frame.
 
@@ -222,12 +222,12 @@ while the other is in: what both need is the kernel's.
 | Range | Model B | Master |
 |---|---|---|
 | **the game's image** (GAME): the game's first, the engine's up against the kernel | | |
-| LGCLVL: LV_ATTR0, LV_ALTCLS (256 each), LV_HDR (32), loaded | $8000-$821F | same |
-| LGCBSS, page aligned: the game's variables | $8300-$8EF8 | same |
+| ENGLVL: LV_ATTR0, LV_ALTCLS (256 each), LV_HDR (32), loaded | $8000-$821F | same |
+| GAMEBSS, page aligned: the game's variables | $8300-$8EF8 | same |
 | ENGBSS, page aligned: the engine's variables | $8F00-$95C7 | same |
 | free | $95C8-$9700 | same |
-| LGCDATA: LV_ALTTAB, the HUD digits (the file GAME starts here) | $9701-$9808 | same |
-| LGCCODE: the game's code | $9809-$B011 | $9809-$AFAC |
+| GAMEDATA: LV_ALTTAB, the HUD digits (the file GAME starts here) | $9701-$9808 | same |
+| GAMECODE: the game's code | $9809-$B011 | $9809-$AFAC |
 | ENGCODE: the engine's bank 7 code, ending at the kernel | $B012-$B6FF | $B012-$B5AF |
 | **or the menus' image** (MENU) | | |
 | MNUCODE: the menus, the title's loop, the tune's player, the pieces' unpack and copy | $8000-$870C | $8000-$86E1 |
@@ -238,18 +238,18 @@ while the other is in: what both need is the kernel's.
 | KRNCODE | $B740-$BE6A | $B740-$BB66 |
 | the NMI stubs' image | $BE6B-$BEC3 | (after KRNCODE) |
 | KRNBSS: the disc driver's and the swap's variables | $BEC4-$BED2 | same |
-| LGCHW (the Model B): SECTAB, BUF_SEC0, BUF_SEC0T1, LOADREQ, page aligned | $BF00-$BF6B | -- |
+| KRNHW (the Model B): SECTAB, BUF_SEC0, BUF_SEC0T1, LOADREQ, page aligned | $BF00-$BF6B | -- |
 
 The game's image is laid out for the engine to come apart from the game: the game's
 variables, then the engine's; the game's code and data, then the engine's code,
 which ends at the kernel -- `build.sh` sets the file's start from the Model B's
 segment sizes (`od65`, before any link), so the engine's code sits where its own
 size puts it, whatever the game's is (the Master's, pinned to the Model B's start,
-runs on from there and falls short).  LGCCODE is the game: the logic, the game loop
+runs on from there and falls short).  GAMECODE is the game: the logic, the game loop
 from `level_loop`, the HUD (`bar_bg`, `bar_digit`), `rnd`.  ENGCODE is `render_frame`
 and `render_core`, the sprite prologue (`drawsprite`), `draw_sprites`,
 `match_sprites`, `erase_old`, `copy_partial`, `blank_below`, `mark_dirty`,
-`draw_dirty`, `lvreset`, and on the Model B `mirror_copy`.  LGCBSS is the object
+`draw_dirty`, `lvreset`, and on the Model B `mirror_copy`.  GAMEBSS is the object
 state (16 arrays of OBJN = 149, the collision grid, its chains and the bin walk
 lists); ENGBSS is SPRMASK and SPR_TABLE (the level's sprite directory, 118 entries of
 8 bytes), the sprite records (SPRREC, RECCNT, KEEP) and the dirty lists.  KRNCODE is `build_sections`, `menu_sections`,
@@ -714,7 +714,7 @@ Back in bank 7, `load_end`, interrupts on, and `load_level` goes on from the hea
 `image_load` (LDPROG+3, X = IMG_GAME or IMG_MENU) is the same machinery: the image
 staged and copied to its place, then its bank numbers and write-bank stores patched
 as the boot loader patches BANKS.  The game's image brings more: its variables
-(LGCBSS) are zeroed, so a game starts the same whatever the menus left there, and the
+(GAMEBSS) are zeroed, so a game starts the same whatever the menus left there, and the
 bar template is read to its place.  The kernel's `go_game` (the menus' way out) loads
 the game's image and jumps to `level_loop` with the stack reset, the disc still open
 (`ld_open`): the first level's load goes straight on without parking the chain and

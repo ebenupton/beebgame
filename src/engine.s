@@ -301,7 +301,7 @@ SPRREC:    .res 2*MAXREC*10
 RECCNT:    .res 2
 KEEP:      .res MAXREC
     .if BHW
-        .segment "LGCHW"            ; (after the shared: on the Master these are TABLES')
+        .segment "KRNHW"            ; (after the shared: on the Master these are TABLES')
 BUF_SEC0:  .res 4
 BUF_SEC0T1: .res 4
 SECTAB:    .res 2*48

@@ -3,7 +3,7 @@ the same address, and every variable or table (a label in a segment that is not
 code) both builds have must sit at the same address -- the Master's shorter 65C02
 code is padded out to the Model B's, so nothing after it moves.  Code labels may
 differ (a CMOS instruction is shorter); so may the pieces that only run once at
-start-up, and each machine's own data, which the segments ZPHW, LOWHW and LGCHW put
+start-up, and each machine's own data, which the segments ZPHW, LOWHW and KRNHW put
 after the shared (the Master's handler keeps its state in TABLES, main RAM).  Exit 1
 on any difference.
     python3 tools/layoutcheck.py [modelb_dir=build/modelb] [master_dir=build/master]"""
@@ -14,10 +14,10 @@ def dbgfile(d):                     # (game.dbg; cleo.dbg before the engine was 
     g = os.path.join(d, 'game.dbg')
     return g if os.path.exists(g) else os.path.join(d, 'cleo.dbg')
 
-CODE = {'CODE', 'TILCODE', 'LGCCODE', 'SPR4CODE', 'SPR5CODE', 'MAP5CODE',
+CODE = {'CODE', 'TILCODE', 'GAMECODE', 'SPR4CODE', 'SPR5CODE', 'MAP5CODE',
         'TIL6ENT', 'MNUCODE', 'LOWCODE', 'NMISTUB', 'KRNCODE', 'ENGCODE', 'MUSCODE'}
 STARTUP = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX'}      # run once, then overwritten
-OWN = {'ZPHW', 'LOWHW', 'LGCHW', 'TABLES'}              # one machine's own, after the shared
+OWN = {'ZPHW', 'LOWHW', 'KRNHW', 'TABLES'}              # one machine's own, after the shared
 
 
 def load(d):

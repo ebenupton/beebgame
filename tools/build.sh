@@ -82,7 +82,7 @@ for pass in 1 2 3; do
         # engine's, from the Model B's sizes (od65: the object's segments, before any
         # link); the Master's, pinned to the Model B's, fall short of the kernel
         if [ $TARGET = modelb ]; then
-            B7N=$(od65 --dump-segsize $BD/main.o | awk '/^ +(LGCDATA|LGCCODE|ENGCODE):/ {s += $2} END {print s}')
+            B7N=$(od65 --dump-segsize $BD/main.o | awk '/^ +(GAMEDATA|GAMECODE|ENGCODE):/ {s += $2} END {print s}')
             B7S=$(printf '%04X' $(( 0x$(grep -o 'B7K: *start = \$[0-9A-F]*' $CFG | sed 's/.*\$//') - B7N )))
             B7N=$(printf '%04X' $B7N)
         fi
@@ -114,7 +114,7 @@ s0f = re.search(r'^sym\tid=\d+,name="@s0f",[^\n]*parent=%s,[^\n]*val=0x([0-9A-F]
 addr['SOLIDF'] = int(s0f.group(1), 16) + 1
 want.append('SOLIDF')
 # bank 7's images (ldprog.s image_load): the game's, the linker's b7.bin (its code,
-# from LGCDATA; its variables are not in the file), and the menus', MENU
+# from GAMEDATA; its variables are not in the file), and the menus', MENU
 # (one file on the disc, IMG7: the menus' image to a whole sector, then the game's,
 # which ldprog.s reads as two)
 import shutil
@@ -133,9 +133,9 @@ with open(BD + '/defs_ld.inc', 'w') as f:
             f.write('; %s: not in labels.txt (a constant?)\n' % n)
     for k, (a, n) in img.items():
         f.write('%s_ADDR = $%04X\n%s_LEN = %d\n' % (k, a, k, n))
-    # the image's variables (LGCBSS then ENGBSS, page aligned), zeroed as it comes in:
+    # the image's variables (GAMEBSS then ENGBSS, page aligned), zeroed as it comes in:
     # below its code
-    bss, bssn = addr['__LGCBSS_RUN__'], addr['__ENGBSS_RUN__'] + addr['__ENGBSS_SIZE__'] - addr['__LGCBSS_RUN__']
+    bss, bssn = addr['__GAMEBSS_RUN__'], addr['__ENGBSS_RUN__'] + addr['__ENGBSS_SIZE__'] - addr['__GAMEBSS_RUN__']
     assert bss & 255 == 0 and bss + ((bssn + 255) & ~255) <= addr['__B7_START__'], 'the game image\'s variables run into its code'
     f.write('GAME_BSS = $%04X\nGAME_BSS_PAGES = %d\n' % (bss, (bssn + 255) // 256))
 # each image's own patch lists (bank 7 entries of the linker's, cpu.inc BANKREF and
