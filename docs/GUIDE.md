@@ -50,12 +50,16 @@ Make a repository with beebgame as a submodule, and lay it out like Cleo's:
       src/               your 6502 sources
         main.s           the root: the engine's sources and yours, and the hooks
         keymap.inc       your keys
+      assets/            your source art, levels and music, in the repository: the
+                         build reads nothing from outside it
       tools/             your asset pipeline
       test/              your tests, on beebgame's harness
       build/             generated
 
 Cleo's `src/` has `main.s`, `logic.s` (the game's logic and HUD), `game.s` (the game
-loop), `menu.s` (the menus), `gamedata.s` (its tables) and `keymap.inc`.
+loop), `menu.s` (the menus), `gamedata.s` (its tables) and `keymap.inc`; its
+`assets/v500/` is the original J2ME game's data (the tile and sprite sheets, the
+levels, the tune), which its `tools/convert.py` reads.
 
 ## Step 2: the build script
 
@@ -68,7 +72,7 @@ whole:
     cd "$(dirname "$0")"
     [ -f beebgame/tools/build.sh ] || { echo "beebgame is missing: git submodule update --init"; exit 1; }
     export GAME_MAIN=src/main.s GAME_SRC=src DISC_TITLE=CLEO DISC_OUT=build/cleo.ssd GAME_NAME=Cleo
-    export GAME_MUSIC="python3 beebgame/tools/midi2snd.py ../v500/thm.mid build/MUSIC"
+    export GAME_MUSIC="python3 beebgame/tools/midi2snd.py assets/v500/thm.mid build/MUSIC"
     export GAME_ASSETS="python3 tools/assets.py"
     exec sh beebgame/tools/build.sh
 
@@ -428,7 +432,7 @@ Today the engine has no tile packer or sprite placer of its own beyond `sprpack.
 `tools/convert.py` `pack_tiles` builds a level's tile ids, lists and shape from its
 tile art, and `tools/assets.py` places each level's sprites, writes SPRC, SPRX and
 imgtab.bin, and sizes MAXSPR from the level's objects.  Copy them and replace what
-reads Cleo's data (its JARs, its object types) with your own.
+reads Cleo's data (its `assets/v500` sheets and levels, its object types) with your own.
 
 ## Step 9: build and run
 
