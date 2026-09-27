@@ -24,8 +24,10 @@ What it gives a game:
 - A keyboard scan, SN76489 sound effects and a three-voice music player, all from the
   interrupt.
 
-`docs/DESIGN.md` is the detail: the memory maps, the display chain, the blitters, the
-loader, the level file format.
+**To write a game on it, start with `docs/GUIDE.md`**: the steps from an empty
+directory to a disc, with Cleo's code as the examples.  `docs/DESIGN.md` is the
+detail: the memory maps, the display chain, the blitters, the loader, the level file
+format.
 
 ## Layout
 
