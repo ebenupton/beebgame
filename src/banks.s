@@ -119,12 +119,13 @@ lvreset:
         .segment "ENGLVL"           ; the level's tables, loaded by ldprog.s (the
 LV_ATTR0:   .res 256                ; objects go to main RAM: LV_OBJS, defs.inc)
 LV_ALTCLS:  .res 256                ; alt class by tile id
-LV_HDR:     .res 32                 ; header: lw, lh, start, exit, nobj, the special
-                                    ; tiles, gset, ntiles, maprow's shift
+LV_HDR:     .res 32                 ; header: lw, lh, nobj, the tile set's shape, and
+                                    ; the game's own fields (tools/levelfile.py)
         .segment "ENGBSS"           ; the engine's: the sprite directory
 SPRMASK:    .res 2*BOXID0           ; mask plane address by sprite id (the boxes, from
                                     ; BOXID0, have none): the loader's, read by the
                                     ; prologue (this bank)
-SPR_TABLE:  .res 118*8              ; the sprite directory as the packer finished it
+SPR_TABLE:  .res (BOXID0+BOXN)*8    ; the sprite directory as the packer finished it:
+                                    ; an entry a sprite id, BOXID0 images then BOXN boxes
                                     ; (the level's addresses): the loader's, read by
                                     ; the prologue in place

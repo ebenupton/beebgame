@@ -612,9 +612,9 @@ lv_load:
         sta dst
         lda #>SPR_TABLE
         sta dst+1
-        lda #<(118*8)
+        lda #<((BOXID0+BOXN)*8)     ; (the directory: an entry a sprite id)
         sta cnt
-        lda #>(118*8)
+        lda #>((BOXID0+BOXN)*8)
         sta cnt+1
         ldx PB_LVL
         jsr bcopy

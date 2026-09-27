@@ -14,11 +14,11 @@ whole sectors at the end, so the Model B's loader reads the file short of them.
                               placement=[(item, bank, img, mask), ...], map=b'...',
                               flat=b'...', halves=b'...', hpair=b'...', mir=b'',
                               directory=[None | (addr, bank, geometry), ...],
-                              masks=[addr, ...], page0=b'...'))
-    lf.decode(data)             # the sections back, the map unpacked: for checks
+                              masks=[addr, ...], page0=b'...', boxid0=103, boxn=15))
+    lf.decode(data, 103)        # the sections back, the map unpacked: for checks
 """
 from dataclasses import dataclass, field
-import sys
+import re, sys
 
 # ---------------------------------------------------------------- the sections
 SECTIONS = ('hdr', 'objs', 'attr', 'altcls', 'tiles', 'place', 'map', 'flat', 'halves',
@@ -60,8 +60,9 @@ class Shape:
 
 # ---------------------------------------------------------------- the limits (src/defs.inc)
 OBJ_BYTES, OBJ_MAX = 6, 149     # LV_OBJS: 894 bytes, main RAM
-DIR_N, DIR_ENTRY = 118, 8       # SPR_TABLE: the sprite directory, 118 entries
-MASK_N = 103                    # SPRMASK: a mask address for each id below BOXID0
+DIR_ENTRY = 8                   # SPR_TABLE: an entry a sprite id, BOXID0 + BOXN of them;
+                                # SPRMASK: a mask address for each id below BOXID0 (the
+                                # game's numbers, from its assets.inc: Level.boxid0, boxn)
 STAGE_LVL_B = 0x7C00 - 0x5C00   # the Model B's level stage (without LV_PAGE0)
 STAGE_M = 0x8000 - 0x3000       # the Master's stage
 PAGE0_LEN = 512
@@ -109,10 +110,11 @@ def placement(items):
 
 
 def directory(entries, masks):
-    """SPR_TABLE and SPRMASK: DIR_N entries, each None or (address, bank, geometry) --
-    geometry the entry's other six bytes (W, h, refx, refy, flags, lines); a bank-5
-    image gets DIR_BANK5 in its flags -- and MASK_N mask addresses (0: none)"""
-    assert len(entries) == DIR_N and len(masks) == MASK_N
+    """SPR_TABLE and SPRMASK: an entry for every sprite id (BOXID0 images, then BOXN
+    boxes), each None or (address, bank, geometry) -- geometry the entry's other six
+    bytes (W, h, refx, refy, flags, lines); a bank-5 image gets DIR_BANK5 in its flags
+    -- and a mask address (0: none) for each image id, BOXID0 of them"""
+    assert len(masks) < len(entries)
     d = bytearray()
     for e in entries:
         if e is None:
@@ -144,6 +146,8 @@ class Level:
     directory: bytes            # directory()[0]
     masks: bytes                # directory()[1]
     page0: bytes                # LV_PAGE0: the Master's gather table, 512 bytes
+    boxid0: int = 0             # the game's sprite ids: BOXID0 images, then BOXN boxes
+    boxn: int = 0               #  (assets.inc)
     game_header: dict = field(default_factory=dict)   # offset -> byte, HDR_GAME only
 
 
@@ -162,7 +166,8 @@ def header(lv):
 def encode(lv):
     assert len(lv.map) == 1 << (lv.lw + lv.lh), (len(lv.map), lv.lw, lv.lh)
     assert all(len(t) == 256 for t in lv.tile_tables) and len(lv.tile_tables) == 2
-    assert len(lv.directory) == DIR_N * DIR_ENTRY and len(lv.masks) == 2 * MASK_N
+    assert lv.boxid0 > 0 and len(lv.directory) == DIR_ENTRY * (lv.boxid0 + lv.boxn)
+    assert len(lv.masks) == 2 * lv.boxid0
     assert len(lv.page0) == PAGE0_LEN
     maprle = rle(lv.map)
     assert unrle(maprle) == lv.map
@@ -184,14 +189,15 @@ def encode(lv):
     return out
 
 
-def decode(data):
-    """the sections by name (the map unpacked, the header's fields as well)"""
+def decode(data, boxid0):
+    """the sections by name (the map unpacked, the header's fields as well); boxid0,
+    the game's, says how long SPRMASK is"""
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     ends = offs[1:] + [len(data)]
     sec = {n: data[o:e] for n, o, e in zip(SECTIONS, offs, ends)}
     sec['page0'] = sec['page0'][:PAGE0_LEN]
-    sec['pad'] = sec['smask'][2 * MASK_N:]          # (to LV_PAGE0's sector)
-    sec['smask'] = sec['smask'][:2 * MASK_N]
+    sec['pad'] = sec['smask'][2 * boxid0:]          # (to LV_PAGE0's sector)
+    sec['smask'] = sec['smask'][:2 * boxid0]
     h = sec['hdr']
     sec['map'] = unrle(sec['map'], 1 << (h[HDR_LW] + h[HDR_LH]))
     sec['fields'] = dict(lw=h[HDR_LW], lh=h[HDR_LH], nobj=h[HDR_NOBJ],
@@ -209,7 +215,7 @@ def inc():
     return '\n'.join(lines) + '\n'
 
 
-def check(data):
+def check(data, boxid0, boxn):
     """a level file's invariants, as the loader relies on them: the table, the sections
     in order, the header's counts against the sections, the map whole, LV_PAGE0 last and
     sector aligned; returns the decoded sections"""
@@ -218,7 +224,7 @@ def check(data):
     assert offs[0] == 2 * len(SECTIONS) and offs == sorted(offs), 'the section table'
     assert offs[SEC['page0']] % 256 == 0 and len(data) - offs[SEC['page0']] == PAGE0_LEN, 'LV_PAGE0'
     assert len(data) - PAGE0_LEN <= STAGE_LVL_B and len(data) <= STAGE_M, 'too big for a stage'
-    sec = decode(data)
+    sec = decode(data, boxid0)
     f = sec['fields']
     assert len(sec['objs']) == OBJ_BYTES * f['nobj'] and f['nobj'] <= OBJ_MAX, 'the objects'
     assert len(sec['map']) == 1 << (f['lw'] + f['lh']), 'the map'
@@ -226,7 +232,7 @@ def check(data):
     assert len(sec['attr']) == 256 and len(sec['altcls']) == 256, 'the tile tables'
     assert len(sec['halves']) == 2 * f['nhalf'], 'the half tiles'
     assert len(sec['mir']) == f['nmir'], 'MIRTAB'
-    assert len(sec['dir']) == DIR_N * DIR_ENTRY and len(sec['smask']) == 2 * MASK_N, 'the directory'
+    assert len(sec['dir']) == DIR_ENTRY * (boxid0 + boxn) and len(sec['smask']) == 2 * boxid0, 'the directory'
     assert not any(sec['pad']) and len(sec['pad']) < 256, 'the padding before LV_PAGE0'
     p = sec['place']
     assert len(p) % 6 == 1 and p[-1] == 0xFF and all(p[i + 1] in (4, 5) for i in range(0, len(p) - 1, 6)), 'the placements'
@@ -236,12 +242,14 @@ def check(data):
 if __name__ == '__main__':
     if sys.argv[1:] == ['inc']:
         sys.stdout.write(inc())
-    elif sys.argv[1:2] == ['check'] and len(sys.argv) > 2:
-        for fn in sys.argv[2:]:
+    elif sys.argv[1:2] == ['check'] and len(sys.argv) > 3:
+        consts = dict(re.findall(r'^(\w+) = \$?(\w+)', open(sys.argv[2]).read(), re.M))
+        boxid0, boxn = int(consts['BOXID0']), int(consts['BOXN'])
+        for fn in sys.argv[3:]:
             try:
-                check(open(fn, 'rb').read())
+                check(open(fn, 'rb').read(), boxid0, boxn)
             except AssertionError as e:
                 sys.exit('%s: %s' % (fn, e))
-        print('levelfile: %d level files check' % (len(sys.argv) - 2))
+        print('levelfile: %d level files check' % (len(sys.argv) - 3))
     else:
-        sys.exit('usage: levelfile.py inc | check <level file>...')
+        sys.exit('usage: levelfile.py inc | check <assets.inc> <level file>...')

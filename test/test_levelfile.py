@@ -5,6 +5,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'tools'))
 import levelfile as lf
 
+BOXID0, BOXN = 10, 3            # a game's sprite ids (deliberately not Cleo's 103, 15)
+
 
 def level(**kw):
     lw, lh = kw.pop('lw', 5), kw.pop('lh', 4)
@@ -17,10 +19,11 @@ def level(**kw):
              map=bytes(rnd.choice((0, 0, 0, 1, 2, 3)) for _ in range(1 << (lw + lh))),
              flat=b'\x0f\x0f', halves=b'\x05\x01\x06\x03', hpair=b'\x33\x33', mir=b'',
              page0=bytes(range(256)) * 2, game_header={2: 9, 3: 8, 7: 1})
-    ents = [None] * lf.DIR_N
+    ents = [None] * (BOXID0 + BOXN)
     ents[1] = (0x9000, 4, bytes([3, 12, 0, 0, 2, 24]))
     ents[7] = (0x8400, 5, bytes([2, 8, 0, 0, 2 | 8, 16]))
-    d['directory'], d['masks'] = lf.directory(ents, [0x9100 if i == 1 else 0 for i in range(lf.MASK_N)])
+    d['directory'], d['masks'] = lf.directory(ents, [0x9100 if i == 1 else 0 for i in range(BOXID0)])
+    d['boxid0'], d['boxn'] = BOXID0, BOXN
     d.update(kw)
     return lf.Level(**d)
 
@@ -47,7 +50,7 @@ class File(unittest.TestCase):
     def test_encode_decode(self):
         lv = level()
         data = lf.encode(lv)
-        sec = lf.check(data)
+        sec = lf.check(data, BOXID0, BOXN)
         self.assertEqual(sec['map'], lv.map)
         self.assertEqual(sec['objs'], lv.objects)
         self.assertEqual(sec['dir'], lv.directory)
@@ -64,7 +67,7 @@ class File(unittest.TestCase):
         self.assertEqual(len(data) - off, lf.PAGE0_LEN)
 
     def test_directory_bank5_flag(self):
-        sec = lf.decode(lf.encode(level()))
+        sec = lf.decode(lf.encode(level()), BOXID0)
         self.assertTrue(sec['dir'][7 * 8 + 6] & lf.DIR_BANK5)
         self.assertFalse(sec['dir'][1 * 8 + 6] & lf.DIR_BANK5)
 
@@ -72,6 +75,12 @@ class File(unittest.TestCase):
         for o in (0, 1, 6, 20, 31):
             with self.assertRaises(AssertionError):
                 lf.encode(level(game_header={o: 1}))
+
+    def test_directory_sized_by_the_game(self):
+        with self.assertRaises(AssertionError):     # an entry short
+            lf.encode(level(directory=bytes(lf.DIR_ENTRY * (BOXID0 + BOXN - 1))))
+        with self.assertRaises(AssertionError):     # a mask short
+            lf.encode(level(masks=bytes(2 * (BOXID0 - 1))))
 
     def test_limits(self):
         with self.assertRaises(AssertionError):

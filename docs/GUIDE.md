@@ -167,9 +167,22 @@ byte: 00 keeps the byte ($FF), 01 keeps its left half ($CC, the right game pixel
 opaque), 10 keeps its right half ($33), 11 replaces it ($00).  The screen byte becomes
 (screen AND mask) OR image.
 
-Sprites with ids from `BOXID0` up are **boxes**: opaque rectangles with no mask,
-drawn by a plain copy (Cleo's box stars and trampolines, whose backgrounds are baked
-into the art).
+### Sprite ids, and boxes
+
+A sprite id indexes the level's directory.  Your asset step chooses two numbers,
+`BOXID0` and `BOXN`: ids below `BOXID0` are ordinary sprites (masked), and the `BOXN`
+ids from `BOXID0` are **boxes**, opaque rectangles with their background baked into
+the art, no mask, drawn by a plain copy.  A box is cheaper to draw than a masked
+sprite, and suits a thing that sits still on a known background.  Two rules come with
+boxes:
+
+- A box drawn at the same place as the box before it must cover it completely -- the
+  frames of one animation, the same size.  The engine does not erase the old one.
+- Ids from `BOXID0 + BOXN` up (to `BOXID0 + 2 x BOXN - 1`) are **still** aliases: each
+  draws as the box `BOXN` below it, and tells the engine nothing will move over it, so
+  it may skip redrawing the box while it is unchanged.  Use them for boxes the player
+  can never pass in front of.
+
 
 ### A sprite's directory entry
 
@@ -186,8 +199,8 @@ Each sprite id has an 8-byte entry in the level's directory: the image's address
 | 7 | lines, the scanlines stored | scanlines |
 
 The sprite's top left lands at (`spx` - refx, `spy` - refy) in map coordinates, so the
-reference point is where the game says the sprite is: Cleo's player's feet, for
-instance.  Its mask's address is in SPRMASK, by id.
+reference point is where the game says the sprite is: a character's feet, say, so
+that its frames of different sizes all stand on the same ground.  Its mask's address is in SPRMASK, by id.
 
 ## Step 1: make the project
 
@@ -306,8 +319,8 @@ Two rules:
   ```
 
 - **The game's image and the menus' image cannot call each other.**  Both are at
-  the same addresses in bank 7, one at a time.  Anything both need (Cleo: nothing
-  but the engine) goes in the engine or in main RAM.
+  the same addresses in bank 7, one at a time.  Anything both need goes in the kernel
+  (`PLACEH "CODE", "KRNCODE"`) or in zero page and low RAM.
 
 `build.sh`'s link reports a full bank as a memory area overflow; `python3
 beebgame/tools/pagecheck.py build/modelb` lists your branches that cross a page (a
@@ -370,9 +383,9 @@ menu_keys:
         rts
 ```
 
-Cleo draws text a glyph at a time through `ringaddr7`, and pictures (its logo, big
-Cleo) from run-length streams copied a character row at a time; everything in its
-menus is on black, so nothing needs a mask (`menu.s`, *The menus* in its design).
+Draw text and pictures through `ringaddr7`, a character row at a time.  If your menus
+are all on black, a picture needs no mask: Cleo's are run-length streams copied
+straight to the screen (its `menu.s`).
 
 **Music.**  `jsr music_start` plays the tune at `MUSIC_ADDR` from the interrupt,
 looping; `jsr music_stop` silences it (every load does too).  Cleo starts it on the
@@ -441,7 +454,7 @@ level_loop:
         jsr blank_palette           ; hide the loading and the first frame's build-up
         ldx level
         jsr load_level
-        jsr level_init              ; (Cleo's: the objects, the player, the camera)
+        jsr level_init              ; (the game's: the objects, the player, the camera)
         lda #1
         sta BARDIRTY                ; the bar on the first render
         jsr game_frame              ; render both buffers before the palette comes back
@@ -547,16 +560,16 @@ and into `build/`: `TILES0`, `TILES1`, `TILES2`, the tile set, up to 256 tiles (
 each.  The files the loader reads must be identical on both machines (the build
 checks): build them from the Model B's layout.
 
-**assets.inc** (Cleo's values in brackets):
+**assets.inc:**
 
 | Constant | Meaning |
 |---|---|
-| `TOFF` | tile id k is in slot k + TOFF of bank 6 (2) |
-| `FLAT0`, `NFLAT` | the flat tiles' ids (250, 4) |
-| `MAXMIR` | mirrored tiles at most (TILEMIRROR only; 0) |
-| `BOXID0`, `BOXN` | the first opaque "box" sprite id, and how many (103, 15) |
-| `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once (24) |
-| `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | where SPRC goes, and the files' lengths |
+| `TOFF` | tile id k is in slot k + TOFF of bank 6 (2, or 4 with TILEMIRROR) |
+| `FLAT0`, `NFLAT` | the flat tiles' first id and count (the last two are the solids) |
+| `MAXMIR` | mirrored tiles at most (TILEMIRROR only; else 0) |
+| `BOXID0`, `BOXN` | the first box id, and how many boxes (*Sprite ids, and boxes*) |
+| `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once |
+| `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | the resident and staged sprites (below) |
 | `SPR5_MIRROR`, `SPR4_COPY` | 0: nothing mirrored in bank 5, nothing opaque in bank 4 |
 | `MAP5` | the map's place in bank 5 ($9C00) |
 | `B4_CODE_END`, `B5_CODE_END` | where the engine's sprite-bank code ends: your sprites start there |
@@ -580,14 +593,14 @@ import levelfile as lf       # (beebgame/tools on sys.path)
 ghdr = {HDR_STARTX: L['start'][0], HDR_STARTY: L['start'][1],
         HDR_EXITX: L['exit'][0], HDR_EXITY: L['exit'][1]}          # Cleo's own fields
 placement = lf.placement([(item, bank, img_addr, mask_addr), ...])  # images this level loads
-directory, smask = lf.directory(entries, masks)                     # 118 entries, 103 masks
+directory, smask = lf.directory(entries, masks)                     # BOXID0 + BOXN entries, BOXID0 masks
 data = lf.encode(lf.Level(lw=L['lw'], lh=L['lh'], game_header=ghdr,
                           shape=lf.Shape(**T['B']['shape']),
                           objects=bytes(objs), tile_tables=(bytes(attr), bytes(acls)),
                           tiles=T['B']['tiles'], placement=placement, map=mapb,
                           flat=T['flat'], halves=T['halves'], hpair=T['hpair'],
                           mir=T['B']['mir'], directory=directory, masks=smask,
-                          page0=T['B']['page0']))
+                          page0=T['B']['page0'], boxid0=BOXID0, boxn=BOXN))
 open(os.path.join(OUT, 'L%d' % n), 'wb').write(data)
 ```
 
@@ -605,7 +618,30 @@ the blitters' (`DESIGN.md`, *The tiles* and *The sprites*).  In short:
   tiles (a colour's dither, two bytes alternating down the scanlines) and, if you need
   them, mirrored ones.  A level has at most 250 distinct ids.
 - Mirrored images go in bank 4 (it has the table that reverses a byte's four screen
-  pixels), boxes (ids from `BOXID0`) in bank 5 (it has the copy blitter).
+  pixels), boxes in bank 5 (it has the copy blitter), and an image and its mask in the
+  same bank.
+
+**Resident and staged sprites.**  Every sprite image is in one of two files, and which
+is your choice:
+
+- **SPRC, the resident sprites**, loaded once, at the first level, to fixed places:
+  SPRC_LEN bytes to bank 4 from SPRC_BASE (= B4_CODE_END), then SPRC5_LEN bytes to
+  bank 5 from SPRC5_BASE (= B5_CODE_END).  They stay for the whole session, so every
+  level's directory names them at those addresses and no level loads them again.
+- **SPRX, the staged sprites**, SPRX_LEN bytes: everything else.  Each level load
+  stages SPRX whole and copies out just the images and masks that level's placement
+  list names, to the addresses the list gives.  `imgtab.bin` has an entry per item
+  saying where in SPRX its image and mask are (zeros for a resident item).
+- The rest of each sprite bank is the level's: bank 4 from the end of SPRC's part to
+  $BAFF, bank 5 from the end of its part to $9BFF.
+
+Make resident what (nearly) every level draws -- the player, what the player throws,
+the pickups -- and stage the rest.  A bigger resident set means shorter loads and less
+room for each level's own sprites; a smaller one, the reverse.  Limits: SPRX at most
+16K (the Model B's stage) and 12K (the Master keeps it in HAZEL and ANDY); the
+resident parts and the biggest level's own sprites together must fit each bank.
+Cleo declares its split in one place at the top of its packer (`RESIDENT_IDS` in
+`tools/assets.py`).
 
 Today the engine has no tile packer or sprite placer of its own beyond `sprpack.py`
 (which orders a bank's images to save page crossings).  **Start from Cleo's**:
@@ -672,17 +708,17 @@ the engine's level file writer.
 ## Limits to design within
 
 - **Sixteen levels**, `L0`..`L15`, and three tile files: the loader names them.
-- **Sprites:** 118 directory entries, the last 15 opaque boxes; at most MAXSPR on screen
-  (your asset step's figure; Cleo's is 24).
+- **Sprites:** BOXID0 + BOXN sprite ids, and the still aliases after them, all below
+  256; at most MAXSPR on screen at once.
 - **Objects:** 149 at most, 6 bytes each, yours to define.
-- **A level file** must fit the Model B's 8K level stage (Cleo's biggest is 8,448 bytes
-  with its 512-byte LV_PAGE0 tail).
+- **A level file** must fit the Model B's 8K level stage, not counting its 512-byte
+  LV_PAGE0 tail.
+- **Sprite files:** SPRX at most 12K; SPRC's parts and each level's own sprites within
+  banks 4 and 5.
 - **Bank 7:** the game's image is 14,080 bytes, of which the engine's code, variables
-  and level tables take about 4.1K: about 9.9K is yours for code, data and variables
-  (Cleo uses 9.5K).  The menus' image is 14,080 bytes less the music player's 157:
-  about 13.9K (Cleo uses 11.4K, its title pictures and their unpack buffer most of it).
+  and level tables take about 4.1K: about 9.9K is yours for code, data and variables.
+  The menus' image is 14,080 bytes less the music player's 157: about 13.9K.
 - **The window** is 84 game pixels tall on the Model B and 120 on the Master.
-- **The disc** is one single-sided 80-track DFS disc of 800 sectors (Cleo leaves 22
-  free).  Its files are the engine's list (the boot files, each machine's bank pieces,
+- **The disc** is one single-sided 80-track DFS disc of 800 sectors.  Its files are the engine's list (the boot files, each machine's bank pieces,
   loaders and bank 7 images, BAR, SPRX, SPRC, TILES0-2, L0-L15): a game adds none, and
   what it needs goes in those -- the menus' art, for instance, in the menus' image.

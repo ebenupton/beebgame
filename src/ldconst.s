@@ -15,6 +15,7 @@
         OUTC TOFF
         OUTC NFLAT
         OUTC BOXID0
+        OUTC BOXN
         OUTC NMIPAGE
         OUTC LDPROG
         OUTC STAGE
