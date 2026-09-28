@@ -32,6 +32,10 @@
 #                for drawrect's map row); the Master alone
 #   DRAWFLAGS=1  the sprite list carries draw flags in the high bits of its x (bit 7:
 #                mirror the image), so one image is drawn either way round
+#   SPRGEOM=1    the sprite directory split (NIBSPR only): the level carries the images'
+#                addresses alone (DIR_LO, DIR_HI), the game the geometry every level
+#                shares, deduplicated (SPRG_IX by id; SPRG_W, SPRG_RX, SPRG_RY, SPRG_LN
+#                by shape): docs/GUIDE.md, A sprite's directory entry
 BG=$(cd "$(dirname "$0")/.." && pwd)
 : "${GAME_MAIN:?}" "${GAME_SRC:?}" "${GAME_ASSETS:?}" "${DISC_TITLE:?}"
 DISC_OUT=${DISC_OUT:-build/game.ssd}
@@ -42,7 +46,7 @@ mkdir -p build
 if [ "$TILEMIRROR" = 1 ]; then MIRDEF="-D TILEMIRROR=1"; else TILEMIRROR=0; MIRDEF=""; fi
 export TILEMIRROR
 # the options, as the assembler's flags (cpu.inc defaults each to 0)
-for o in MASTERONLY NIBSPR GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP; do
+for o in MASTERONLY NIBSPR GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP SPRGEOM; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then MIRDEF="$MIRDEF -D $o=1"; else eval "$o=0"; fi
     export $o

@@ -24,6 +24,9 @@ GAMEHAZEL = 0                       ;  staged from the disc every time, as the M
         .ifndef NIBSPR              ; (cpu.inc's: 4-bit sprites, no mask planes, no SPRMASK)
 NIBSPR = 0
         .endif
+        .ifndef SPRGEOM             ; (cpu.inc's: the split directory, 2 bytes a sprite id)
+SPRGEOM = 0
+        .endif
 SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)   ; the Master keeps SPRX in HAZEL and ANDY
         .include "defs_ld.inc"      ; the addresses the game exports (build.sh)
         .include "files.inc"        ; the disc's sector table (mkdfs.py table)
@@ -659,9 +662,14 @@ lv_load:
         sta dst
         lda #>SPR_TABLE
         sta dst+1
-        lda #<((BOXID0+BOXN)*8)     ; (the directory: an entry a sprite id)
+  .if SPRGEOM
+DIRLEN = 2*BOXID0                   ; (the split directory: the addresses alone)
+  .else
+DIRLEN = (BOXID0+BOXN)*8
+  .endif
+        lda #<DIRLEN                ; (the directory: an entry a sprite id)
         sta cnt
-        lda #>((BOXID0+BOXN)*8)
+        lda #>DIRLEN
         sta cnt+1
         ldx PB_LVL
         jsr bcopy

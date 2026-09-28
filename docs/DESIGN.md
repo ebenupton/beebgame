@@ -877,6 +877,13 @@ for byte the same).  What each changes:
   change to `match_sprites`), takes bit 7 into `sp_dfl` (a zero-page byte) and gives
   the prologue x without it; `drawsprite` XORs `sp_dfl` into the directory's flags.
 - **TALLMAP.**  `wcyh` (zero page) and `drawrect`'s full map row: *The display*.
+- **SPRGEOM.**  SPR_TABLE is 2 x BOXID0 bytes, `DIR_LO` then `DIR_HI` (banks.s);
+  `ldprog.s` copies that many (`DIRLEN`).  The prologue takes the id in X: the
+  address from DIR_LO/DIR_HI (high byte 0: return; bit 7 clear: bank 5, the bit put
+  back), `sp_flags` = `sp_dfl` (or 0 without DRAWFLAGS), the shape from the game's
+  `SPRG_IX` into `sp_g` (sp_mh's byte: NIBSPR has no mask), and W, lines, refx and,
+  at `@vert`, refy from the game's `SPRG_*` by shape; `sp_ext` = 2 x lines.  Needs
+  NIBSPR (cpu.inc says so).  `levelfile.directory_split` writes the level's part.
 - **TILEMIRROR** (the oldest): the tile blitter's mirrored tiles, *The tiles*.
 
 ## Timing

@@ -68,6 +68,12 @@ STAGE_M = 0x8000 - 0x3000       # the Master's stage
 MASTERONLY = os.environ.get('MASTERONLY') == '1'   # (the build's: no Model B, no limit of its)
 PAGE0_LEN = 512
 DIR_BANK5 = 0x10                # a directory entry's flags: the data is in bank 5
+SPRGEOM = os.environ.get('SPRGEOM') == '1'   # (the build's: the split directory, 2 bytes an id)
+
+
+def dir_len(boxid0, boxn):
+    """the directory section's length: 8 bytes a sprite id, or (SPRGEOM) 2"""
+    return (2 if SPRGEOM else DIR_ENTRY) * (boxid0 + boxn)
 
 
 # ---------------------------------------------------------------- the map's run length code
@@ -129,6 +135,22 @@ def directory(entries, masks):
     return bytes(d), b''.join(bytes([a & 255, a >> 8]) for a in masks)
 
 
+def directory_split(entries):
+    """SPR_TABLE split (SPRGEOM): an entry for every sprite id, None or (address, bank);
+    the addresses' low bytes, then their high bytes -- 0 for None, bit 7 clear for bank
+    5 (the images are all at $8000..$BFFF: bit 7 is always set in the address itself).
+    The geometry is the game's own tables (SPRG_*), the same in every level."""
+    lo, hi = bytearray(), bytearray()
+    for e in entries:
+        if e is None:
+            lo.append(0); hi.append(0); continue
+        addr, bank = e
+        assert 0x8000 <= addr < 0xC000 and bank in (4, 5), (addr, bank)
+        lo.append(addr & 255); hi.append(addr >> 8 if bank == 4 else (addr >> 8) & 0x7F)
+        assert hi[-1], 'an image at $80xx in bank 5 reads as none'
+    return bytes(lo + hi)
+
+
 # ---------------------------------------------------------------- a level
 @dataclass
 class Level:
@@ -144,7 +166,7 @@ class Level:
     halves: bytes               # the half tiles: index in file, row, file
     hpair: bytes                # the halves' fill pairs
     mir: bytes                  # MIRTAB (TILEMIRROR; else empty)
-    directory: bytes            # directory()[0]
+    directory: bytes            # directory()[0], or directory_split() (SPRGEOM)
     masks: bytes                # directory()[1]
     page0: bytes                # LV_PAGE0: the Master's gather table, 512 bytes
     boxid0: int = 0             # the game's sprite ids: BOXID0 images, then BOXN boxes
@@ -168,7 +190,7 @@ def header(lv):
 def encode(lv):
     assert len(lv.map) == 1 << (lv.lw + lv.lh), (len(lv.map), lv.lw, lv.lh)
     assert all(len(t) == 256 for t in lv.tile_tables) and len(lv.tile_tables) == 2
-    assert lv.boxid0 > 0 and len(lv.directory) == DIR_ENTRY * (lv.boxid0 + lv.boxn)
+    assert lv.boxid0 > 0 and len(lv.directory) == dir_len(lv.boxid0, lv.boxn)
     assert len(lv.masks) == (0 if lv.nibble else 2 * lv.boxid0)
     assert len(lv.page0) == PAGE0_LEN
     maprle = rle(lv.map)
@@ -240,7 +262,7 @@ def check(data, boxid0, boxn):
     assert len(sec['halves']) == 2 * f['nhalf'], 'the half tiles'
     assert len(sec['mir']) == f['nmir'], 'MIRTAB'
     nib = os.environ.get('NIBSPR') == '1'
-    assert len(sec['dir']) == DIR_ENTRY * (boxid0 + boxn) and len(sec['smask']) == (0 if nib else 2 * boxid0), 'the directory'
+    assert len(sec['dir']) == dir_len(boxid0, boxn) and len(sec['smask']) == (0 if nib else 2 * boxid0), 'the directory'
     assert not any(sec['pad']) and len(sec['pad']) < 256, 'the padding before LV_PAGE0'
     p = sec['place']
     assert len(p) % 6 == 1 and p[-1] == 0xFF and all(p[i + 1] in (4, 5) for i in range(0, len(p) - 1, 6)), 'the placements'

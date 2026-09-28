@@ -27,7 +27,8 @@ What it gives a game:
 Build options (`docs/GUIDE.md`, Step 11) let a game too big for the Model B build for
 the Master alone: 4-bit sprites (NIBSPR), game code in HAZEL (GAMEHAZEL), the game's
 own sound player (GAMESOUND), a draw flag that mirrors a sprite (DRAWFLAGS), maps up
-to 256 tiles tall (TALLMAP).  With none set a game builds as it always did.
+to 256 tiles tall (TALLMAP), a sprite directory split between the level and the game
+(SPRGEOM).  With none set a game builds as it always did.
 
 **To write a game on it, start with `docs/GUIDE.md`**: the steps from an empty
 directory to a disc, with Cleo's code as the examples.  `docs/DESIGN.md` is the

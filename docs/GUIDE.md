@@ -743,7 +743,7 @@ each one the assembler sees too (`cpu.inc`).  Cleo sets none; with none set a ga
 disc is exactly what it was.  Commando sets them all:
 
 ```sh
-export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1
+export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1 SPRGEOM=1
 ```
 
 | Option | What it does | What the game does for it |
@@ -754,6 +754,7 @@ export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TA
 | `GAMESOUND` | the vsync calls the game's `hook_sound` instead of the engine's sound effects; the tune is still the engine's | defines `hook_sound`, resident (HAZEL, say): it runs in the interrupt, X and Y saved, and may use only its own zero page |
 | `DRAWFLAGS` | bit 7 of a sprite's x high byte (`spx+1` at `addsprite`) mirrors it, so one image is drawn either way round | sets the bit; map x stays below 32768 |
 | `TALLMAP` | maps up to 256 tiles tall (the window's character row keeps its high bits for the tile blitter's map row).  The Master alone: its ring is 32 rows | nothing |
+| `SPRGEOM` | the sprite directory split (NIBSPR only): the level file carries each id's image address alone, 2 bytes an id, and the geometry, the same in every level, is the game's (below) | writes the level's directory with `levelfile.directory_split`, and assembles the geometry tables `SPRG_IX`, `SPRG_W`, `SPRG_RX`, `SPRG_RY`, `SPRG_LN` in bank 7 (its GAMEDATA) or HAZEL |
 
 **4-bit sprites (NIBSPR).**  An image is stored as a byte a game-pixel row for each
 column: its two game pixels, 4 bits each (the left in the high nibble), indices into
@@ -768,6 +769,19 @@ directory entry is as *A sprite's directory entry* says with flag bit 1 clear an
 the blitter is about a fifth faster than the masked one per game pixel (a
 transparent pair is one load and a branch); not yet timed side by side.
 
+**The split directory (SPRGEOM).**  With 4-bit sprites a directory entry's flags
+are only its bank (the mirror is DRAWFLAGS's), `lines` is h and h is not read; and
+a sprite's W, refx and refy do not change from level to level.  So with SPRGEOM the
+level's directory is two arrays by id, `DIR_LO` then `DIR_HI` (SPR_TABLE, BOXID0 bytes
+each): the image's address, its high byte 0 when the image is not in this level (not
+drawn) and with bit 7 clear when it is in bank 5 (the images are all at $8000-$BFFF,
+so bit 7 is otherwise always set).  The geometry is the game's, assembled where
+`drawsprite` can read it with bank 7 paged (bank 7's GAMEDATA, or HAZEL): `SPRG_IX`, a
+byte by id, the sprite's shape; and by shape `SPRG_W` (W), `SPRG_RX` and `SPRG_RY`
+(refx, refy, signed) and `SPRG_LN` (the rows stored).  Sprites that share a shape
+share its entry.  Commando's 180 ids have 106 shapes: 180 + 4 x 106 bytes once, and
+360 in each level, where 8 bytes an id took 1,440 in both.
+
 **What else a Master-only game may use.**  Beyond bank 7 and (GAMEHAZEL) HAZEL: the
 objects' area LV_OBJS at $1C00 keeps what the loader put there all through the level
 (Step 6), and zero page from $7A (no Model B segment ZPHW; $7B with DRAWFLAGS) to $EF.
@@ -781,7 +795,7 @@ Nothing else in main RAM is the game's.
 - **Sprites:** BOXID0 + BOXN sprite ids, and the still aliases after them (BOXID0 +
   2 x BOXN in all), at most 256; the masked ids, below BOXID0, at most 128 (SPRMASK
   is indexed by id x 2 in a byte); at most MAXSPR on screen at once.  The directory,
-  8 bytes an id, is in bank 7 (ENGBSS) and in every level file.
+  8 bytes an id (2 with SPRGEOM), is in bank 7 (ENGBSS) and in every level file.
 - **Staged items:** imgtab.bin (10 bytes an item) is part of LDPROG, which must fit
   $0E00-$1BFF with its code: about 100 items with Cleo's.  Number only the staged
   images and masks, not every sprite id.
@@ -804,7 +818,8 @@ Nothing else in main RAM is the game's.
   tables and the page alignment after them (768: GAMEBSS starts at $8300), the
   engine's code (ENGCODE: about 1.8K on the Model B, 1.4K on the Master) and its
   variables (ENGBSS: 82 + 21 x MAXSPR + 8 x (BOXID0 + BOXN) + 2 x BOXID0 bytes, the
-  last term none with NIBSPR -- 1,736 for Cleo, 2,646 for Commando): what is left,
+  last term none with NIBSPR, and the directory's 2 x BOXID0 in place of the 8 x with
+  SPRGEOM -- 1,736 for Cleo, 2,646 for Commando): what is left,
   about 9.9K for Cleo, is yours for code, data and variables.  The link says when it
   is full.  The menus' image is 14,080 bytes less the music player's 157: about 13.9K.
 - **Zero page:** ZPGAME is $81-$EF with both machines (111 bytes), from $7A (or $7B

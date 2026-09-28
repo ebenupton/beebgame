@@ -1339,7 +1339,9 @@ copy_partial:                       ; the whole row, every frame the fine scroll
 
 ; draw one sprite: A = id ; spx, spy = game pixels, map coordinates (ref point)
 ; The directory is the level's, in bank 7 at SPR_TABLE (ldprog.s); the data is in
-; bank 4, or bank 5 when the entry's flag bit 4 is set.
+; bank 4, or bank 5 when the entry's flag bit 4 is set.  (SPRGEOM: the level's
+; DIR_LO/DIR_HI, bit 7 of the high byte clear for bank 5, and the game's SPRG_* for
+; the geometry, by its shape SPRG_IX.)
         .segment "ENGCODE"          ; bank 7, with the records and SPRMASK
         PAD ::PADB_DS, ::PADM_DS
 drawsprite:
@@ -1349,6 +1351,44 @@ drawsprite:
   .else
         stza spclip                 ; set at every window edge the sprite is cut against
   .endif
+  .if SPRGEOM
+sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane, no sp_mh)
+        tax
+        bankimm ldy, BANK_SPR, BANK_LVL
+        lda DIR_HI,x
+        bne :+
+        rts                         ; not in this level (@out0 is out of reach)
+:       bmi :+
+        ora #$80                    ; bank 5: the address's bit 7 put back
+        bankimm ldy, BANK_TIL1, BANK_LVL
+:       sty sp_dbank
+        sta sp_ptr+1
+        lda DIR_LO,x
+        sta sp_ptr
+    .if DRAWFLAGS
+        lda sp_dfl                  ; (the list's mirror is the only flag: every scanline
+    .else                           ;  stored is clear, NIBSPR's images; no boxes)
+        lda #0
+    .endif
+        sta sp_flags
+        ldy SPRG_IX,x
+        sty sp_g
+        lda SPRG_W,y
+        sta sp_w
+        lda SPRG_LN,y
+        sta sp_lines
+        asl                         ; two scanlines a stored row
+        sta sp_ext
+        ; ---- horizontal: sx = spx - refx - wx ; c0 = sx >> 1
+        lda SPRG_RX,y
+        and #$80
+        beq @sxp
+        lda #$FF
+@sxp:   sta tmp3
+        lda spx
+        sec
+        sbc SPRG_RX,y
+  .else
         cmp #BOXID0+BOXN            ; the "nothing can disturb it" aliases draw the same
         bcc :+                      ; picture as the ids BOXN below them
         sbc #BOXN
@@ -1420,6 +1460,7 @@ drawsprite:
         lda spx
         sec
         sbc (ptr),y
+  .endif
         tax
         lda spx+1
         sbc tmp3
@@ -1466,12 +1507,21 @@ drawsprite:
 @out0:  rts
 @vert:
         ; ---- vertical: sy = spy - refy - wy ; lb0 = 2*sy + wfine
+  .if SPRGEOM
+        ldy sp_g
+        lda SPRG_RY,y
+        jsr sext                    ; (Y kept)
+        lda spy
+        sec
+        sbc SPRG_RY,y
+  .else
         ldy #5
         lda (ptr),y
         jsr sext
         lda spy
         sec
         sbc (ptr),y
+  .endif
         tax
         lda spy+1
         sbc tmp3
