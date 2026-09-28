@@ -28,6 +28,8 @@
 #                is then read at every level load (no copy is kept in HAZEL/ANDY)
 #   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound
 #                effects (the game's player, resident: its code in HAZEL, say)
+#   TALLMAP=1    maps up to 256 tiles tall (the window's char row keeps its high bits
+#                for drawrect's map row); the Master alone
 #   DRAWFLAGS=1  the sprite list carries draw flags in the high bits of its x (bit 7:
 #                mirror the image), so one image is drawn either way round
 BG=$(cd "$(dirname "$0")/.." && pwd)
@@ -40,7 +42,7 @@ mkdir -p build
 if [ "$TILEMIRROR" = 1 ]; then MIRDEF="-D TILEMIRROR=1"; else TILEMIRROR=0; MIRDEF=""; fi
 export TILEMIRROR
 # the options, as the assembler's flags (cpu.inc defaults each to 0)
-for o in MASTERONLY NIBSPR GAMEHAZEL GAMESOUND DRAWFLAGS; do
+for o in MASTERONLY NIBSPR GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then MIRDEF="$MIRDEF -D $o=1"; else eval "$o=0"; fi
     export $o

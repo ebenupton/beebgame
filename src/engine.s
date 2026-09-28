@@ -162,6 +162,9 @@ wx:       .res 2                  ; window x in game pixels, map coordinates (ev
 wy:       .res 2                  ; window y in game pixels, map coordinates
 wcx:      .res 2                  ; window x in map chars (wx/2)
 wcy:      .res 1                  ; window y in map char rows (wy/4)
+  .if TALLMAP
+wcyh:     .res 1                  ; and its high bits (TALLMAP: a map past 256 char rows)
+  .endif
 wfine:    .res 1                  ; fine scanline offset 0,2,4,6
 curbuf:   .res 1                  ; buffer being drawn: 0 = main, 1 = shadow
 recp:     .res 2                  ; current buffer's sprite record base
@@ -562,8 +565,27 @@ drawrect:
         sta rc_sp
         ; ---- map row pointer: built once here (arithmetic, in low RAM: maprow6) and
         ; stepped on by the stride per tile row (@nextrow)
+  .if TALLMAP                       ; (char rows are kept a byte, the ring's modulus needs
+        lda rc_y                    ;  no more; the map row does: the rect's full row is
+        sec                         ;  the window's, wcyh:wcy, plus its offset from it)
+        sbc wcy                     ; the offset, -128..127
+        tax
+        ldy #0
+        cmp #$80
+        bcc :+
+        dey                         ; (its sign)
+:       txa
+        clc
+        adc wcy                     ; (= rc_y: only the carry is wanted)
+        tya
+        adc wcyh
+        lsr                         ; C = bit 8 of the full row
+        lda rc_y
+        ror                         ; the tile row: the full row >> 1
+  .else
         lda rc_y
         lsr
+  .endif
         jsr maprow6
 @rowy:
         jsr mapstrip                ; the row's gather, run in bank 5 beside the map
@@ -4052,6 +4074,10 @@ render_frame:
         lda wy
         ror
         lsr wcy
+  .if TALLMAP
+        ldx wcy                     ; (the high bits: drawrect's map row)
+        stx wcyh
+  .endif
         ror
         sta wcy
         jsr render_core

@@ -48,6 +48,12 @@ GAMEHAZEL = 0                       ; the game's code in HAZEL too (the Master a
         .ifndef GAMESOUND
 GAMESOUND = 0                       ; the game's own sound player (hook_sound)
         .endif
+        .ifndef TALLMAP
+TALLMAP = 0                         ; maps taller than 128 tiles (the Master alone)
+        .endif
+  .if TALLMAP && BHW
+        .error "TALLMAP needs the Master's 32-row ring (the Model B's ring is 23 rows)"
+  .endif
         .ifndef DRAWFLAGS
 DRAWFLAGS = 0                       ; draw flags in the sprite list's x high byte
         .endif
