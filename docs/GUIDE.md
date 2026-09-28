@@ -754,7 +754,7 @@ export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TA
 | `GAMESOUND` | the vsync calls the game's `hook_sound` instead of the engine's sound effects; the tune is still the engine's | defines `hook_sound`, resident (HAZEL, say): it runs in the interrupt, X and Y saved, and may use only its own zero page |
 | `DRAWFLAGS` | bit 7 of a sprite's x high byte (`spx+1` at `addsprite`) mirrors it, so one image is drawn either way round | sets the bit; map x stays below 32768 |
 | `TALLMAP` | maps up to 256 tiles tall (the window's character row keeps its high bits for the tile blitter's map row).  The Master alone: its ring is 32 rows | nothing |
-| `TIGHTBSS` | the engine's bank 7 variables packed: a sprite record is 9 bytes (the rectangle's column high bits share the height's byte: a map is at most 1,024 characters wide), and ENGBSS follows GAMEBSS where it ends instead of at the next page | nothing |
+| `TIGHTBSS` | the engine's bank 7 variables packed: a sprite record is 9 bytes (the rectangle's column high bits share the height's byte: a map is at most 1,024 characters wide), kept as arrays a byte of each by record (as the dirty list is), and ENGBSS follows GAMEBSS where it ends instead of at the next page | nothing |
 | `MAXSPR=n` | the sprite slots, the most sprites on screen at once (the list, and a record each a buffer): n in place of assets.inc's `MAXSPRDEF` (set one or the other); 28 when neither is set | adds at most n sprites a frame (Commando: its sort list's 24) |
 | `SPRGEOM` | the sprite directory split (NIBSPR only): the level file carries each id's image address alone, 2 bytes an id, and the geometry, the same in every level, is the game's (below) | writes the level's directory with `levelfile.directory_split`, and assembles the geometry tables `SPRG_IX`, `SPRG_W`, `SPRG_RX`, `SPRG_RY`, `SPRG_LN` in bank 7 (its GAMEDATA) or HAZEL |
 
@@ -816,14 +816,17 @@ Nothing else in main RAM is the game's.
   directory and LV_PAGE0: a big directory is paid sixteen times on the disc.
 - **Sprite files:** SPRX at most 12K (16K with GAMEHAZEL, which reads it from the
   disc every time); SPRC's parts and each level's own sprites within banks 4 and 5.
-- **Bank 7:** the game's image is 14,080 bytes, $8000-$B6FF.  Take off the level's
+- **Bank 7:** the game's image runs from $8000 to the kernel, whose start the build
+  sets from the kernel's size and the disc driver slot's below $BF00 ($B807 with
+  Cleo's: 14,343 bytes).  Take off the level's
   tables and the page alignment after them (768: GAMEBSS starts at $8300), the
-  engine's code (ENGCODE: about 1.8K on the Model B, 1.4K on the Master) and its
+  engine's code (ENGCODE: about 1.8K on the Model B, 1.5K on the Master) and its
   variables (ENGBSS: 82 + 21 x MAXSPR (19 with TIGHTBSS) + 8 x (BOXID0 + BOXN) + 2 x BOXID0 bytes, the
   last term none with NIBSPR, and the directory's 2 x BOXID0 in place of the 8 x with
   SPRGEOM -- 1,736 for Cleo, 2,646 for Commando): what is left,
-  about 9.9K for Cleo, is yours for code, data and variables.  The link says when it
-  is full.  The menus' image is 14,080 bytes less the music player's 157: about 13.9K.
+  about 10K for Cleo, is yours for code, data and variables.  The link says when it
+  is full.  The menus' image is the same less the music player's 157: about 13.9K
+  for Cleo.
 - **Zero page:** ZPGAME is $81-$EF with both machines (111 bytes), from $7A (or $7B
   with DRAWFLAGS) on a Master-only build.
 - **The window** is 84 game pixels tall on the Model B and 120 on the Master.

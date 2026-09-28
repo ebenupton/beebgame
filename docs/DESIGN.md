@@ -877,11 +877,15 @@ for byte the same).  What each changes:
   change to `match_sprites`), takes bit 7 into `sp_dfl` (a zero-page byte) and gives
   the prologue x without it; `drawsprite` XORs `sp_dfl` into the directory's flags.
 - **TALLMAP.**  `wcyh` (zero page) and `drawrect`'s full map row: *The display*.
-- **TIGHTBSS.**  `RECSZ` 9: the record's offsets are `REC_CX` (the column's low
-  byte), `REC_CY`, `REC_W`, `REC_H` = height | column high bits << 5 | clipped << 7
-  (engine.s; BUFROWS < 32 asserted).  The prologue packs them (`tmp3` as scratch: mtab
-  is set later), `erase_old` unpacks them.  build.sh drops ENGBSS's `align = $100`
-  from the linked cfg.
+- **TIGHTBSS.**  The sprite records are nine arrays of 2 x MAXREC bytes (engine.s:
+  `REC_ID`, `REC_XL`, `REC_XH`, `REC_YL`, `REC_YH`, `REC_CX` the column's low byte,
+  `REC_CY`, `REC_W`, `REC_H` = height | column high bits << 5 | clipped << 7; BUFROWS
+  < 32 asserted), buffer 0's records then buffer 1's, indexed by register: `recb`
+  (recp's byte) is the current buffer's first, `rq` (rp's) the record in hand, which
+  `draw_sprites` steps and the prologue writes the rectangle at (`tmp3` its scratch:
+  mtab is set later); `match_sprites` walks Y with X, `erase_old` steps `rq`.  The
+  dirty list likewise: `DIRTX` then `DIRTY_`, DIRTYMAX a buffer.  build.sh drops
+  ENGBSS's `align = $100` from the linked cfg.
 - **MAXSPR.**  build.sh passes `-D MAXSPRDEF=n`; engine.s defaults MAXSPRDEF to 28
   when neither the build nor assets.inc sets it.
 - **SPRGEOM.**  SPR_TABLE is 2 x BOXID0 bytes, `DIR_LO` then `DIR_HI` (banks.s);
