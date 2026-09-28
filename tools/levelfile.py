@@ -18,7 +18,7 @@ whole sectors at the end, so the Model B's loader reads the file short of them.
     lf.decode(data, 103)        # the sections back, the map unpacked: for checks
 """
 from dataclasses import dataclass, field
-import re, sys
+import os, re, sys
 
 # ---------------------------------------------------------------- the sections
 SECTIONS = ('hdr', 'objs', 'attr', 'altcls', 'tiles', 'place', 'map', 'flat', 'halves',
@@ -148,6 +148,7 @@ class Level:
     page0: bytes                # LV_PAGE0: the Master's gather table, 512 bytes
     boxid0: int = 0             # the game's sprite ids: BOXID0 images, then BOXN boxes
     boxn: int = 0               #  (assets.inc)
+    nibble: bool = False        # 4-bit sprites (NIBSPR): no mask planes, SPRMASK empty
     game_header: dict = field(default_factory=dict)   # offset -> byte, HDR_GAME only
 
 
@@ -167,7 +168,7 @@ def encode(lv):
     assert len(lv.map) == 1 << (lv.lw + lv.lh), (len(lv.map), lv.lw, lv.lh)
     assert all(len(t) == 256 for t in lv.tile_tables) and len(lv.tile_tables) == 2
     assert lv.boxid0 > 0 and len(lv.directory) == DIR_ENTRY * (lv.boxid0 + lv.boxn)
-    assert len(lv.masks) == 2 * lv.boxid0
+    assert len(lv.masks) == (0 if lv.nibble else 2 * lv.boxid0)
     assert len(lv.page0) == PAGE0_LEN
     maprle = rle(lv.map)
     assert unrle(maprle) == lv.map
@@ -189,9 +190,14 @@ def encode(lv):
     return out
 
 
-def decode(data, boxid0):
+def decode(data, boxid0, nibble=None):
     """the sections by name (the map unpacked, the header's fields as well); boxid0,
-    the game's, says how long SPRMASK is"""
+    the game's, says how long SPRMASK is (none with 4-bit sprites: NIBSPR, the build's
+    environment unless nibble says)"""
+    if nibble is None:
+        nibble = os.environ.get('NIBSPR') == '1'
+    if nibble:
+        boxid0 = 0
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     ends = offs[1:] + [len(data)]
     sec = {n: data[o:e] for n, o, e in zip(SECTIONS, offs, ends)}
@@ -232,7 +238,8 @@ def check(data, boxid0, boxn):
     assert len(sec['attr']) == 256 and len(sec['altcls']) == 256, 'the tile tables'
     assert len(sec['halves']) == 2 * f['nhalf'], 'the half tiles'
     assert len(sec['mir']) == f['nmir'], 'MIRTAB'
-    assert len(sec['dir']) == DIR_ENTRY * (boxid0 + boxn) and len(sec['smask']) == 2 * boxid0, 'the directory'
+    nib = os.environ.get('NIBSPR') == '1'
+    assert len(sec['dir']) == DIR_ENTRY * (boxid0 + boxn) and len(sec['smask']) == (0 if nib else 2 * boxid0), 'the directory'
     assert not any(sec['pad']) and len(sec['pad']) < 256, 'the padding before LV_PAGE0'
     p = sec['place']
     assert len(p) % 6 == 1 and p[-1] == 0xFF and all(p[i + 1] in (4, 5) for i in range(0, len(p) - 1, 6)), 'the placements'

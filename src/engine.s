@@ -221,6 +221,9 @@ mtab    = tmp3                    ; MASKTAB page for this column's phase (tmp3 =
 sp_msk  = tmp4c8                  ; the AND mask of the pair being drawn
 sp_id   = sp_ext                  ; the sprite id, until sp_ext is set a few lines later
 spi:      .res 1
+  .if DRAWFLAGS
+sp_dfl:   .res 1                  ; draw_sprites' flags for the sprite: 1 = mirror it
+  .endif
 lcnt:     .res 1
 lidx:     .res 1
 ringS:    .res 2                  ; window start char S (0..RINGCHARS-1)
@@ -1347,12 +1350,16 @@ drawsprite:
         sta ptr+1
         ldy #6
         lda (ptr),y
+  .if DRAWFLAGS
+        eor sp_dfl                  ; the list's mirror flips the directory's
+  .endif
         sta sp_flags
         bankimm ldx, BANK_SPR, BANK_LVL
         and #$10                    ; bit 4: the data is in bank 5
         beq :+
         bankimm ldx, BANK_TIL1, BANK_LVL
 :       stx sp_dbank            ; wanted later: the directory is still being read
+  .if .not NIBSPR                   ; (4-bit sprites: no mask plane)
         lda sp_id
         asl
         tax
@@ -1361,6 +1368,7 @@ drawsprite:
         lda SPRMASK+1,x
         sta sp_mbase+1
                                     ; (C = 0 still: the asl, sp_id < 128)
+  .endif
         ldaz ptr
         sta sp_ptr
         ldy #1
@@ -1590,10 +1598,12 @@ drawsprite:
         tax
 :
         stx sp_disp                 ; the loop copy in the data's bank patches its own jump
+  .if .not NIBSPR
         lda sp_c
         and #3                      ; phase of the first column drawn, and its page:
         ora #>MASKTAB0              ; MASKTAB0 is 1K aligned, so phase = page & 3
         sta sp_mpg0
+  .endif
 @rows:
         lda sp_r0
         sta sp_row
@@ -1643,6 +1653,7 @@ drawsprite:
 :       dex
         bne @mul
 @mdone: sta sp_rp
+  .if .not NIBSPR                   ; (4-bit sprites: no mask plane to walk)
         stx mtab                    ; X = 0 here: the MASKTAB pages are indexed by the mask byte
         lda w16+1                   ; the same offset in game-pixel rows (signed >> 1)
         asl                         ; C = the sign
@@ -1671,6 +1682,7 @@ drawsprite:
 @mgnc:  dey
         bne @mgrp
 @mgdone: sta sp_mrp
+  .endif
         lda sp_c1
         sec
         sbc sp_c0
@@ -2186,12 +2198,253 @@ sprdisp_tab: .word sprFN, sprFN, sprFN, sprFN
         .word sprFN
   .endif
 .endmacro
+; ---- 4-bit sprites (NIBSPR).  A stored column is a byte a game-pixel row: its two
+; game pixels, 4 bits each, of one palette the game chooses (nibble 0 transparent).
+; The two scanlines of the row come out of L0TAB and L1TAB (the game's), and NMASK
+; is the AND mask for the byte's transparent game pixels: $00 both opaque (plain
+; stores), $CC or $33 for one; a byte of 0 is both transparent and draws nothing.  So
+; screen = (screen AND NMASK[b]) OR Ln[b].  Mirrored, the dots of every result are
+; reversed through SWAPTAB, the mask's too.  The directory's lines byte is the rows
+; stored (flag bit 1 clear: the prologue's half-res arithmetic, two scanlines a
+; byte), and a sprite's first line in a char is always even (lb0 = 2*sy + wfine).
+; Every bank that holds sprites has the tables and both blitters (banks.s): no box,
+; no copy blitter (BOXN must be 0).
+.macro NPAIR k, mirror              ; lines k, k+1 of the cell: source byte k/2
+        .local opq, done
+  .if k = 0
+        ldaz ptr
+  .else
+        ldy #k/2
+        lda (ptr),y
+  .endif
+        beq done                    ; both transparent
+        tax
+        lda NMASK,x
+        beq opq                     ; both opaque: plain stores
+  .if mirror
+        tay
+        lda SWAPTAB,y
+  .endif
+        sta sp_msk
+        ldy #k
+        lda (sp),y
+        and sp_msk
+  .if mirror
+        ldy L0TAB,x                 ; the line's byte, straight into SWAPTAB's index
+        ora SWAPTAB,y
+        ldy #k
+  .else
+        ora L0TAB,x
+  .endif
+        sta (sp),y
+        iny
+        lda (sp),y
+        and sp_msk
+  .if mirror
+        ldy L1TAB,x
+        ora SWAPTAB,y
+        ldy #k+1
+  .else
+        ora L1TAB,x
+  .endif
+        sta (sp),y
+        jmp done
+opq:
+  .if mirror
+        ldy L0TAB,x
+        lda SWAPTAB,y
+        ldy #k
+        sta (sp),y
+        ldy L1TAB,x
+        lda SWAPTAB,y
+        ldy #k+1
+        sta (sp),y
+  .else
+        ldy #k
+        lda L0TAB,x
+        sta (sp),y
+        iny
+        lda L1TAB,x
+        sta (sp),y
+  .endif
+done:
+.endmacro
+.macro NIBBLIT name, mirror, ret
+        .local partial, et, p0, p1, p2, p3, pl, pop, pnext
+partial:                            ; lines tmp..tmp2: tmp even, tmp2 odd (above name, so
+        lda tmp                     ; name's bne reaches it)
+        sta sp_lim
+pl:     lsr                         ; A = sp_lim on both ways in
+        tay
+        lda (ptr),y
+        beq pnext
+        tax
+        lda NMASK,x
+        beq pop
+  .if mirror
+        tay
+        lda SWAPTAB,y
+  .endif
+        sta sp_msk
+        ldy sp_lim
+        lda (sp),y
+        and sp_msk
+  .if mirror
+        ldy L0TAB,x
+        ora SWAPTAB,y
+        ldy sp_lim
+  .else
+        ora L0TAB,x
+  .endif
+        sta (sp),y
+        iny
+        lda (sp),y
+        and sp_msk
+  .if mirror
+        ldy L1TAB,x
+        ora SWAPTAB,y
+        ldy sp_lim
+        iny
+  .else
+        ora L1TAB,x
+  .endif
+        sta (sp),y
+        jmp pnext
+pop:
+  .if mirror
+        ldy L0TAB,x
+        lda SWAPTAB,y
+        ldy sp_lim
+        sta (sp),y
+        ldy L1TAB,x
+        lda SWAPTAB,y
+        ldy sp_lim
+        iny
+        sta (sp),y
+  .else
+        ldy sp_lim
+        lda L0TAB,x
+        sta (sp),y
+        iny
+        lda L1TAB,x
+        sta (sp),y
+  .endif
+pnext:  lda sp_lim
+        clc
+        adc #2
+        sta sp_lim
+        cmp tmp2
+        bcc pl
+        jmp ret
+name:
+        lda tmp2
+        cmp #7
+        bne partial
+        lda tmp                     ; even: 0, 2, 4, 6 -> p0..p3
+        beq p0
+        tax
+        jmpx et
+et:     .word p0, p1, p2, p3
+p0:     NPAIR 0, mirror
+p1:     NPAIR 2, mirror
+p2:     NPAIR 4, mirror
+p3:     NPAIR 6, mirror
+        jmp ret
+.endmacro
+.macro NIB_LOOPS bank               ; the row loop and both blitters, in each sprite bank
+ds_entry:                           ; BANKENTRY: the dispatch jump is patched here, in
+        wrsel bank, bank            ; the bank that owns it (the write bank first)
+        ldx sp_disp
+        lda sprdisp_tab,x
+        sta ds_dispatch+1
+        lda sprdisp_tab+1,x
+        sta ds_dispatch+2
+ds_rowloop:
+        lda sp_rb
+        sta sp
+        lda sp_rb+1
+        sta sp+1
+        lda sp_rp
+        sta ptr
+        lda sp_rp+1
+        sta ptr+1
+        stz tmp                     ; ra0' = 0 unless this is the first row
+        lda sp_row
+        cmp sp_r0
+        bne :+
+        ldx sp_ra0
+        stx tmp
+:       ldx #7
+        cmp sp_r1
+        bne :+
+        ldx sp_ra1
+:       stx tmp2                    ; ra1'
+        lda sp_ncol
+        sta sp_cnt                  ; columns-1 (countdown)
+ds_colloop:
+ds_dispatch:
+        jmp sprFN                   ; operand patched per sprite
+sprretM:                            ; next column, mirrored: source pointer - rows
+        lda ptr
+        sec
+        sbc sp_lines
+        sta ptr
+        bcs sprnext
+        dec ptr+1
+        bcc sprnext                 ; C = 0: the bcs was not taken
+sprretP:                            ; next column: source pointer + rows
+        lda ptr
+        clc
+        adc sp_lines
+        sta ptr
+        bcs sprpinc                 ; (the carry out of line: the common case falls through)
+sprnext:
+        spnext sprscold
+sprsback:
+        dec sp_cnt
+        bpl ds_colloop
+ds_rowdone:
+        lda sp_row
+        cmp sp_r1
+        beq ds_done
+        inc sp_row
+        lda sp_rp                   ; C = 0: sp_row < sp_r1
+        adc sp_rinc
+        sta sp_rp
+        bcc :+
+        inc sp_rp+1
+        clc
+:       lda sp_rb
+        adc #<ROWBYTES
+        sta sp_rb
+        lda sp_rb+1
+        adc #>ROWBYTES
+        ringup sp_rb
+        sta sp_rb+1
+        jmp ds_rowloop
+ds_done: rts
+sprpinc: inc ptr+1
+        jmp sprnext
+sprscold: jmp sprscold2
+        NIBBLIT sprFN, 0, sprretP
+        NIBBLIT sprFM, 1, sprretM
+sprscold2:
+        spcold sprsback
+sprdisp_tab: .word sprFN, sprFM, sprFN, sprFM, sprFN
+.endmacro
+  .if NIBSPR
+        .assert BOXN = 0, error, "4-bit sprites (NIBSPR) have no boxes: BOXN must be 0"
+  .endif
         .segment "SPR4CODE"
         .scope spr4
+  .if ::NIBSPR
+        NIB_LOOPS ::BANK_SPR
+  .else
         SPRITE_LOOPS 1, ::SPR4_COPY, ::BANK_SPR   ; (assets.inc: the packer puts the box stars in one
         .if ::SPR4_COPY             ;  bank and no mirrored image in the other)
         SPRFULL sprFC, 0, 1
         .endif
+  .endif
         .endscope
         .assert spr4::ds_entry = BANKENTRY, error, "bank 4's row loop must start the bank"
   .if BHW                           ; (the Master's is shorter: its gap is the price of
@@ -2201,9 +2454,13 @@ sprdisp_tab: .word sprFN, sprFN, sprFN, sprFN
   .endif
         .segment "SPR5CODE"
         .scope spr5
+  .if ::NIBSPR
+        NIB_LOOPS ::BANK_TIL1
+  .else
         SPRITE_LOOPS ::SPR5_MIRROR, 1, ::BANK_TIL1
         PAD 0, ::PADM_FC5
         SPRFULL sprFC, 0, 1
+  .endif
         .endscope
         .assert spr5::ds_entry = BANKENTRY, error, "bank 5's row loop must start the bank"
         .segment "TILCODE"     
@@ -3190,10 +3447,19 @@ irq_handler:
         trb ACCCON                  ; CRTC while D = 0
   .endif
 @sk:    jsr scan_keys
-  .if BHW
+  .if GAMESOUND                     ; the game's player (resident); the tune's step is
+        jsr hook_sound              ; raised here, as the engine's sound_tick does
+        lda MUSON
+        sta MUSTICK
+    .if BHW
+        rts
+    .endif
+  .elseif BHW
         jmp sound_tick              ; (the stub steps the tune)
   .else
         jsr sound_tick
+  .endif
+  .if .not BHW
         lda MUSTICK                 ; the menus' image, stepped as the Model B's
         beq @exit                   ; interrupt stub does (low.s)
         dec MUSTICK
@@ -3254,6 +3520,7 @@ scan_keys:                          ; handler, main RAM with the Master's
                                     ; (the K_ bits each sets); README.md
 
 ; ---------------------------------------------------------------- sound
+  .if .not GAMESOUND                ; (GAMESOUND: the game's hook_sound instead)
 ; sfx format: steps of (b0,b1,b2,frames) written to the SN76489 ; end = $FF
 sound_tick:
         lda SFXREQ
@@ -3302,6 +3569,7 @@ sound_tick:
                                     ; at the vsync: the T1 steps share that tail
   .ifdef DBGSND
 @dbgsil: .byte $9F, $BF, $FF, 0
+  .endif
   .endif
 
 sndwrite:
@@ -3609,8 +3877,19 @@ draw_sprites:
         sta (rp),y
         iny
         lda SPR_XH,x
+  .if DRAWFLAGS
+        sta (rp),y                  ; (the record keeps the flags: a flip is a change)
+        asl                         ; bit 7, mirror, into C
+        lda #0
+        rol
+        sta sp_dfl
+        lda SPR_XH,x
+        and #$7F
+        sta spx+1
+  .else
         sta spx+1
         sta (rp),y
+  .endif
         iny
         lda SPR_YL,x
         sta spy

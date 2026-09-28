@@ -35,6 +35,25 @@ BHW = 1
         .ifndef TILEMIRROR
 TILEMIRROR = 0
         .endif
+; The build's options (tools/build.sh says what each does), 0 unless it sets them.
+        .ifndef MASTERONLY
+MASTERONLY = 0                      ; the Master alone: no Model B build
+        .endif
+        .ifndef NIBSPR
+NIBSPR = 0                          ; sprites as 4-bit pixels of one palette
+        .endif
+        .ifndef GAMEHAZEL
+GAMEHAZEL = 0                       ; the game's code in HAZEL too (the Master alone)
+        .endif
+        .ifndef GAMESOUND
+GAMESOUND = 0                       ; the game's own sound player (hook_sound)
+        .endif
+        .ifndef DRAWFLAGS
+DRAWFLAGS = 0                       ; draw flags in the sprite list's x high byte
+        .endif
+  .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
+        .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
+  .endif
 
 .macro PLACEH mseg, bseg              ; the segment by HARDWARE: the interrupt handler's own
   .if ::BHW                             ; work, which is in bank 7 with the Model B's

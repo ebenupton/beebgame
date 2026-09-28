@@ -18,6 +18,18 @@
 #                the game's name, for the boot loader's messages (DISC_TITLE)
 #   SKIP_ASSETS=1 skips GAME_MUSIC and GAME_ASSETS; TILEMIRROR=1 builds the tile
 #   blitter's mirrored tiles (cpu.inc; off by default), which move the tiles up a page
+#   MASTERONLY=1 builds the Master alone: no Model B assembly, link or files, the
+#                Master linked unpinned, its own layout the level files' (a game too big
+#                for the Model B; the boot loader says so on one)
+#   NIBSPR=1     sprites stored as 4-bit pixels of one palette, expanded by the
+#                blitter (cpu.inc; docs/DESIGN.md, the nibble sprites)
+#   GAMEHAZEL=1  the game's own code in HAZEL (segments HAZCODE, HAZDATA, HAZBSS), a
+#                piece of BANKS the boot loader copies once; the Master only, and SPRX
+#                is then read at every level load (no copy is kept in HAZEL/ANDY)
+#   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound
+#                effects (the game's player, resident: its code in HAZEL, say)
+#   DRAWFLAGS=1  the sprite list carries draw flags in the high bits of its x (bit 7:
+#                mirror the image), so one image is drawn either way round
 BG=$(cd "$(dirname "$0")/.." && pwd)
 : "${GAME_MAIN:?}" "${GAME_SRC:?}" "${GAME_ASSETS:?}" "${DISC_TITLE:?}"
 DISC_OUT=${DISC_OUT:-build/game.ssd}
@@ -27,6 +39,14 @@ mkdir -p build
 # (TILEMIRROR: the game's converter and packer follow it too; the linker areas here)
 if [ "$TILEMIRROR" = 1 ]; then MIRDEF="-D TILEMIRROR=1"; else TILEMIRROR=0; MIRDEF=""; fi
 export TILEMIRROR
+# the options, as the assembler's flags (cpu.inc defaults each to 0)
+for o in MASTERONLY NIBSPR GAMEHAZEL GAMESOUND DRAWFLAGS; do
+    eval "v=\$$o"
+    if [ "$v" = 1 ]; then MIRDEF="$MIRDEF -D $o=1"; else eval "$o=0"; fi
+    export $o
+done
+[ "$GAMEHAZEL" = 0 ] || [ "$MASTERONLY" = 1 ] || { echo "GAMEHAZEL=1 needs MASTERONLY=1: the Model B has no HAZEL"; exit 1; }
+if [ "$MASTERONLY" = 1 ]; then TARGETS=master; else TARGETS="modelb master"; fi
 settarget() {                       # $1: modelb or master
     TARGET=$1
     if [ "$TARGET" = master ]; then
@@ -37,31 +57,39 @@ settarget() {                       # $1: modelb or master
     export BD TARGET
 }
 [ -n "$SKIP_ASSETS" ] || [ -z "$GAME_MUSIC" ] || sh -c "$GAME_MUSIC"
-for t in modelb master; do
+for t in $TARGETS; do
     settarget $t
     mkdir -p $BD
     [ -n "$SKIP_ASSETS" ] || sh -c "$GAME_ASSETS"
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
+    [ "$NIBSPR" = 1 ] && sed -i.bak 's#start = \$BB00, size = \$0500#start = $BC00, size = $0400#' $BD/game.cfg   # (bank 4's tables: the expansion, no mask pages)
     [ "$TILEMIRROR" = 1 ] && sed -i.bak 's#start = \$8000, size = \$0700#start = $8000, size = $0800#; s#start = \$8000, size = \$0300#start = $8000, size = $0340#' $BD/game.cfg
     for f in BANKS MENU GAME IMG7 LDPROG; do [ -f $BD/$f ] || : > $BD/$f; done
     python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc     # (the loader's: one definition)
 done
 # what both machines read goes on the disc once (the Model B's copy): the packs agree
 # (the files the engine's loader reads, by these names: ldprog.s)
+B=build/modelb M=build/master
+if [ "$MASTERONLY" = 1 ]; then REF=$M; else REF=$B
 for f in SPRX SPRC BAR L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15; do
     cmp -s build/modelb/$f build/master/$f || { echo "build/modelb/$f and build/master/$f differ: the level layout is not one"; exit 1; }
 done
-python3 $BG/tools/levelfile.py check build/modelb/assets.inc $(for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do echo build/modelb/L$l; done)
+fi
+python3 $BG/tools/levelfile.py check $REF/assets.inc $(for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do echo $REF/L$l; done)
 
 # the disc's file list, in disc order: the boot files, each machine's pieces, the
 # shared files together, the levels after them.  A game's start reads LDPROG, the
 # game's image (IMG7) and BAR in turn, so they are neighbours: the Model B's in that
 # order, the Master's around them
-B=build/modelb M=build/master
+if [ "$MASTERONLY" = 1 ]; then
+DISC="!BOOT:build/BOOT LOADER:build/LOADER BANKSM:$M/BANKS"
+DISC="$DISC IMG7M:$M/IMG7 LDPROGM:$M/LDPROG BAR:$REF/BAR"
+else
 DISC="!BOOT:build/BOOT LOADER:build/LOADER BANKSB:$B/BANKS BANKSM:$M/BANKS"
-DISC="$DISC IMG7M:$M/IMG7 LDPROGM:$M/LDPROG LDPROGB:$B/LDPROG IMG7B:$B/IMG7 BAR:$B/BAR"
-DISC="$DISC SPRX:$B/SPRX SPRC:$B/SPRC TILES0:build/TILES0 TILES1:build/TILES1"
-for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do DISC="$DISC L$l:$B/L$l"; done
+DISC="$DISC IMG7M:$M/IMG7 LDPROGM:$M/LDPROG LDPROGB:$B/LDPROG IMG7B:$B/IMG7 BAR:$REF/BAR"
+fi
+DISC="$DISC SPRX:$REF/SPRX SPRC:$REF/SPRC TILES0:build/TILES0 TILES1:build/TILES1"
+for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do DISC="$DISC L$l:$REF/L$l"; done
 DISC="$DISC TILES2:build/TILES2"
 [ -f build/LOADER ] || : > build/LOADER
 printf '*RUN LOADER\r' > build/BOOT
@@ -70,11 +98,11 @@ printf '*RUN LOADER\r' > build/BOOT
 # carry entries from it.  No size depends on a sector number, so the second pass is
 # stable (the third checks that).
 for pass in 1 2 3; do
-    [ $pass = 3 ] && cp $B/files.inc $B/files.prev
-    python3 $BG/tools/mkdfs.py table $B/files.inc $DISC
-    cp $B/files.inc $M/files.inc
-    [ $pass = 3 ] && { cmp -s $B/files.inc $B/files.prev || { echo "files.inc did not settle"; exit 1; }; break; }
-    for t in modelb master; do
+    [ $pass = 3 ] && cp $REF/files.inc $REF/files.prev
+    python3 $BG/tools/mkdfs.py table $REF/files.inc $DISC
+    [ "$MASTERONLY" = 1 ] || cp $B/files.inc $M/files.inc
+    [ $pass = 3 ] && { cmp -s $REF/files.inc $REF/files.prev || { echo "files.inc did not settle"; exit 1; }; break; }
+    for t in $TARGETS; do
         settarget $t
         ca65 -g --cpu $CPU $DEFS -I $BD -I $GAME_SRC -I $BG/src --bin-include-dir $BD \
              -o $BD/main.o $GAME_MAIN -l $BD/main.lst
@@ -83,8 +111,8 @@ for pass in 1 2 3; do
         # kernel below it, its tables kept inside a page; then the game's image, ending
         # at the kernel: the game's data and code, then the engine's.  From the Model B's
         # sizes (od65: the object's segments, before any link); the Master's, pinned to
-        # the Model B's, fall short
-        if [ $TARGET = modelb ]; then
+        # the Model B's, fall short (MASTERONLY: the Master's own, there is no Model B)
+        if [ $TARGET = modelb ] || [ "$MASTERONLY" = 1 ]; then
             SZ=$(od65 --dump-segsize $BD/main.o)
             seg() { echo "$SZ" | awk -v p="^ +($1):" '$0 ~ p {s += $2} END {print s + 0}'; }
             D1=$(seg 'D8271H|D8271N|D8271C'); D2=$(seg 'D1770H|D1770N|D1770C')
@@ -104,7 +132,7 @@ for pass in 1 2 3; do
         # the Master's segments at the Model B's addresses (linked just before): its
         # shorter 65C02 code leaves gaps, and the data lies alike on both
         LCFG=$BD/game.cfg
-        [ $TARGET = master ] && { python3 $BG/tools/pincfg.py $BD/game.cfg $B/game.dbg > $BD/pinned.cfg; LCFG=$BD/pinned.cfg; }
+        [ $TARGET = master ] && [ "$MASTERONLY" = 0 ] && { python3 $BG/tools/pincfg.py $BD/game.cfg $B/game.dbg > $BD/pinned.cfg; LCFG=$BD/pinned.cfg; }
         ld65 -C $LCFG -o $BD/unused.bin $BD/main.o -m $BD/map.txt -Ln $BD/labels.txt --dbgfile $BD/game.dbg
         # what the loaders need from the game: its addresses
         python3 - <<'EOF'
@@ -211,6 +239,8 @@ pieces = [(4, 0x8000, 'b4x.bin'), (4, 0xBB00, 'b4t.bin'),
           (7 | 0x40, lab['__DRV1770_START__'], 'drv1770.bin')]   # 8271 only) or the 1770's (bit 6): loader.s
 if os.environ.get('TARGET') == 'master':
     pieces.append((7, 0x0600, 'mcode.bin'))         # main RAM: the Master's handler, chain, keys, sound
+if os.environ.get('GAMEHAZEL') == '1':
+    pieces.append((1, 0xC000, 'hazel.bin'))         # HAZEL (bank "1" to the loader: ACCCON Y), last
 tab, body, img = bytearray([len(pieces)]), bytearray(), {}
 for bank, addr, fn in pieces:
     d = open(os.path.join(BD, fn), 'rb').read()
@@ -227,6 +257,8 @@ ingame = lambda bank, a: bank == 7 and any(b <= a < b + n for b, n in imgs)
 fix0 = open(BD + '/bankfix.bin', 'rb').read()
 assert len(fix0) % 3 == 0, 'bankfix.bin is not whole entries'
 fix = b''.join(fix0[i:i + 3] for i in range(0, len(fix0), 3) if not ingame(fix0[i], fix0[i + 1] | fix0[i + 2] << 8))
+# (HAZEL's code reads its banks from PBANK -- cpu.inc ldpbank -- as the menus' does: a
+# bankimm there would be a patch in no piece, below)
 for i in range(0, len(fix), 3):
     bank, addr = fix[i], fix[i + 1] | (fix[i + 2] << 8)
     v = piece_bytes(bank, addr, 1)[0]
@@ -246,16 +278,20 @@ EOF
     done
     # the boot loader, one for both machines: the start-up header it writes and the
     # entry it jumps to are at the same addresses on both (init.s)
-    for n in boot dsk_type dsk_drv dsk_banks dsk_board; do
+    [ "$MASTERONLY" = 1 ] || for n in boot dsk_type dsk_drv dsk_banks dsk_board; do
         [ "$(grep "^$n = " $B/defs_ld.inc)" = "$(grep "^$n = " $M/defs_ld.inc)" ] || { echo "$n differs between the machines"; exit 1; }
     done
     printf '          .byte "%s"\n' "$GAME_NAME" > build/gamename.inc
-    ca65 --cpu 6502 -I $B -I build -I $BG/src -o build/loader.o $BG/src/loader.s
+    ca65 --cpu 6502 -D MASTERONLY=$MASTERONLY -D GAMEHAZEL=$GAMEHAZEL -I $REF -I build -I $BG/src -o build/loader.o $BG/src/loader.s
     ld65 -C $BG/cfg/loader.cfg -o build/LOADER build/loader.o
 done
 python3 $BG/tools/mkdfs.py build $DISC_OUT "$DISC_TITLE" \
     "!BOOT:build/BOOT:0000:FFFF" "LOADER:build/LOADER:1900:1900" \
     $(echo $DISC | tr ' ' '\n' | grep -v '^!BOOT\|^LOADER' | tr '\n' ' ')
+if [ "$MASTERONLY" = 1 ]; then
+ls -l $M/BANKS $DISC_OUT
+else
 cmp -s $B/assets.inc $M/assets.inc || { echo "the machines' assets.inc differ"; exit 1; }
 python3 $BG/tools/layoutcheck.py $B $M
 ls -l $B/BANKS $M/BANKS $DISC_OUT
+fi

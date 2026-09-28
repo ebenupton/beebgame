@@ -50,15 +50,32 @@ ringmodtab:                         ; A = a map char row (brought under RINGROWS
   .endrepeat
 .endrepeat
 .endmacro
-        .segment "SPR4SWAP"
+.macro SWAP_TABLE
         .assert * = SWAPTAB, error, "SWAPTAB must be at SWAPTAB"
 .repeat 256, xx                     ; four-dot reversal: bits 7<->4, 6<->5, 3<->0, 2<->1
         .byte ((xx & $88) >> 3) | ((xx & $44) >> 1) | ((xx & $22) << 1) | ((xx & $11) << 3)
 .endrepeat
+.endmacro
+  .if NIBSPR
+; 4-bit sprites: the game's expansion tables (its palette: nibtab.bin, L0TAB, L1TAB and
+; NMASK, 768 bytes, from its asset step) and the dot reversal, in both sprite banks
+.macro NIB_TABLES
+        .assert * = L0TAB, error, "the expansion tables must be at L0TAB"
+        .incbin "nibtab.bin", 0, 768
+        SWAP_TABLE
+.endmacro
+        .segment "SPR4SWAP"
+        NIB_TABLES
+        .segment "SPR5MASK"
+        NIB_TABLES
+  .else
+        .segment "SPR4SWAP"
+        SWAP_TABLE
         .segment "SPR4MASK"
         MASK_TABLES
         .segment "SPR5MASK"
         MASK_TABLES
+  .endif
 
 ; ---------------------------------------------------------------- the mirror's notes
 ; the mirror's range: A = the first window column written of the row the mirror
@@ -122,9 +139,11 @@ LV_ALTCLS:  .res 256                ; alt class by tile id
 LV_HDR:     .res 32                 ; header: lw, lh, nobj, the tile set's shape, and
                                     ; the game's own fields (tools/levelfile.py)
         .segment "ENGBSS"           ; the engine's: the sprite directory
+  .if .not NIBSPR                   ; (4-bit sprites have no mask planes)
 SPRMASK:    .res 2*BOXID0           ; mask plane address by sprite id (the boxes, from
                                     ; BOXID0, have none): the loader's, read by the
                                     ; prologue (this bank)
+  .endif
 SPR_TABLE:  .res (BOXID0+BOXN)*8    ; the sprite directory as the packer finished it:
                                     ; an entry a sprite id, BOXID0 images then BOXN boxes
                                     ; (the level's addresses): the loader's, read by

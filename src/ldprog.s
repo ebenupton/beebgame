@@ -18,6 +18,13 @@ BHW = 1                             ;  build says -D BHW=0, the Master's)
         .ifndef TILEMIRROR          ; (cpu.inc's flag: tile mirroring, off by default)
 TILEMIRROR = 0
         .endif
+        .ifndef GAMEHAZEL           ; (cpu.inc's: the game's code in HAZEL -- then SPRX is
+GAMEHAZEL = 0                       ;  staged from the disc every time, as the Model B's)
+        .endif
+        .ifndef NIBSPR              ; (cpu.inc's: 4-bit sprites, no mask planes, no SPRMASK)
+NIBSPR = 0
+        .endif
+SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)   ; the Master keeps SPRX in HAZEL and ANDY
         .include "defs_ld.inc"      ; the addresses the game exports (build.sh)
         .include "files.inc"        ; the disc's sector table (mkdfs.py table)
         .include "levelfmt.inc"     ; the level file's sections and header (tools/levelfile.py)
@@ -579,7 +586,7 @@ lv_load:
         inc sprc_ok
 @sprx:  lda #FI_SPRX
         sta fnum
-  .if BHW
+  .if .not SPRXKEEP
         jsr stage
   .else
         ; the Master reads SPRX once and keeps it in HAZEL (8K) and ANDY (4K); after,
@@ -658,6 +665,7 @@ lv_load:
         sta cnt+1
         ldx PB_LVL
         jsr bcopy
+  .if .not NIBSPR                   ; (4-bit sprites have no mask planes: no SPRMASK)
         lda #SEC_SMASK
         jsr section
         lda #<SPRMASK
@@ -670,6 +678,7 @@ lv_load:
         sta cnt+1
         ldx PB_LVL
         jsr bcopy
+  .endif
         ; ---- the flat tiles' pairs, into bank 6 with the blitter's fill
         lda #SEC_FLAT
         jsr section
@@ -733,13 +742,19 @@ sccopy:                             ; a copy out of the stage, on either machine
 mainram:
         pha
         lda ACCCON
+  .if GAMEHAZEL
+        and #$FB                    ; X clear (Y stays: the game's code is in HAZEL)
+  .else
         and #$F3                    ; X and Y clear
+  .endif
         sta ACCCON
         pla
         rts
 ; SPRX's residency on the Master: the stage (shadow RAM, $3000) to HAZEL
 ; ($C000, ACCCON Y) and ANDY ($8000, ROMSEL bit 7) -- keep -- and back -- unkeep.  Only
 ; under a load: interrupts are off, and the MOS's interrupt entry is under HAZEL.
+  .endif
+  .if SPRXKEEP
 SPRX_PAGES = (SPRX_LEN + 255) / 256
         .assert SPRX_PAGES <= $30, error, "SPRX outgrows HAZEL and ANDY (12K)"
 keep:   sec

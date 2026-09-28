@@ -41,7 +41,14 @@ start:
         bcc :+
         lda #'M'
         sta fname+5
-:       lda ROMSELC
+  .if MASTERONLY
+        bne :++                     ; (a Master: on)
+:       jmp nomaster                ; a game built for the Master alone (build.sh MASTERONLY)
+:
+  .else
+:
+  .endif
+        lda ROMSELC
         sta oldbank
         jsr findram                 ; the four banks, into map -- or fewer, and C set
         bcc :+
@@ -172,7 +179,19 @@ start:
         bne @cp                     ; (BUF is not in page 0)
 @mine:  lda (ztab),y
         and #$3F
-@sel:   beq :+
+@sel:
+  .if GAMEHAZEL
+        php                         ; (the flags stand for the beq below)
+        cmp #1                      ; 1, HAZEL: ACCCON Y, and it stays set for the game
+        bne :+
+        plp
+        lda $FE34
+        ora #$08
+        sta $FE34
+        bne :++                     ; (always)
+:       plp
+  .endif
+        beq :+
         jsr selbank                 ; and the write bank, on a board that has one
 :                                   ; (Y = 0: the table read ends there)
 @cp:    lda plen                    ; the length, counted down first
@@ -525,6 +544,24 @@ noram:                              ; X = 16 (findram's fewer-than-four exit)
         bne :-
 :       rts
 
+  .if MASTERONLY
+nomaster:                           ; a game built for the Master alone, on a Model B
+        ldx #0
+:       lda msg1,x
+        beq :+
+        jsr OSWRCH
+        inx
+        bne :-
+:       ldx #0
+:       lda msgm,x
+        beq :+
+        jsr OSWRCH
+        inx
+        bne :-
+:       rts
+msgm:     .byte " needs a BBC Master 128", 13, 10, 0
+  .endif
+
 oldbank:  .byte 0
 npieces:  .byte 0
 pbank:    .byte 0
@@ -551,6 +588,10 @@ block:    .word fname
           .dword $00000000
 msg1:     .byte 13, 10
           .include "gamename.inc"   ; (the build's: the game's name)
+  .if MASTERONLY
+          .byte 0                   ; (nomaster goes on with its own words; findram never
+                                    ;  fails on a Master, which has four banks of its own)
+  .endif
           .byte " needs 64K of sideways RAM: four", 13, 10
           .byte "16K banks in any sockets, writable", 13, 10, 0
 boardmsg: .byte msg_std-msgs, msg_wat-msgs, msg_sol-msgs

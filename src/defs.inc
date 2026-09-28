@@ -25,11 +25,18 @@ LDOP_GAME  = $80 | IMG_GAME         ; a load of an image and where it goes on (d
 LDOP_TITLE = $80 | IMG_MENU         ; go_game, go_title, go_menu; ldprog.s ld_entry):
 LDOP_OVER  = $82 | IMG_MENU         ; bit 0 the image, bit 7 not a level
 
+  .if NIBSPR                        ; 4-bit sprites (NIBSPR): the four pages that end
+L0TAB     = $BC00                   ; both sprite banks are the expansion -- a stored
+L1TAB     = $BD00                   ; byte's two game pixels to its first scanline, its
+NMASK     = $BE00                   ; second, the AND mask for its transparent pixels --
+SWAPTAB   = $BF00                   ; and the dot reversal, in both (either can mirror)
+  .else
 SWAPTAB   = $BB00                   ; static in bank 4, below the mask tables: dot
 MASKTAB0  = $BC00                   ; reversal (bank 5 draws nothing mirrored); the
 MASKTAB1  = MASKTAB0 + $100         ; four mask-phase pages end both sprite banks
 MASKTAB2  = MASKTAB0 + $200
 MASKTAB3  = MASKTAB0 + $300
+  .endif
 BANKENTRY = $8000                   ; banks 4, 5 and 6: the routine bank 7 calls once a
                                     ; sprite or rect starts the bank (low.s callbank):
                                     ; the sprite row loop's ds_entry, bank6_entry
