@@ -2,11 +2,11 @@
 to the Model B's start address (ld65's segment `start`), so the Master's shorter
 65C02 code leaves a gap rather than moving what follows it: the data lies alike on
 both machines (tools/layoutcheck.py checks it).  The start-up pieces, the Master's own
-main-RAM segments and the NMI stubs' load image are left to the linker.
+main-RAM segments and the drivers' NMI stubs are left to the linker.
     python3 tools/pincfg.py <master cfg> <Model B game.dbg> > <pinned cfg>"""
 import re, sys
 
-FREE = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX', 'CODE', 'TABLES', 'NMISTUB'}
+FREE = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX', 'CODE', 'TABLES', 'D8271N', 'D1770N'}
 cfg, dbg = open(sys.argv[1]).read(), open(sys.argv[2]).read()
 start = {m.group(1): int(m.group(2), 16)
          for m in re.finditer(r'^seg\tid=\d+,name="(\w+)",start=0x([0-9A-F]+),size=0x([0-9A-F]+)', dbg, re.M)

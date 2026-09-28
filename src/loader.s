@@ -117,7 +117,8 @@ start:
         dex
         bpl :-
         ; ---- the pieces: BANKS is a count, then (bank, address, length) x count, then
-        ; the pieces in that order, then the bank patches.  A main-RAM piece is filed
+        ; the pieces in that order, then the bank patches.  A disc driver's bank has a
+        ; controller flag (bit 7 the 8271, bit 6 the 1770) and only the machine's is copied.  A main-RAM piece is filed
         ; under bank 7 (build.sh), which pages harmlessly; bank 0 would page nothing.
         ; The whole file is loaded at once (OSFILE: a byte at a time through
         ; OSGBPB took the 1770 DFS twenty seconds) into what is now screen memory, and
@@ -157,7 +158,21 @@ start:
         sta zdst
         dey
         lda (ztab),y                ; the piece's bank is the code's number (4..7):
-        beq :+                      ; the socket it goes to is map's (main RAM: no paging)
+        cmp #$40                    ; the socket it goes to is map's (main RAM: no paging)
+        bcc @sel
+        cmp #$80                    ; a driver (disc.s): bit 7 the 8271's, bit 6 the 1770's,
+        lda #0                      ; both for the same place -- only this machine's is
+        rol                         ; copied
+        eor fdc                     ; (1 = the 8271's piece; fdc 0 = an 8271)
+        bne @mine
+        lda zsrc                    ; not this machine's: copied onto itself, so only
+        sta zdst                    ; passed over (Y = 0)
+        lda zsrc+1
+        sta zdst+1
+        bne @cp                     ; (BUF is not in page 0)
+@mine:  lda (ztab),y
+        and #$3F
+@sel:   beq :+
         jsr selbank                 ; and the write bank, on a board that has one
 :                                   ; (Y = 0: the table read ends there)
 @cp:    lda plen                    ; the length, counted down first

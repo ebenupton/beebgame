@@ -15,7 +15,7 @@ def dbgfile(d):                     # (game.dbg; cleo.dbg before the engine was 
     return g if os.path.exists(g) else os.path.join(d, 'cleo.dbg')
 
 CODE = {'CODE', 'TILCODE', 'GAMECODE', 'SPR4CODE', 'SPR5CODE', 'MAP5CODE',
-        'TIL6ENT', 'MNUCODE', 'LOWCODE', 'NMISTUB', 'KRNCODE', 'ENGCODE', 'MUSCODE'}
+        'TIL6ENT', 'MNUCODE', 'LOWCODE', 'D8271C', 'D1770C', 'D8271N', 'D1770N', 'KRNCODE', 'ENGCODE', 'MUSCODE'}
 STARTUP = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX'}      # run once, then overwritten
 OWN = {'ZPHW', 'LOWHW', 'KRNHW', 'TABLES'}              # one machine's own, after the shared
 

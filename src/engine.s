@@ -1089,6 +1089,7 @@ scroll_validate:
 ; Persistent sprite records.  match_sprites: KEEP[i] = new sprite i identical to record i
 ; ============================================================================
         .segment "ENGCODE"          ; bank 7, with the records
+        PAD ::PADB_MS, ::PADM_MS    ; (each machine's code off page crossings: pads.inc)
 match_sprites:
         ldx curbuf
         txa                         ; an invalid buffer (BUF_CX high byte $80: a level
@@ -1164,53 +1165,6 @@ match_sprites:
         bne @l                      ; always: i+1 <= MAXSPR
 @done:  rts
 
-; erase_old: redraw tiles under old records that are not kept
-        .segment "ENGCODE"          ; bank 7, with the records (the rects it redraws
-erase_old:                          ; go to bank 6's drawrect_clip through callbank)
-        ldx curbuf
-        lda RECCNT,x
-        beq @done
-        sta lcnt
-        stz lidx
-        lda recp
-        sta rp
-        lda recp+1
-        sta rp+1
-@l:     ldx lidx
-        cpx NSPR
-        bcs @erase
-        lda KEEP,x
-        bne @next
-@erase: ldy #8
-        lda (rp),y
-        beq @next
-        sta rc_w
-        iny
-        lda (rp),y
-        and #$7F
-        sta rc_h
-        ldy #5
-        lda (rp),y
-        sta rc_x
-        iny
-        lda (rp),y
-        sta rc_x+1
-        iny
-        lda (rp),y
-        sta rc_y
-        bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is drawrect_clip
-        jsr callbank
-@next:  lda rp
-        clc
-        adc #10
-        sta rp
-        bcc :+
-        inc rp+1
-:       inc lidx
-        dec lcnt
-        bne @l
-@done:  rts
-
 ; ============================================================================
 ; Sprites
 ; ============================================================================
@@ -1234,6 +1188,7 @@ addsprite:
 
 ; draw all listed sprites into current buffer (skipping unchanged kept ones)
         .segment "ENGCODE"          ; bank 7, with the prologue and the records
+        PAD ::PADB_SP, ::PADM_SP
 draw_sprites:
         ; Two passes.  A box star is an opaque rectangle with its background baked in,
         ; so it has to go down before anything that shares its space -- drawn in list
@@ -1301,10 +1256,60 @@ draw_sprites:
 @rpc:   inc rp+1
         jmp @rpb
 
+; erase_old: redraw tiles under old records that are not kept (after draw_sprites
+; only for where the two loops fall: pads.inc)
+        .segment "ENGCODE"          ; bank 7, with the records (the rects it redraws
+        PAD ::PADB_EO, ::PADM_EO
+erase_old:                          ; go to bank 6's drawrect_clip through callbank)
+        ldx curbuf
+        lda RECCNT,x
+        beq @done
+        sta lcnt
+        stz lidx
+        lda recp
+        sta rp
+        lda recp+1
+        sta rp+1
+@l:     ldx lidx
+        cpx NSPR
+        bcs @erase
+        lda KEEP,x
+        bne @next
+@erase: ldy #8
+        lda (rp),y
+        beq @next
+        sta rc_w
+        iny
+        lda (rp),y
+        and #$7F
+        sta rc_h
+        ldy #5
+        lda (rp),y
+        sta rc_x
+        iny
+        lda (rp),y
+        sta rc_x+1
+        iny
+        lda (rp),y
+        sta rc_y
+        bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is drawrect_clip
+        jsr callbank
+@next:  lda rp
+        clc
+        adc #10
+        sta rp
+        bcc :+
+        inc rp+1
+:       inc lidx
+        dec lcnt
+        bne @l
+@done:  rts
+
 ; draw one sprite: A = id ; spx, spy = game pixels, map coordinates (ref point)
 ; The directory is the level's, in bank 7 at SPR_TABLE (ldprog.s); the data is in
 ; bank 4, or bank 5 when the entry's flag bit 4 is set.
         .segment "ENGCODE"          ; bank 7, with the records and SPRMASK
+        PAD ::PADB_DS, ::PADM_DS
 drawsprite:
   .if BHW
         ldx #0                      ; X is dead on entry
@@ -2204,7 +2209,7 @@ sprdisp_tab: .word sprFN, sprFN, sprFN, sprFN
 ; ring row above the window (the "A" section's source), all 80 columns.
 ; ============================================================================
         .segment "ENGCODE"          ; bank 7, beside render_core
-        PAD 0, ::PADM_CP            ; (copy_partial's loop, blank_below's: each in a page
+        PAD ::PADB_CP, ::PADM_CP    ; (copy_partial's loop, blank_below's: each in a page
                                     ;  -- the Master's, whose code runs on from the start)
 copy_partial:                       ; the whole row, every frame the fine scroll is not 0
         lda wfine                   ; (tracking the columns drawn since the last copy

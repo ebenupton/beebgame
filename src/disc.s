@@ -30,110 +30,63 @@ ld_arg:   .res 1                    ; go_menu's A across it
 ld_open:  .res 1                    ; the disc is still open: go_game's load goes on into
                                     ; the level's (ld_resume clears it: every load ends so)
 
-; ---------------------------------------------------------------- the NMI page
-; Copied to NMIPAGE for a load.  Each stub writes through a self-modified address
-; (xxx_sta+1) and keeps its state in the page too, so it is right whatever bank is
-; paged in when the NMI lands.
-        .segment "NMISTUB"
-nmi_page:
-        jmp nmi_i                   ; disc_boot points this at the controller's stub
-nmi_i:                              ; ---- the 8271: status bit 2 = a byte is ready,
-        pha                         ;      otherwise the command has ended
+; ---------------------------------------------------------------- the drivers
+; Each controller's driver -- its NMI stub, its track read, its helpers -- is assembled
+; for the same place at the top of the kernel, the slot (the cfgs' DRV8271 and DRV1770,
+; overlapping: build.sh sets where), and the boot loader copies in only the one the
+; machine has (BANKS flags each piece by its controller: loader.s), so the kernel pays
+; for one driver, the larger, not both.  A driver in the slot:
+;   +0  jmp to its track read: ld_cnt sectors of track ld_trk from sector ld_sc to
+;       ld_dst; C = 1 to try the run again
+;   +3  the length of its NMI stub, +4 the stub, which disc_boot copies to NMIPAGE (the
+;       NMI lands at $0D00, so the stub starts there: no jump in front of it)
+; The stub's state beside the kernel's is at the top of the NMI page, the same for both.
+        .import __DRV8271_START__: absolute, __DRV1770_START__: absolute
+DRVSLOT    = __DRV8271_START__
+        .assert __DRV1770_START__ = DRVSLOT, error, "the two drivers must share the slot"
+DRV_TRACK  = DRVSLOT
+DRV_NMILEN = DRVSLOT + 3
+DRV_NMI    = DRVSLOT + 4
+LD_RES     = NMIPAGE + $FD            ; the 8271's result
+LD_DONE    = NMIPAGE + $FE            ; the command is over
+LD_SECS    = NMIPAGE + $FF            ; the 1770's sectors to go
+
+; ---- the 8271
+        .segment "D8271H"
+        jmp r8271
+        .byte n8271_end - n8271
+        .segment "D8271N"           ; (runs at NMIPAGE)
+n8271:                              ; status bit 2 = a byte is ready, otherwise the
+        pha                         ; command has ended
         lda FDC8271_CMD
         and #$04
-        beq nmi_i_end
+        beq n8271_x
         lda FDC8271_DAT
-nmi_i_sta:
+n8271_sta:
         sta $FFFF
-        inc nmi_i_sta+1
+        inc n8271_sta+1
         bne :+
-        inc nmi_i_sta+2
+        inc n8271_sta+2
 :       pla
         rti
-nmi_i_end:
-        lda FDC8271_PAR             ; the result (reading it clears the interrupt)
-        sta ld_res
-        inc ld_done
+n8271_x: lda FDC8271_PAR             ; the result (reading it clears the interrupt)
+        sta LD_RES
+        inc LD_DONE
         pla
         rti
-nmi_w:                              ; ---- the 1770: DRQ with busy = a byte, else
-        pha                         ;      the command has ended (busy dropped)
-        lda FDC1770_CMD
-        and #3
-        cmp #3
-        bne nmi_w_nd
-        lda FDC1770_DAT
-nmi_w_sta:
-        sta $FFFF
-        inc nmi_w_sta+1
-        bne :+
-        inc nmi_w_sta+2
-        dec ld_secs                 ; a whole sector done
-        bne :+
-        lda #$D0                    ; force interrupt: stop the multi-sector read
-        sta FDC1770_CMD
-        inc ld_done
-:       pla
-        rti
-nmi_w_nd:
-        and #1
-        bne :+
-        inc ld_done
-:       pla
-        rti
-ld_res:   .res 1
-ld_done:  .res 1
-ld_secs:  .res 1
-nmi_end:
-        .assert nmi_end - nmi_page <= $100, error, "the NMI stubs do not fit their page"
-NMI_W     = NMIPAGE + (nmi_w - nmi_page)       ; the stubs' addresses once copied
-NMI_I_STA = NMIPAGE + (nmi_i_sta - nmi_page)
-NMI_W_STA = NMIPAGE + (nmi_w_sta - nmi_page)
-LD_RES    = NMIPAGE + (ld_res - nmi_page)
-LD_DONE   = NMIPAGE + (ld_done - nmi_page)
-LD_SECS   = NMIPAGE + (ld_secs - nmi_page)
-
-        .segment "KRNCODE"
-; ---------------------------------------------------------------- reading
-; ld_sec (16 bit), ld_n sectors -> ld_dst in main RAM.  The disc is 80 tracks of 10
-; 256-byte sectors: the division is by repeated subtraction.
-read_sectors:
-        ldx #$FF                    ; X = track, Y = high byte + 1: ld_sec / 10
-        lda ld_sec
-        ldy ld_sec+1
-        iny
-@d10:   inx
-        sec
-        sbc #10
-        bcs @d10
-        dey
-        bne @d10
-        adc #10                     ; (C clear) the remainder; Y = 0 from here on
-        stx ld_trk
-        sta ld_sc
-@track: lda #10                     ; sectors to read on this track: min(n, 10 - s)
-        sec
-        sbc ld_sc
-        cmp ld_n
-        bcc :+
-        lda ld_n
-:       sta ld_cnt
-        lda ld_dst                  ; the transfer address, into the stub
-        sta NMI_I_STA+1
-        sta NMI_W_STA+1
+n8271_end:
+        .assert n8271_end - n8271 <= $FD, error, "the 8271's stub runs into the page's state"
+        .segment "D8271C"
+; read data, multi-record, 256-byte sectors -- after two commands DFS also sends.  The
+; drive control output (special register $23): select + load head is the motor, which
+; the 8271 stops after a few idle index pulses (DFS's specify), and a read on a stopped
+; drive is "not ready" ($10) at once, without starting it.  And the 8271 LATCHES not
+; ready: only a read drive status clears it, so the retry would fail for ever without
+; one (the title's idle stops the motor).
+r8271:  lda ld_dst                  ; the transfer address, into the stub
+        sta n8271_sta+1
         lda ld_dst+1
-        sta NMI_I_STA+2
-        sta NMI_W_STA+2
-        sty LD_DONE                 ; (Y = 0 throughout read_sectors)
-        lda drv_type
-        bne @wd
-        ; ---- 8271: read data, multi-record, 256-byte sectors -- after two commands
-        ; DFS also sends.  The drive control output (special register $23): select +
-        ; load head is the motor, which the 8271 stops after a few idle index pulses
-        ; (DFS's specify), and a read on a stopped drive is "not ready" ($10) at once,
-        ; without starting it.  And the 8271 LATCHES not ready: only a read drive
-        ; status clears it, so the retry below would fail for ever without one
-        ; (the title's idle stops the motor).
+        sta n8271_sta+2
         jsr i_idle
         lda #$40                    ; bits 7,6 select the drive: $40 = 0, $80 = 1
         ldx drv_unit
@@ -153,7 +106,8 @@ read_sectors:
         sta FDC8271_CMD             ; interrupt -- its result (the status) is read to
         jsr i_idle                  ; clear it
         lda FDC8271_PAR
-        sty LD_DONE                 ; (and the stub's flag, should a controller interrupt after all; Y = 0)
+        lda #0
+        sta LD_DONE                 ; (and the stub's flag, should a controller interrupt after all)
         txa
         ora #$13                    ; read data
         sta FDC8271_CMD
@@ -164,50 +118,12 @@ read_sectors:
         lda ld_cnt
         ora #$20
         jsr i_param
-        jsr wait_done
+:       lda LD_DONE                 ; the stub's completion flag
+        beq :-
         lda LD_RES
         and #$1E
-        beq @next
-        jmp @track                  ; try the run again: not ready, or a soft error
-        ; ---- 1770: seek if the head is elsewhere, then read multiple
-@wd:    lda ld_trk
-        cmp w_trk
-        beq @wrd
-        sta w_trk
-        sta FDC1770_DAT
-        lda #$10                    ; seek, no verify
-        sta FDC1770_CMD
-        jsr w_wait
-@wrd:   lda ld_sc
-        sta FDC1770_SEC
-        lda ld_cnt
-        sta LD_SECS
-        lda #$94                    ; read multiple with head settle: the stub stops it
-        sta FDC1770_CMD
-        ldx #20
-:       dex
-        bne :-
-:       lda LD_DONE
-        bne :+
-        lda FDC1770_CMD             ; fallback: the command ended without a completion NMI
-        lsr                         ; busy (bit 0) into C
-        bcs :-
-:       jsr w_wait                  ; the abort takes a moment to clear busy
-@next:  lda ld_dst+1
-        clc
-        adc ld_cnt
-        sta ld_dst+1
-        lda ld_n
-        sec
-        sbc ld_cnt
-        sta ld_n
-        beq @done
-        sty ld_sc                   ; (Y = 0)
-        inc ld_trk
-        jmp @track
-@done:  rts
-
-        .segment "KRNCODE"          ; (the helpers)
+        cmp #1                      ; C = 1: not ready, or a soft error -- the run again
+        rts
 i_idle: lda FDC8271_CMD             ; the 8271 takes a command when not busy
         bmi i_idle
         rts
@@ -219,19 +135,121 @@ i_param:                            ; and a parameter when the register is free
         pla
         sta FDC8271_PAR
         rts
-wait_done:                          ; the stub's completion flag, taken
-        lda LD_DONE
-        beq wait_done
-        rts
-w_wait: ldx #20
+
+; ---- the 1770
+        .segment "D1770H"
+        jmp r1770
+        .byte n1770_end - n1770
+        .segment "D1770N"           ; (runs at NMIPAGE)
+n1770:                              ; DRQ with busy = a byte, else the command has
+        pha                         ; ended (busy dropped)
+        lda FDC1770_CMD
+        and #3
+        cmp #3
+        bne n1770_x
+        lda FDC1770_DAT
+n1770_sta:
+        sta $FFFF
+        inc n1770_sta+1
+        bne :+
+        inc n1770_sta+2
+        dec LD_SECS                 ; a whole sector done
+        bne :+
+        lda #$D0                    ; force interrupt: stop the multi-sector read
+        sta FDC1770_CMD
+        inc LD_DONE
+:       pla
+        rti
+n1770_x: and #1
+        bne :+
+        inc LD_DONE
+:       pla
+        rti
+n1770_end:
+        .assert n1770_end - n1770 <= $FD, error, "the 1770's stub runs into the page's state"
+        .segment "D1770C"
+; seek if the head is elsewhere, then read multiple
+r1770:  lda ld_dst                  ; the transfer address, into the stub
+        sta n1770_sta+1
+        lda ld_dst+1
+        sta n1770_sta+2
+        lda #0
+        sta LD_DONE
+        lda ld_trk
+        cmp w_trk
+        beq @rd
+        sta w_trk
+        sta FDC1770_DAT
+        lda #$10                    ; seek, no verify
+        sta FDC1770_CMD
+        jsr w_wait
+@rd:    lda ld_sc
+        sta FDC1770_SEC
+        lda ld_cnt
+        sta LD_SECS
+        lda #$94                    ; read multiple with head settle: the stub stops it
+        sta FDC1770_CMD
+        ldx #20
+:       dex
+        bne :-
+:       lda LD_DONE
+        bne w_wait                  ; (the abort takes a moment to clear busy)
+        lda FDC1770_CMD             ; fallback: the command ended without a completion NMI
+        lsr                         ; busy (bit 0) into C
+        bcs :-
+w_wait: ldx #20                     ; (and start-up's: init.s disc_init)
 :       dex
         bne :-
 :       lda FDC1770_CMD
-        lsr                         ; busy (bit 0) into C
+        lsr                         ; busy (bit 0) into C: C = 0 when it returns
         bcs :-
         rts
+
+        .segment "KRNCODE"
+; ---------------------------------------------------------------- reading
+; ld_sec (16 bit), ld_n sectors -> ld_dst in main RAM.  The disc is 80 tracks of 10
+; 256-byte sectors: the division is by repeated subtraction; each track's run is the
+; driver's (the slot's DRV_TRACK).
+read_sectors:
+        ldx #$FF                    ; X = track, Y = high byte + 1: ld_sec / 10
+        lda ld_sec
+        ldy ld_sec+1
+        iny
+@d10:   inx
+        sec
+        sbc #10
+        bcs @d10
+        dey
+        bne @d10
+        adc #10                     ; (C clear) the remainder
+        stx ld_trk
+        sta ld_sc
+@track: lda #10                     ; sectors to read on this track: min(n, 10 - s)
+        sec
+        sbc ld_sc
+        cmp ld_n
+        bcc :+
+        lda ld_n
+:       sta ld_cnt
+        jsr DRV_TRACK
+        bcs @track                  ; (the 8271: the run again)
+        lda ld_dst+1
+        clc
+        adc ld_cnt
+        sta ld_dst+1
+        lda ld_n
+        sec
+        sbc ld_cnt
+        sta ld_n
+        beq @done
+        lda #0
+        sta ld_sc
+        inc ld_trk
+        jmp @track
+@done:  rts
+
         .segment "KRNBSS"
-w_trk:    .res 1                    ; the 1770's head, as far as this driver knows
+w_trk:    .res 1                    ; the 1770's head, as far as its driver knows
 
 ; a 1770 is reset and its head found once, at start-up (init.s, main RAM): the 8271
 ; keeps DFS's state and needs nothing
@@ -254,21 +272,15 @@ disc_init:
         .segment "KRNCODE"
 
 ; ---------------------------------------------------------------- the loader
-; The NMI stubs go to their page and the load-time program to LDPROG, then it runs:
+; The driver's NMI stub goes to its page and the load-time program to LDPROG, then it runs:
 ; it comes back with bank 7 paged and the display RAM it used as scratch.
-        .import __NMISTUB_LOAD__: absolute
 disc_boot:
-        ldx #(nmi_end - nmi_page - 1)
-:       lda __NMISTUB_LOAD__,x      ; the stubs' bytes are in this bank; their labels
-        sta NMIPAGE,x               ; are their run addresses (the cfg's NMI region)
+        ldx DRV_NMILEN              ; the driver's NMI stub to its page (its labels are
+:       lda DRV_NMI-1,x             ; its run addresses there)
+        sta NMIPAGE-1,x
         dex
-        bpl :-
-        lda drv_type
-        beq :+
-        lda #<NMI_W                 ; a 1770: the page's jump goes to its stub
-        sta NMIPAGE+1
-        .assert >NMI_W = >nmi_i, error, "NMI_W: the page's jmp keeps its high byte"
-:       lda #<F_LDPROG_SEC
+        bne :-
+        lda #<F_LDPROG_SEC
         sta ld_sec
         lda #F_LDPROG_N
         sta ld_n

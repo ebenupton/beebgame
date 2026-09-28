@@ -58,7 +58,7 @@ const WRAP = 2_000_000;        // cpu.currentCycles wraps at 2e6 (cycleSeconds t
 // debug file says which bank each label is in (by its segment), so a PC break waits
 // for that bank to be paged ($F4, ROMSEL's copy) and a state read pages it first.
 const SEGBANK = [[/^SPR4/, 4], [/^(SPR5|MAP5)/, 5], [/^TIL/, 6],
-                 [/^(COMMON7|GAME|ENG|MNU|KRN|LGC)/, 7]];   // (LGC: builds before the rename)
+                 [/^(COMMON7|GAME|ENG|MNU|KRN|LGC|D8271[HC]|D1770[HC])/, 7]];   // (LGC: builds before the rename; D: the driver slot)
 // Bank 7 below its kernel holds one of two images, the game's (GAME*, ENG*) or the menus'
 // (MNU*), and the kernel's ld_img says which (disc.s load_image): a break in either
 // waits for that image as well as the bank.

@@ -78,15 +78,29 @@ for pass in 1 2 3; do
         settarget $t
         ca65 -g --cpu $CPU $DEFS -I $BD -I $GAME_SRC -I $BG/src --bin-include-dir $BD \
              -o $BD/main.o $GAME_MAIN -l $BD/main.lst
-        # bank 7's game image ends at the kernel: the game's data and code, then the
-        # engine's, from the Model B's sizes (od65: the object's segments, before any
-        # link); the Master's, pinned to the Model B's, fall short of the kernel
+        # the top of bank 7, down from KRNHW at $BF00: the driver slot, as big as the
+        # larger driver (disc.s: the boot loader copies in the machine's one), the
+        # kernel below it, its tables kept inside a page; then the game's image, ending
+        # at the kernel: the game's data and code, then the engine's.  From the Model B's
+        # sizes (od65: the object's segments, before any link); the Master's, pinned to
+        # the Model B's, fall short
         if [ $TARGET = modelb ]; then
-            B7N=$(od65 --dump-segsize $BD/main.o | awk '/^ +(GAMEDATA|GAMECODE|ENGCODE):/ {s += $2} END {print s}')
-            B7S=$(printf '%04X' $(( 0x$(grep -o 'B7K: *start = \$[0-9A-F]*' $CFG | sed 's/.*\$//') - B7N )))
-            B7N=$(printf '%04X' $B7N)
+            SZ=$(od65 --dump-segsize $BD/main.o)
+            seg() { echo "$SZ" | awk -v p="^ +($1):" '$0 ~ p {s += $2} END {print s + 0}'; }
+            D1=$(seg 'D8271H|D8271N|D8271C'); D2=$(seg 'D1770H|D1770N|D1770C')
+            DRVN=$(( D1 > D2 ? D1 : D2 )); DRVS=$(( 0xBF00 - DRVN ))
+            KD=$(seg KRNDATA)
+            KRNS=$(( DRVS - $(seg 'KRNDATA|KRNCODE|KRNBSS') ))
+            [ $(( (KRNS & 255) + KD )) -gt 256 ] && KRNS=$(( (KRNS & 0xFF00) + 256 - KD ))
+            B7N=$(seg 'GAMEDATA|GAMECODE|ENGCODE')
+            B7S=$(printf '%04X' $(( KRNS - B7N ))); B7N=$(printf '%04X' $B7N)
+            MSZ=$(printf '%04X' $(( KRNS - 0x8000 ))); KSZ=$(printf '%04X' $(( DRVS - KRNS )))
+            KRNS=$(printf '%04X' $KRNS); DRVS=$(printf '%04X' $DRVS); DRVN=$(printf '%04X' $DRVN)
         fi
-        sed -i.b7 "s#^\( *B7: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$B7S, size = \$$B7N#" $BD/game.cfg
+        sed -i.b7 -e "s#^\( *B7: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$B7S, size = \$$B7N#" \
+                  -e "s#^\( *B7M: *start = [$]8000, size = [$]\)[0-9A-F]*#\1$MSZ#" \
+                  -e "s#^\( *B7K: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$KRNS, size = \$$KSZ#" \
+                  -e "s#^\( *DRV[0-9]*: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$DRVS, size = \$$DRVN#" $BD/game.cfg
         # the Master's segments at the Model B's addresses (linked just before): its
         # shorter 65C02 code leaves gaps, and the data lies alike on both
         LCFG=$BD/game.cfg
@@ -186,7 +200,9 @@ pieces = [(4, 0x8000, 'b4x.bin'), (4, 0xBB00, 'b4t.bin'),
           (5, 0x8000, 'b5x.bin'), (5, 0xBC00, 'b5t.bin'),
           (6, 0x8000, 'b6x.bin'),                                 # (B6X in the cfg)
           (7, 0x7000, 'boot.bin'),        # main RAM (BOOTRAM): start-up and the low-RAM image
-          (7, lab['__KRNDATA_RUN__'], 'b7k.bin')]   # the kernel: resident, the top of bank 7
+          (7, lab['__KRNDATA_RUN__'], 'b7k.bin'),   # the kernel: resident, the top of bank 7
+          (7 | 0x80, lab['__DRV8271_START__'], 'drv8271.bin'),   # the driver slot: the 8271's (bit 7: an
+          (7 | 0x40, lab['__DRV1770_START__'], 'drv1770.bin')]   # 8271 only) or the 1770's (bit 6): loader.s
 if os.environ.get('TARGET') == 'master':
     pieces.append((7, 0x0600, 'mcode.bin'))         # main RAM: the Master's handler, chain, keys, sound
 tab, body, img = bytearray([len(pieces)]), bytearray(), {}
@@ -195,7 +211,7 @@ for bank, addr, fn in pieces:
     tab += bytes([bank, addr & 255, addr >> 8, len(d) & 255, len(d) >> 8])
     body += d
     img[(bank, addr)] = d
-def piece_bytes(bank, addr, n):
+def piece_bytes(bank, addr, n):             # (no patch in a driver: it is one of two)
     hit = [d[addr - a:addr - a + n] for (b, a), d in img.items() if b == bank and a <= addr and addr + n <= a + len(d)]
     assert len(hit) == 1, 'patch %d:$%04X is in no piece' % (bank, addr)
     return hit[0]

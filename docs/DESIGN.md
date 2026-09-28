@@ -59,11 +59,13 @@ Page crossings are placed, not left to chance.  In banks 4-6 the Model B's code 
 ordered so that its hot branches stay in their page (the sprite loops' rarer paths and
 dispatch table sit after the blitters); the Master spends its shorter code's room on
 pads (`src/pads.inc`, the `PAD` macro) before the blitters, found with
-`tools/pagecheck.py`, which lists every branch that crosses a page.  In bank 7 two
-pads keep `copy_partial`'s and `blank_below`'s loops each in a page: the engine's
-code ends at the kernel on the Model B, so its pad (PADB_BB) is after them and places
-what is before it; the Master's runs on from the Model B's start, so its pad
-(PADM_CP) is before them.  GAMEBSS and ENGBSS are page aligned, so the crossings of
+`tools/pagecheck.py`, which lists every branch that crosses a page.  In bank 7 the
+engine's code ends at the kernel on the Model B, so a pad places what is before it;
+the Master's runs on from the Model B's start, so a pad places what is after it.  The
+bank 7 pads (PADB_xx and PADM_xx, at each of ENGCODE's routines that loop hot) were
+chosen over a profile of every bank 7 branch taken and indexed read (Cleo's
+`test/cycprof.mjs` with PHASEDUMP set, then `test/padopt.py`), for all the pads together: all of bank 7's
+code moves with the kernel's start, so they are chosen again when that moves.  GAMEBSS and ENGBSS are page aligned, so the crossings of
 their tables' indexed reads do not move with anything in front of them.  `SAMEPAGE`
 asserts the hot loops' branches at link time.
 
@@ -228,15 +230,15 @@ while the other is in: what both need is the kernel's.
 | ENGBSS, page aligned: the engine's variables | after GAMEBSS | same |
 | free | | |
 | GAMEDATA, GAMECODE: the game's tables and code (the file GAME starts here) | (the game's size) | |
-| ENGCODE: the engine's bank 7 code, ending at the kernel | $B012-$B6FF | $B012-$B5AF |
+| ENGCODE: the engine's bank 7 code, ending at the kernel | $B0DA-$B7B8 | $B0DA-$B6B6 |
 | **or the menus' image** (MENU) | | |
 | MUSCODE: the engine's music player | $8000-$809C | $8000-$8098 |
 | MNUCODE, MNUDATA, MNUBSS: the game's menus | from $809D | same |
 | **the kernel**, resident | | |
-| KRNDATA: the row multiples | $B700-$B73F | same |
-| KRNCODE | $B740-$BE6A | $B740-$BB66 |
-| the NMI stubs' image | $BE6B-$BEC3 | (after KRNCODE) |
-| KRNBSS: the disc driver's and the swap's variables | $BEC4-$BED2 | same |
+| KRNDATA: the row multiples (kept inside a page) | $B7B9-$B7F8 | same |
+| KRNCODE | $B7F9-$BE53 | $B7F9-$BB4F |
+| KRNBSS: the disc driver's and the swap's variables | $BE54-$BE62 | same |
+| the driver slot: the 8271's driver or the 1770's, as the boot loader found | $BE63-$BEFF | same |
 | KRNHW (the Model B): SECTAB, BUF_SEC0, BUF_SEC0T1, LOADREQ, page aligned | $BF00-$BF6B | -- |
 
 The game's image is laid out for the engine to come apart from the game: the game's
@@ -251,7 +253,7 @@ and `render_core`, the sprite prologue (`drawsprite`), `draw_sprites`,
 SPR_TABLE (the level's sprite directory: an entry of 8 bytes for each of the game's
 BOXID0 + BOXN sprite ids), the sprite records (SPRREC, RECCNT, KEEP) and the dirty
 lists.  KRNCODE is `build_sections`, `menu_sections`, `calc_ring`, `ringaddr7`,
-`load_begin`/`load_end`, the palette, `music_stop`, the disc driver and the swap, and
+`load_begin`/`load_end`, the palette, `music_stop`, `read_sectors` and the swap, and
 on the Model B the interrupt's work (`isr_body`, `scan_keys`, `sound_tick`: the
 Master's handler has them in main RAM).  A game may place its own resident code and
 data in KRNCODE with `PLACEH "CODE", "KRNCODE"` (its sound effects must be there:
@@ -709,10 +711,19 @@ $7007.  `build.sh` asserts BANKS ends below $7000.
 ### The game's own disc driver
 
 After boot the MOS is abandoned: `disc.s` (bank 7's kernel) drives the 8271 or the 1770
-directly.  Both raise NMI for every byte, so the transfer stubs are copied to $0D00,
-where the NMI lands, for each load; each writes through a self-modified address and
-keeps its state in that page, so it works whatever bank is paged.  `read_sectors`
-reads a run of 256-byte sectors (10 a track) into main RAM.
+directly.  `read_sectors` reads a run of 256-byte sectors (10 a track) into main RAM;
+each track's part of the run is the driver's.  The two drivers are linked for the same
+place, the driver slot at the top of the kernel (the cfgs' DRV8271 and DRV1770
+overlap), and BANKS carries both, flagged by controller in the piece table's bank byte
+(bit 7 the 8271's, bit 6 the 1770's): the boot loader copies in only the one the
+machine has, so the kernel pays for the larger driver, not both.  `build.sh` sizes the
+slot from the two (od65) and sets the kernel's start below it.  A driver in the slot
+is a `jmp` to its track read (`DRV_TRACK`: C = 1 asks for the run again), its NMI
+stub's length and the stub.  Both controllers raise NMI for every byte, so the stub is
+copied to $0D00, where the NMI lands, for each load; it writes through a self-modified
+address and keeps its state in that page ($0DFD-$0DFF), so it works whatever bank is
+paged.  Neither driver may hold a bank patch or a write-bank store (`build.sh` checks:
+a patch in a piece that may not be copied would be lost).
 
 - **8271**: DFS's step rate is kept, but not its motor: after an idle spell (the title)
   the head has unloaded, and a read on a stopped drive reports "not ready" at once,
@@ -727,7 +738,7 @@ reads a run of 256-byte sectors (10 a track) into main RAM.
 ### A level load
 
 The game calls `load_level_b` (X = the level): `music_stop`, `load_begin`,
-interrupts off, the NMI stubs to $0D00, LDPROG read to $0E00 and run (`lv_load`, X =
+interrupts off, the driver's NMI stub to $0D00, LDPROG read to $0E00 and run (`lv_load`, X =
 the level).  LDPROG runs in main RAM, where it can page any bank; it reads the socket
 of every bank from PBANK and sets the write bank by PBOARD by hand.
 

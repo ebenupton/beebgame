@@ -9,6 +9,17 @@ PADM_FN5 = 3                        ; bank 5: before the mask blitter
 PADM_FC5 = 28                       ;         before the copy blitter
 ; Bank 7's engine code (ENGCODE) ends at the kernel on the Model B, so a pad there
 ; places the code before it; the Master's runs on from the Model B's start, so a pad
-; places the code after it.  Each keeps copy_partial's and blank_below's loops in a page.
-PADB_BB = 19                        ; the Model B: after blank_below
-PADM_CP = 20                        ; the Master: before copy_partial
+; places the code after it.  Found together over the profile's bank 7 branches and
+; reads (Cleo's test/cycprof.mjs PHASEDUMP, then test/padopt.py): they move with the
+; kernel's start (disc.s: the driver slot's size sets it), so re-find them when it moves.
+PADB_MS = 0                         ; before match_sprites (bank 7's first)
+PADM_MS = 4
+PADB_SP = 0                         ; before draw_sprites
+PADM_SP = 0
+PADB_EO = 0                         ; before erase_old
+PADM_EO = 0
+PADB_DS = 2                         ; before drawsprite
+PADM_DS = 42
+PADB_CP = 0                         ; before copy_partial
+PADM_CP = 37
+PADB_BB = 2                         ; the Model B: after blank_below
