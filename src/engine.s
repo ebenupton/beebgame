@@ -137,13 +137,21 @@ MAXSPR    = MAXSPRDEF
 ; chars (0: nothing drawn) and height in char rows, bit 7 set when it was cut at a
 ; window edge.  TIGHTBSS packs the column's high bits (a map is 1024 chars wide at
 ; most: 2 bits) into the height's byte, bits 5-6 (the height is BUFROWS at most)
-  .if TIGHTBSS
-RECSZ     = 9
-REC_CX    = 5                       ; the column's low byte
-REC_CY    = 6
-REC_W     = 7
-REC_H     = 8                       ; height | column high << 5 | clipped << 7
+  .if TIGHTBSS                      ; (the records as arrays, a byte of each by record:
+RECSZ     = 9                       ;  buffer 0's MAXREC, then buffer 1's; recb, recp's
+REC_ID    = SPRREC                  ;  byte, is the buffer's first, rq, rp's, the record's)
+REC_XL    = SPRREC+2*MAXREC
+REC_XH    = SPRREC+4*MAXREC
+REC_YL    = SPRREC+6*MAXREC
+REC_YH    = SPRREC+8*MAXREC
+REC_CX    = SPRREC+10*MAXREC        ; the column's low byte
+REC_CY    = SPRREC+12*MAXREC
+REC_W     = SPRREC+14*MAXREC
+REC_H     = SPRREC+16*MAXREC        ; height | column high << 5 | clipped << 7
+recb      = recp
+rq        = rp
         .assert BUFROWS < 32, error, "TIGHTBSS: a record's height is 5 bits"
+        .assert 2*MAXREC <= 256, error, "TIGHTBSS: the records are indexed by a register"
   .else
 RECSZ     = 10
 REC_CX    = 5                       ; (2 bytes)
@@ -313,6 +321,10 @@ FLATTAB:   .res 2*(NFLAT+2)         ; the level's flat tiles: (even line, odd li
                                     ; id - FLAT0, the loader's; the solids are the last two
         .segment "ENGBSS"           ; bank 7: mark_dirty and draw_dirty are there
 DIRTYLIST: .res 2*2*DIRTYMAX
+  .if TIGHTBSS                      ; (as two arrays, x then y: buffer 0's DIRTYMAX, then 1's)
+DIRTX     = DIRTYLIST
+DIRTY_    = DIRTYLIST+2*DIRTYMAX
+  .endif
         .segment "LOWBSS"           ; main RAM: the buffers' state bank 7 reads too
 BUF_CX:    .res 4                   ; (bank 7 invalidates a buffer: high byte $80)
 BUF_BOTOK: .res 2                   ; the slot below the playfield is black: scroll_validate
@@ -1150,6 +1162,48 @@ match_sprites:
         bcc :+
         lda NSPR
 :       sta cnt                     ; n = min(RECCNT, NSPR)
+  .if TIGHTBSS
+        ldy recb                    ; Y = the record, X = the sprite
+        ldx #0
+@l:     cpx NSPR
+        bcs @done
+        stz KEEP,x
+        cpx cnt
+        bcs @next
+        lda SPR_ID,x
+        cmp REC_ID,y
+        beq @same
+        ; two box-star frames at the same place overwrite each other exactly -- every
+        ; game pixel opaque, and each box covers the art of the frame before it -- so a
+        ; frame change there needs no erase either
+        cmp #BOXID0
+        bcc @next
+        lda REC_ID,y
+        cmp #BOXID0
+        bcc @next
+        lda #1                      ; 1 = a different frame of the same thing
+        bne @pos
+@same:  lda #2                      ; 2 = identical, so its screen pixels are already right
+@pos:   sta tmp3
+        lda SPR_XL,x
+        cmp REC_XL,y
+        bne @next
+        lda SPR_XH,x
+        cmp REC_XH,y
+        bne @next
+        lda SPR_YL,x
+        cmp REC_YL,y
+        bne @next
+        lda SPR_YH,x
+        cmp REC_YH,y
+        bne @next
+        lda tmp3
+        sta KEEP,x                  ; same screen pixels in the same place: skip the erase
+@next:  iny
+        inx
+        bne @l                      ; always: i+1 <= MAXSPR
+@done:  rts
+  .else
         stz tmp4                    ; i
         lda recp
         sta rp
@@ -1211,6 +1265,7 @@ match_sprites:
 :       inc tmp4
         bne @l                      ; always: i+1 <= MAXSPR
 @done:  rts
+  .endif
 
 ; ============================================================================
 ; Sprites
@@ -1619,6 +1674,49 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         lsr
         sta sp_r0                   ; sta sets no flags: Z still from the third lsr
 @nopart:
+  .if TIGHTBSS
+        ; ---- record rect in current sprite record (rq: draw_sprites's)
+        ldy rq
+        lda wcx
+        clc
+        adc sp_c0
+        sta w16                     ; @rows needs this same sum: keep it, don't rebuild it
+        sta REC_CX,y
+        lda wcx+1
+        adc #0
+        sta w16+1
+        lda wcy                     ; C = 0: wcx+1 <= $7F, so the adc #0 above cannot carry
+        adc sp_r0
+        sta REC_CY,y
+    .if BHW
+        ldx sp_c1                   ; width = c1 + 1 - c0 (X dead: ldx spclip below)
+        inx
+        txa
+        sec
+        sbc sp_c0
+    .else
+        lda sp_c1
+        sec
+        sbc sp_c0
+        inca
+    .endif
+        sta REC_W,y
+        lda sp_r1
+        sbc sp_r0                   ; C still set by the width sbc above (sp_c1 >= sp_c0)
+        adc #0                      ; and set by this one (sp_r1 >= sp_r0): + 1
+        sta tmp3                    ; (free here: mtab is set in @rows)
+        lda w16+1                   ; the column's high bits (< 4: a map is 1024 chars wide
+        asl                         ;  at most) to bits 5-6
+        asl
+        asl
+        asl
+        asl
+        ora tmp3
+        ldx spclip
+        beq :+                      ; may be visible next time and it has to be redrawn
+        ora #$80
+:       sta REC_H,y
+  .else
         ; ---- record rect in current sprite record
         ldy #REC_CX
         lda wcx
@@ -1626,15 +1724,11 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         adc sp_c0
         sta w16                     ; @rows needs this same sum: keep it, don't rebuild it
         sta (rp),y
-  .if .not TIGHTBSS
         iny
-  .endif
         lda wcx+1
         adc #0
         sta w16+1
-  .if .not TIGHTBSS
         sta (rp),y
-  .endif
         iny                         ; REC_CY
         lda wcy                     ; C = 0: wcx+1 <= $7F, so the adc #0 above cannot carry
         adc sp_r0
@@ -1657,20 +1751,11 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         lda sp_r1
         sbc sp_r0                   ; C still set by the width sbc above (sp_c1 >= sp_c0)
         adc #0                      ; and set by this one (sp_r1 >= sp_r0): + 1
-  .if TIGHTBSS
-        sta tmp3                    ; (free here: mtab is set in @rows)
-        lda w16+1                   ; the column's high bits (< 4) to bits 5-6
-        asl
-        asl
-        asl
-        asl
-        asl
-        ora tmp3
-  .endif
         ldx spclip
         beq :+                      ; may be visible next time and it has to be redrawn
         ora #$80
 :       sta (rp),y
+  .endif
   .if BHW
         lda mrow                    ; the mirror's row, relative to the window: if the
         sec                         ; sprite covers it, note the columns (see drawrect)
@@ -2920,10 +3005,15 @@ select_backbuf:
 :       sta ACCCON
         plp
   .endif
+  .if TIGHTBSS
+        lda @rb,x                   ; X = curbuf (0/1): its first sprite record
+        sta recb
+  .else
         lda @rlo,x                  ; X = curbuf (0/1): its sprite record base
         sta recp
         lda @rhi,x
         sta recp+1
+  .endif
   .if BHW
         lda @thl,x                  ; ringaddr's high bytes: this buffer's table
         sta RINGHIOP
@@ -2937,8 +3027,12 @@ select_backbuf:
   .else
         rts
   .endif
+  .if TIGHTBSS
+@rb:    .byte 0, MAXREC
+  .else
 @rlo:   .byte <SPRREC, <(SPRREC+MAXREC*RECSZ)
 @rhi:   .byte >SPRREC, >(SPRREC+MAXREC*RECSZ)
+  .endif
 
 
         .segment "KRNCODE"
@@ -3272,6 +3366,16 @@ mark_dirty:                         ; A = tx, X = ty  (adds to both buffers' lis
 @b:     lda DIRTYCNT,x
         cmp #DIRTYMAX
         bcs @over
+  .if TIGHTBSS
+        cpx #1                      ; (C = 0: cnt < DIRTYMAX)
+        bcc @b0                     ; buffer 0: its list is at 0
+        adc #DIRTYMAX-1             ; buffer 1: C = 1, so this adds DIRTYMAX
+@b0:    tay
+        lda tmp
+        sta DIRTX,y
+        lda tmp2
+        sta DIRTY_,y
+  .else
         asl                         ; cnt*2, C = 0 (cnt < DIRTYMAX)
         cpx #1
         bcc @b0                     ; buffer 0: its list is at 0
@@ -3281,6 +3385,7 @@ mark_dirty:                         ; A = tx, X = ty  (adds to both buffers' lis
         sta DIRTYLIST,y
         lda tmp2
         sta DIRTYLIST+1,y
+  .endif
         inc DIRTYCNT,x
 @next:  dex
         bpl @b
@@ -3298,22 +3403,38 @@ draw_dirty:
         lda DIRTYCNT,x
         beq @done
         sta lcnt
+  .if TIGHTBSS
+        lda #0                      ; the buffer's list: 0, or DIRTYMAX for buffer 1
+        cpx #1
+        bcc @d0
+        lda #DIRTYMAX
+  .else
         lda #0                      ; the buffer's list: 0, or 2*DIRTYMAX for buffer 1
         cpx #1
         bcc @d0
         lda #2*DIRTYMAX
+  .endif
 @d0:    sta lidx
 @l:     stz rc_x+1                  ; A is dead here: loaded just below
         ldy lidx
+  .if TIGHTBSS
+        lda DIRTX,y
+  .else
         lda DIRTYLIST,y
+  .endif
         asl
         rol rc_x+1
         asl
         rol rc_x+1
         sta rc_x
+  .if TIGHTBSS
+        lda DIRTY_,y
+        iny                         ; Y is dead from here: advance the index in it
+  .else
         lda DIRTYLIST+1,y
         iny                         ; Y is dead from here: advance the index in it
         iny
+  .endif
         sty lidx
         asl
         sta rc_y
@@ -3957,6 +4078,67 @@ draw_sprites:
         ; order it would paint that background over whatever was standing there.
         lda #1
         sta dpass
+  .if TIGHTBSS
+@pass:  stz spi
+        lda recb                    ; the buffer's first record, stepped with spi
+        sta rq
+@l:     ldx spi                     ; X = the sprite's number: every field is ,x
+        cpx NSPR
+        bcs @endpass
+        ldy SPR_ID,x                ; Y = id for both compares
+        cpy #BOXID0
+        lda dpass
+        adc #$FF
+        beq @next
+        cpy #BOXID0+BOXN            ; a box star the logic says nothing can disturb, and
+        bcc @write                  ; the same frame already in the same place: if
+        lda KEEP,x                  ; nothing has been repainted under it, its screen pixels
+                                    ; are still right, so leave it alone
+        cmp #2
+        bne @write
+        ldy rq                      ; and it was not cut off at a window edge, so all
+        lda REC_H,y                 ; of it is on screen and still intact
+        bpl @next
+@write: ldy rq
+        lda SPR_XL,x
+        sta spx
+        sta REC_XL,y
+        lda SPR_XH,x
+    .if DRAWFLAGS
+        sta REC_XH,y                ; (the record keeps the flags: a flip is a change)
+        asl                         ; bit 7, mirror, into C
+        lda #0
+        rol
+        sta sp_dfl
+        lda SPR_XH,x
+        and #$7F
+        sta spx+1
+    .else
+        sta spx+1
+        sta REC_XH,y
+    .endif
+        lda SPR_YL,x
+        sta spy
+        sta REC_YL,y
+        lda SPR_YH,x
+        sta spy+1
+        sta REC_YH,y
+        lda #0
+        sta REC_W,y
+        lda SPR_ID,x
+        sta REC_ID,y
+        jsr drawsprite              ; (it writes the rectangle: REC_CX.. at rq)
+@next:  inc rq
+        inc spi
+        bne @l                      ; spi <= NSPR: never wraps to 0
+@endpass:
+        dec dpass
+        bpl @pass                   ; (in range on both machines)
+        ldx curbuf
+        lda NSPR
+        sta RECCNT,x
+        rts
+  .else
 @pass:  stz spi                     ; A dead: lda recp next
         lda recp
         sta rp
@@ -4028,6 +4210,7 @@ draw_sprites:
         rts
 @rpc:   inc rp+1
         jmp @rpb
+  .endif
 
 ; erase_old: redraw tiles under old records that are not kept (after draw_sprites
 ; only for where the two loops fall: pads.inc)
@@ -4038,6 +4221,35 @@ erase_old:                          ; go to bank 6's drawrect_clip through callb
         lda RECCNT,x
         beq @done
         sta lcnt
+  .if TIGHTBSS
+        stz lidx
+        lda recb                    ; the buffer's first record, stepped with lidx
+        sta rq
+@l:     ldx lidx
+        cpx NSPR
+        bcs @erase
+        lda KEEP,x
+        bne @next
+@erase: ldy rq
+        lda REC_W,y
+        beq @next
+        sta rc_w
+        lda REC_H,y
+        and #$1F
+        sta rc_h
+        lda REC_H,y                 ; bits 5-6: the column's high bits
+        lsr
+        lsr
+        lsr
+        lsr
+        lsr
+        and #3
+        sta rc_x+1
+        lda REC_CX,y
+        sta rc_x
+        lda REC_CY,y
+        sta rc_y
+  .else
         stz lidx
         lda recp
         sta rp
@@ -4053,23 +4265,6 @@ erase_old:                          ; go to bank 6's drawrect_clip through callb
         beq @next
         sta rc_w
         iny                         ; REC_H
-  .if TIGHTBSS
-        lda (rp),y
-        and #$1F
-        sta rc_h
-        lda (rp),y                  ; bits 5-6: the column's high bits
-        lsr
-        lsr
-        lsr
-        lsr
-        lsr
-        and #3
-        sta rc_x+1
-        ldy #REC_CX
-        lda (rp),y
-        sta rc_x
-        iny                         ; REC_CY
-  .else
         lda (rp),y
         and #$7F
         sta rc_h
@@ -4080,18 +4275,23 @@ erase_old:                          ; go to bank 6's drawrect_clip through callb
         lda (rp),y
         sta rc_x+1
         iny                         ; REC_CY
-  .endif
         lda (rp),y
         sta rc_y
+  .endif
         bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is drawrect_clip
         jsr callbank
+  .if TIGHTBSS
+@next:  inc rq
+  .else
 @next:  lda rp
         clc
         adc #RECSZ
         sta rp
         bcc :+
         inc rp+1
-:       inc lidx
+:
+  .endif
+        inc lidx
         dec lcnt
         bne @l
 @done:  rts
