@@ -3,9 +3,11 @@
 This guide takes you from an empty directory to a game that boots from one disc on
 a BBC Model B (with 64K of sideways RAM) and a BBC Master 128.  It follows the steps
 in the order you will take them, and shows each with the code of Cleo, the game
-beebgame was built for (github.com/ebenupton/cleo, `beeb/`).  `README.md` is the
-reference for the contract between the engine and a game; `DESIGN.md` is the detail
-of how the engine works.
+beebgame was built for (github.com/ebenupton/cleo, `beeb/`).  This guide is the
+contract between the engine and a game -- the hooks, the segments, the files, the
+limits; `README.md` is the overview, and `DESIGN.md` is the detail of how the engine
+works.  A game that does not fit a Model B can be built for the Master alone, with
+more room: Step 11.
 
 What the engine does for you: the display (a scrolling MODE 1 playfield, double
 buffered, with a status bar), the tile and sprite blitters, redrawing only what
@@ -195,7 +197,7 @@ Each sprite id has an 8-byte entry in the level's directory: the image's address
 | 3 | h, the height | game pixels |
 | 4 | refx, the reference point across (signed) | game pixels |
 | 5 | refy, the reference point down (signed) | game pixels |
-| 6 | flags: bit 0 drawn mirrored, bit 1 every scanline stored (else one a game-pixel row, drawn twice), bit 3 a box (copied, no mask), bit 4 in bank 5 | |
+| 6 | flags: bit 0 drawn mirrored, bit 1 every scanline stored (set it: the masked blitters draw every image as stored scanlines, and the "one a row, drawn twice" form it once meant survives only as the prologue's arithmetic, which NIBSPR's 4-bit images use with the bit clear), bit 3 a box (copied, no mask), bit 4 in bank 5 | |
 | 7 | lines, the scanlines stored | scanlines |
 
 The sprite's top left lands at (`spx` - refx, `spy` - refy) in map coordinates, so the
@@ -289,6 +291,7 @@ hook_hud   = redraw_hud             ; render_frame, BARDIRTY set: the bar's digi
 | `hook_over` | when `go_menu` has loaded the menus' image (jumped to; A is what you gave `go_menu`) | your game-over screen, then back to the title |
 | `hook_image` | just after the game's image is loaded, before `hook_play` | anything the load has made stale (Cleo: the HUD's digit cache) |
 | `hook_hud` | from `render_frame` while `BARDIRTY` is set | draw the status bar's changing parts |
+| `hook_sound` | (GAMESOUND only: Step 11) from the vsync interrupt, instead of the engine's sound effects | your sound player's tick |
 
 The assembler will stop with "symbol undefined" if you leave one out.
 
@@ -488,7 +491,7 @@ Label `frame_top` exactly as Cleo does: the test harness runs frame to frame by 
 - **The sprites.**  Empty the list (`stz NSPR`), then for each sprite set `spx`, `spy`
   (game pixels, map coordinates: the sprite's reference point; across, the sprite
   lands on the even game pixel at or left of it) and `lda #id / jsr addsprite`.  At most
-  `MAXSPR` a frame (your asset step sets it: Step 8).  `render_frame` erases what moved,
+  `MAXSPR` a frame (the engine's name for your assets.inc's `MAXSPRDEF`: Step 8).  `render_frame` erases what moved,
   keeps what did not and draws the rest.
 - **The map.**  Read and write it through `maprow` (A = a tile row: `mapptr` = the row),
   `mapbyte` and `mapput` (Y = the column); after a change, `lda #tx / ldx #ty / jsr
@@ -532,9 +535,13 @@ sfxtab: .word sfx_jump, sfx_star, sfx_throw, sfx_hit, sfx_kill, sfx_power, sfx_d
 sfx_jump: .byte $C0|8, 12, $D0, 2,  $C0|4, 9, $D2, 2,  $C0|0, 7, $D4, 2,  $C0|8, 5, $D6, 3, $FF
 ```
 
-**Music:** `beebgame/tools/midi2snd.py <in.mid> <out>` turns a MIDI file into the player's
-stream (a melody and two voices of backing).  Put it in your menus' image at
-`MUSIC_ADDR`:
+**Music:** `beebgame/tools/midi2snd.py <in.mid> <out> [voices]` turns a MIDI file
+into the player's stream: three voices, each taking a note a frame from the notes
+sounding on some MIDI channels.  `voices` says which: three `CHANNELS:RANK` joined by
+`/`, RANK `max`, `min`, `max2` (the second highest) or `min2` (the second lowest).
+The default is Cleo's tune's, `1:max/0:min/0:min2` (the melody the highest note on
+channel 1, the backing the two lowest on channel 0); Commando's is
+`3,10:max/0:min/3,10:max2`.  Put the stream in your menus' image at `MUSIC_ADDR`:
 
 ```asm
         .segment "MNUDATA"
@@ -570,7 +577,7 @@ checks): build them from the Model B's layout.
 | `BOXID0`, `BOXN` | the first box id, and how many boxes (*Sprite ids, and boxes*) |
 | `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once |
 | `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | the resident and staged sprites (below) |
-| `SPR5_MIRROR`, `SPR4_COPY` | 0: nothing mirrored in bank 5, nothing opaque in bank 4 |
+| `SPR5_MIRROR`, `SPR4_COPY` | 0: nothing mirrored in bank 5, nothing opaque in bank 4 (keep them 0: bank 5 has no SWAPTAB to mirror with, and bank 4's copy blitter is untested.  With NIBSPR both banks mirror whatever these say) |
 | `MAP5` | the map's place in bank 5 ($9C00) |
 | `B4_CODE_END`, `B5_CODE_END` | where the engine's sprite-bank code ends: your sprites start there |
 
@@ -613,17 +620,34 @@ the blitters' (`DESIGN.md`, *The tiles* and *The sprites*).  In short:
 
 - A tile's 64 bytes and a sprite's image, mask and directory entry are laid out as
   *The concepts* shows.
-- Tile id 0 is the level's solid colour; the rest are full tiles (all 64 bytes
-  stored), half tiles (one character row of the two stored, the other a fill), flat
-  tiles (a colour's dither, two bytes alternating down the scanlines) and, if you need
-  them, mirrored ones.  The top NFLAT + 2 ids are the flat tiles and the two solids,
-  so a level has at most 254 - NFLAT ids for everything else.  A flat tile costs two
+- Tile id 0 is the level's solid colour, and it must be a one-byte fill: the same
+  byte on every scanline (black, or a pure ink), because the row loop stores a single
+  byte for it.  The top NFLAT + 2 ids, from `FLAT0`, are flat tiles (a colour's
+  dither, two bytes alternating down the scanlines), all of them the level's to
+  choose: Cleo puts its two solids, cyan and black, in the last two, but to the engine
+  they are two more flats.  The rest, 1 to FLAT0 - 1, are full tiles (all 64 bytes
+  stored), half tiles (one character row of the two stored, the other a fill) and, if
+  you need them, mirrored ones.
+- Two limits bind separately: the ids (FLAT0 - 1 for the tiles that are not flat:
+  249 with NFLAT = 4), and bank 6's room for the stored tiles, from the first slot
+  clear of the code to $BFFF: ($C000 - $8600) / 64 - 1 - TOFF slots (229, or 227
+  with TILEMIRROR), a half tile taking half a slot.  A mirrored id costs an id but no
+  slot.  Your packer has to meet both, and choose what to give up when a level does
+  not (Commando's drops the flips of its least-used flipped tiles, then draws its
+  least-used tiles as their nearest neighbour).  A flat tile costs two
   bytes in bank 6 rather than 64: choose NFLAT for the most flat tiles a level uses
   (Cleo's packer takes it from the environment, `NFLAT=n sh build.sh`, and stores a
   level's surplus flat tiles as full ones).
 - Mirrored images go in bank 4 (it has the table that reverses a byte's four screen
   pixels), boxes in bank 5 (it has the copy blitter), and an image and its mask in the
   same bank.
+
+**What the art costs.**  A sprite image is a byte for every game pixel (each byte is
+two game pixels across and one of their two scanlines), plus the mask, one bit a
+game pixel: nine eighths of a byte a game pixel.  The two sprite banks have about
+14K (bank 4) and 6.5K (bank 5) for the resident sprites and one level's own.
+Measure your art against that early: a game whose sprites do not fit can store them
+as 4-bit pixels of one palette instead (NIBSPR, Step 11), half a byte a game pixel.
 
 **Resident and staged sprites.**  Every sprite image is in one of two files, and which
 is your choice:
@@ -709,19 +733,82 @@ build against it level by level on both machines: Cleo's `test/sweep.sh`,
 sessions through both images.  `python3 -m unittest discover -s beebgame/test` tests
 the engine's level file writer.
 
+## Step 11: a game for the Master alone, and the other build options
+
+A game that cannot fit the Model B -- its code bigger than bank 7's game image, its
+sprites bigger than banks 4 and 5 hold as screen bytes -- can be built for the
+Master alone and take options the Model B cannot have.  They are environment
+variables your `build.sh` exports before it runs the driver, each 0 unless set, and
+each one the assembler sees too (`cpu.inc`).  Cleo sets none; with none set a game's
+disc is exactly what it was.  Commando sets them all:
+
+```sh
+export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1
+```
+
+| Option | What it does | What the game does for it |
+|---|---|---|
+| `MASTERONLY` | builds the Master alone: no Model B assembly, link or files on the disc, the Master linked at its own addresses (not pinned to the Model B's), its layout the level files'; the boot loader tells a Model B the game needs a Master 128 | writes its assets once, to `build/master`; its code may be 65C02 throughout |
+| `NIBSPR` | sprites stored as 4-bit pixels of one palette (below) | writes `nibtab.bin`, its palette's expansion tables, and 4-bit images; BOXN = 0 |
+| `GAMEHAZEL` | the segments HAZCODE, HAZDATA, HAZBSS in HAZEL ($C000-$DFFF, 8K), copied there once at boot and seen by both images; ACCCON Y stays set; SPRX is read from the disc at every level load (HAZEL no longer keeps it).  Needs MASTERONLY | puts code and variables there (they are visible whatever bank is paged); zeroes its HAZBSS itself; uses no `bankimm` there (read PBANK, as the menus do) |
+| `GAMESOUND` | the vsync calls the game's `hook_sound` instead of the engine's sound effects; the tune is still the engine's | defines `hook_sound`, resident (HAZEL, say): it runs in the interrupt, X and Y saved, and may use only its own zero page |
+| `DRAWFLAGS` | bit 7 of a sprite's x high byte (`spx+1` at `addsprite`) mirrors it, so one image is drawn either way round | sets the bit; map x stays below 32768 |
+| `TALLMAP` | maps up to 256 tiles tall (the window's character row keeps its high bits for the tile blitter's map row).  The Master alone: its ring is 32 rows | nothing |
+
+**4-bit sprites (NIBSPR).**  An image is stored as a byte a game-pixel row for each
+column: its two game pixels, 4 bits each (the left in the high nibble), indices into
+one palette of 15 colours, 0 transparent.  So a sprite is half a byte a game pixel,
+with no mask.  Your asset step writes `nibtab.bin`, 768 bytes: `L0TAB` and `L1TAB`
+(a stored byte's first and second scanline, as screen bytes) and `NMASK` (the AND
+mask for its transparent game pixels: $CC or $33 for one, $00 for none).  The engine
+puts them with its dot-reversal table at $BC00-$BFFF of both sprite banks, so either
+bank can hold any image, mirrored or not (and bank 4's sprites run to $BBFF).  A
+directory entry is as *A sprite's directory entry* says with flag bit 1 clear and
+`lines` = h, the rows stored.  There is no SPRMASK and no box.  By instruction count
+the blitter is about a fifth faster than the masked one per game pixel (a
+transparent pair is one load and a branch); not yet timed side by side.
+
+**What else a Master-only game may use.**  Beyond bank 7 and (GAMEHAZEL) HAZEL: the
+objects' area LV_OBJS at $1C00 keeps what the loader put there all through the level
+(Step 6), and zero page from $7A (no Model B segment ZPHW; $7B with DRAWFLAGS) to $EF.
+Nothing else in main RAM is the game's.
+
 ## Limits to design within
 
-- **Sixteen levels**, `L0`..`L15`, and three tile files: the loader names them.
-- **Sprites:** BOXID0 + BOXN sprite ids, and the still aliases after them, all below
-  256; at most MAXSPR on screen at once.
-- **Objects:** 149 at most, 6 bytes each, yours to define.
+- **Sixteen levels**, `L0`..`L15`, and three tile files: the loader names them, so
+  all sixteen (and all three) must exist and be valid whatever the game uses (a game
+  with fewer writes small stubs: Commando's are a 32 x 32 map of one tile).
+- **Sprites:** BOXID0 + BOXN sprite ids, and the still aliases after them (BOXID0 +
+  2 x BOXN in all), at most 256; the masked ids, below BOXID0, at most 128 (SPRMASK
+  is indexed by id x 2 in a byte); at most MAXSPR on screen at once.  The directory,
+  8 bytes an id, is in bank 7 (ENGBSS) and in every level file.
+- **Staged items:** imgtab.bin (10 bytes an item) is part of LDPROG, which must fit
+  $0E00-$1BFF with its code: about 100 items with Cleo's.  Number only the staged
+  images and masks, not every sprite id.
+- **Tiles:** FLAT0 - 1 ids for the tiles that are not flat, and bank 6's slots for
+  the stored ones (Step 8).
+- **The map:** 1 << lw by 1 << lh tiles, 8K at most, and at most 128 tiles tall (the
+  window's character row is a byte: 256 character rows); 256 tall on a Master-only
+  build with TALLMAP.
+- **Objects:** 149 at most, 6 bytes each, yours to define -- the one section of a
+  level file wholly the game's, so any other per-level data (Commando's missions and
+  their texts) goes there too.  The loader copies them to LV_OBJS: on the Master
+  ($1C00) nothing touches them until the next load, and a game may keep reading
+  them; on the Model B that is display RAM, gone at the first render.
 - **A level file** must fit the Model B's 8K level stage, not counting its 512-byte
-  LV_PAGE0 tail.
-- **Sprite files:** SPRX at most 12K; SPRC's parts and each level's own sprites within
-  banks 4 and 5.
-- **Bank 7:** the game's image is 14,080 bytes, of which the engine's code, variables
-  and level tables take about 4.1K: about 9.9K is yours for code, data and variables.
-  The menus' image is 14,080 bytes less the music player's 157: about 13.9K.
+  LV_PAGE0 tail (MASTERONLY: the Master's 20K).  Every one carries the sprite
+  directory and LV_PAGE0: a big directory is paid sixteen times on the disc.
+- **Sprite files:** SPRX at most 12K (16K with GAMEHAZEL, which reads it from the
+  disc every time); SPRC's parts and each level's own sprites within banks 4 and 5.
+- **Bank 7:** the game's image is 14,080 bytes, $8000-$B6FF.  Take off the level's
+  tables and the page alignment after them (768: GAMEBSS starts at $8300), the
+  engine's code (ENGCODE: about 1.8K on the Model B, 1.4K on the Master) and its
+  variables (ENGBSS: 82 + 21 x MAXSPR + 8 x (BOXID0 + BOXN) + 2 x BOXID0 bytes, the
+  last term none with NIBSPR -- 1,736 for Cleo, 2,646 for Commando): what is left,
+  about 9.9K for Cleo, is yours for code, data and variables.  The link says when it
+  is full.  The menus' image is 14,080 bytes less the music player's 157: about 13.9K.
+- **Zero page:** ZPGAME is $81-$EF with both machines (111 bytes), from $7A (or $7B
+  with DRAWFLAGS) on a Master-only build.
 - **The window** is 84 game pixels tall on the Model B and 120 on the Master.
 - **The disc** is one single-sided 80-track DFS disc of 800 sectors.  Its files are the engine's list (the boot files, each machine's bank pieces,
   loaders and bank 7 images, BAR, SPRX, SPRC, TILES0-2, L0-L15): a game adds none, and

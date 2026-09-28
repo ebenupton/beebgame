@@ -24,6 +24,11 @@ What it gives a game:
 - A keyboard scan, SN76489 sound effects and a three-voice music player, all from the
   interrupt.
 
+Build options (`docs/GUIDE.md`, Step 11) let a game too big for the Model B build for
+the Master alone: 4-bit sprites (NIBSPR), game code in HAZEL (GAMEHAZEL), the game's
+own sound player (GAMESOUND), a draw flag that mirrors a sprite (DRAWFLAGS), maps up
+to 256 tiles tall (TALLMAP).  With none set a game builds as it always did.
+
 **To write a game on it, start with `docs/GUIDE.md`**: the steps from an empty
 directory to a disc, with Cleo's code as the examples.  `docs/DESIGN.md` is the
 detail: the memory maps, the display chain, the blitters, the loader, the level file
@@ -43,7 +48,9 @@ format.
 
 Extracted from Cleo on 27 September 2026 (Cleo commit 8483965), with the game's side
 of every coupling moved behind hooks (`docs/GUIDE.md`); Cleo builds against it and its test
-sweep is identical before and after.  The level file format is the engine's
+sweep is identical before and after.  Commando (github.com/ebenupton/commando) is the
+second game, built for the Master alone with every option above; its port is where
+they came from.  The level file format is the engine's
 (`tools/levelfile.py`); what fills it -- choosing and packing the tiles, placing the
 sprites -- is still the game's packer (Cleo's `tools/assets.py` and `convert.py`
 `pack_tiles`), the next thing to split.  No licence has been chosen yet.

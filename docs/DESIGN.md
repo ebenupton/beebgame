@@ -156,12 +156,15 @@ does not see main RAM there, so the bar's section is scanned with D = 0 and the
 playfield's with D = the buffer shown.
 
 After its first read SPRX (at most 12K) is kept in HAZEL ($C000-$DFFF, 8K) and ANDY
-($8000-$8FFF, 4K), and later loads rebuild the stage from there instead of the disc.
+($8000-$8FFF, 4K), and later loads rebuild the stage from there instead of the disc
+-- unless the game has HAZEL for its code (GAMEHAZEL, *The build options*), when SPRX
+is read from the disc at every load as on the Model B.
 During a load the shared files are staged in shadow RAM at $3000 (ACCCON X set around
 every read and every copy out) and the level's file in main RAM at $3000; the load
 ends by clearing both screens, because a ring row the window has not reached yet must
 not show what was staged there.  Every load starts by putting the CPU on main RAM
-(ACCCON X and Y clear): the game leaves X on the buffer it drew last.
+(ACCCON X and Y clear; with GAMEHAZEL, X alone): the game leaves X on the buffer it
+drew last.
 
 ### Start-up (both machines)
 
@@ -374,7 +377,12 @@ lines into the character row), through a *rupture*: the frame is several CRTC fr
 section reprogrammed from a chain of VIA T1 interrupts and the whole re-phased at every
 vsync.  The window is `wx`, `wy` in game pixels (map coordinates); `wcx` = wx/2 and `wcy` = wy/4 in
 characters and character rows; the ring offset of the window's top-left character is
-`ringS` and its slot `barq` (`calc_ring`).
+`ringS` and its slot `barq` (`calc_ring`).  `wcy` is a byte, and so is every character
+row the renderer passes around (`rc_y`, the records' rows, BUF_CY): a map is at most
+256 character rows, 128 tiles, tall.  With TALLMAP (the Master only) the rows stay
+bytes -- the ring's modulus needs only their low five bits, and the rest of their uses
+are offsets from the window -- and `render_frame` keeps `wcy`'s high bits in `wcyh`,
+from which `drawrect` rebuilds the full row it reads the map at: 256 tiles.
 
 Both buffers are rings of characters, 80 to a row, and the playfield is drawn in map
 space: map character (cx, cy) lives at ring character ((cy mod RINGROWS) x 80 + cx) mod
@@ -425,7 +433,10 @@ whole row.
 so Q's row 0 line 0 -- the ring slot below the playfield -- is one more line under the
 picture.  Everywhere it is the next map line; parked on the map's bottom row it is
 whatever that never-drawn slot last held, so there the slot is blanked once per buffer
-per arrival.
+per arrival.  "Arrival" is any move: `scroll_validate` clears BUF_BOTOK whenever the
+window moves, sideways too, so a window walking along the map's bottom row blanks
+the slot every frame (about 7K cycles: seen in Commando's level 0, which starts
+there).
 
 ### The chain
 
@@ -527,12 +538,18 @@ is a level tile id:
 | half2 .. mir0-1 | half tiles whose two rows are the same |
 | mir0 .. (TILEMIRROR only) | full tiles drawn mirrored from another's slot |
 | FLAT0 .. 253 | NFLAT flat tiles: one colour's dither, two bytes alternating down every character |
-| 254, 255 | the last two flat tiles, the solids: for a level that has a second |
+| 254, 255 | two more flat tiles: FLATTAB's last pairs, the level's like the rest (Cleo's two solids, cyan and black) |
 
 How many flat tiles a level may have is the game's parameter, NFLAT (assets.inc; FLAT0
 = 254 - NFLAT, asserted).  So NFLAT + 3 ids are fills, costing no bank 6 room beyond
 FLATTAB's two bytes each; the more there are, the fewer ids are left for the tiles.
 (Cleo's is 4.)
+
+These ranges are the Model B's arithmetic gather's.  The Master's gather is only its
+table, LV_PAGE0, so on a Master-only build (MASTERONLY) any id below FLAT0 may be any
+stored slot, kind 0 (as stored) or 3 (mirrored, TILEMIRROR), in any order: Commando's
+packer stores each image and its mirror once and gives every drawn (image,
+collision) pair an id, the full ids and the mirrored ones interleaved.
 
 The packer may give tiles that look the same the same id, or not: the game's two
 per-tile tables (LV_ATTR0, LV_ALTCLS) are read by id, so tiles the game treats
@@ -819,7 +836,48 @@ game field in the engine's bytes.  `levelfile.check` takes the game's BOXID0 and
 (the build passes its assets.inc).
 
 The file must fit the Model B's STAGE_LVL (8K, without LV_PAGE0) and the Master's
-stage (20K).
+stage (20K); a Master-only build (MASTERONLY: `levelfile.py` reads it from the
+environment) needs only the second.
+
+## The build options
+
+`tools/build.sh` takes seven options from the environment (the game's `build.sh`
+exports them), passes each to the assembler (`-D`; `cpu.inc` makes the rest 0) and
+to its tools.  With none set the build is what it always was (Cleo's disc is byte
+for byte the same).  What each changes:
+
+- **MASTERONLY.**  build.sh's targets are `master` alone: no Model B assembly, and
+  the Master is linked unpinned (no `pincfg.py`), its bank 7 image sized from its own
+  `od65` segment sizes; the shared files come from `build/master`; the disc has no
+  BANKSB, LDPROGB or IMG7B; no layout check.  The boot loader, assembled with it,
+  answers a Model B with "<game> needs a BBC Master 128".  The engine's asserts that
+  held the Master to the Model B's code ends (`* <= B4_CODE_END`) still hold, so a
+  game sets B4_CODE_END and B5_CODE_END to its own ends.
+- **NIBSPR.**  `NIB_LOOPS` in place of `SPRITE_LOOPS` in both SPR4CODE and SPR5CODE
+  (the row loop, `sprFN` and `sprFM`: each scanline pair of a cell is one stored byte,
+  X = the byte, `NMASK,x` the AND mask, `L0TAB,x` / `L1TAB,x` the two lines, SWAPTAB of
+  each for the mirror).  Both banks end with L0TAB $BC00, L1TAB $BD00, NMASK $BE00
+  (`nibtab.bin`, the game's) and SWAPTAB $BF00 (banks.s `NIB_TABLES`); build.sh moves
+  bank 4's table piece to $BC00 (the cfg's B4T and its BANKS entry) and widens B4X
+  and B5X to $600.  The prologue skips SPRMASK and the mask pointers; the directory's
+  `lines` is the rows stored and flag bit 1 clear, so its half-res arithmetic (two
+  scanlines a stored byte, `sp_rinc` 4) is the 4-bit layout exactly.  No SPRMASK in
+  ENGBSS or the level file (`levelfile.Level(nibble=True)`); BOXN must be 0.
+- **GAMEHAZEL.**  master.cfg's HAZ area ($C000-$DFFF) takes HAZCODE, HAZDATA and
+  HAZBSS into `hazel.bin`, a BANKS piece with bank byte 1, which the loader copies
+  with ACCCON Y set and leaves set for good.  `ldprog.s`'s `mainram` keeps Y, and
+  SPRX is staged from the disc every load (no keep/unkeep).  With Y set throughout,
+  the interrupt path (the hardware vector, the MOS's entry, IRQ1V) works on the
+  Master (MOS 3.20, on jsbeeb: the MOS's entry code is not under HAZEL, whatever
+  ldprog.s's comment on keep/unkeep says).
+- **GAMESOUND.**  The vsync's `jsr sound_tick` becomes `jsr hook_sound`, followed by
+  sound_tick's last act (`MUSON` to `MUSTICK`, the tune's step); `sound_tick` and the
+  game's `sfxtab` are not assembled.
+- **DRAWFLAGS.**  `draw_sprites` stores SPR_XH in the record as it is (so a flip is a
+  change to `match_sprites`), takes bit 7 into `sp_dfl` (a zero-page byte) and gives
+  the prologue x without it; `drawsprite` XORs `sp_dfl` into the directory's flags.
+- **TALLMAP.**  `wcyh` (zero page) and `drawrect`'s full map row: *The display*.
+- **TILEMIRROR** (the oldest): the tile blitter's mirrored tiles, *The tiles*.
 
 ## Timing
 

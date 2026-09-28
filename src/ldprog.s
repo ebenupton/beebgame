@@ -752,7 +752,9 @@ mainram:
         rts
 ; SPRX's residency on the Master: the stage (shadow RAM, $3000) to HAZEL
 ; ($C000, ACCCON Y) and ANDY ($8000, ROMSEL bit 7) -- keep -- and back -- unkeep.  Only
-; under a load: interrupts are off, and the MOS's interrupt entry is under HAZEL.
+; under a load: interrupts are off, and the game's code is in bank 7 (ANDY would hide
+; its bottom 4K).  (HAZEL itself does not hide the interrupt's path: GAMEHAZEL games
+; run with Y set throughout.)
   .endif
   .if SPRXKEEP
 SPRX_PAGES = (SPRX_LEN + 255) / 256
