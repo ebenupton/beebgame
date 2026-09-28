@@ -843,8 +843,8 @@ environment) needs only the second.
 
 `tools/build.sh` takes seven options from the environment (the game's `build.sh`
 exports them), passes each to the assembler (`-D`; `cpu.inc` makes the rest 0) and
-to its tools.  With none set the build is what it always was (Cleo's disc is byte
-for byte the same).  What each changes:
+to its tools.  With none set the build is what it always was (the masked sprites: Cleo's
+`NIBSPR=0` build).  What each changes:
 
 - **MASTERONLY.**  build.sh's targets are `master` alone: no Model B assembly, and
   the Master is linked unpinned (no `pincfg.py`), its bank 7 image sized from its own
@@ -862,7 +862,8 @@ for byte the same).  What each changes:
   and B5X to $600.  The prologue skips SPRMASK and the mask pointers; the directory's
   `lines` is the rows stored and flag bit 1 clear, so its half-res arithmetic (two
   scanlines a stored byte, `sp_rinc` 4) is the 4-bit layout exactly.  No SPRMASK in
-  ENGBSS or the level file (`levelfile.Level(nibble=True)`); BOXN must be 0.
+  ENGBSS or the level file (`levelfile.Level(nibble=True)`).  A box is an opaque
+  4-bit image: its flag's dispatch entry is `sprFN`, so it needs no copy blitter.
 - **GAMEHAZEL.**  master.cfg's HAZ area ($C000-$DFFF) takes HAZCODE, HAZDATA and
   HAZBSS into `hazel.bin`, a BANKS piece with bank byte 1, which the loader copies
   with ACCCON Y set and leaves set for good.  `ldprog.s`'s `mainram` keeps Y, and
@@ -894,7 +895,10 @@ for byte the same).  What each changes:
   back), `sp_flags` = `sp_dfl` (or 0 without DRAWFLAGS), the shape from the game's
   `SPRG_IX` into `sp_g` (sp_mh's byte: NIBSPR has no mask), and W, lines, refx and,
   at `@vert`, refy from the game's `SPRG_*` by shape; `sp_ext` = 2 x lines.  Needs
-  NIBSPR (cpu.inc says so).  `levelfile.directory_split` writes the level's part.
+  NIBSPR (cpu.inc says so).  `levelfile.directory_split` writes the level's part.  The directory covers the boxes
+  (BOXID0 + BOXN ids) and the prologue folds a "still" alias onto its box first; with
+  `SPRGFL` (assets.inc) the flags come from the game's `SPRG_FL` by shape, else from
+  DRAWFLAGS's `sp_dfl` (or 0).
 - **TILEMIRROR** (the oldest): the tile blitter's mirrored tiles, *The tiles*.
 
 ## Timing

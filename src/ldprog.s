@@ -663,7 +663,7 @@ lv_load:
         lda #>SPR_TABLE
         sta dst+1
   .if SPRGEOM
-DIRLEN = 2*BOXID0                   ; (the split directory: the addresses alone)
+DIRLEN = 2*(BOXID0+BOXN)            ; (the split directory: the addresses alone)
   .else
 DIRLEN = (BOXID0+BOXN)*8
   .endif

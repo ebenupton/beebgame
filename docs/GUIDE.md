@@ -739,8 +739,8 @@ A game that cannot fit the Model B -- its code bigger than bank 7's game image, 
 sprites bigger than banks 4 and 5 hold as screen bytes -- can be built for the
 Master alone and take options the Model B cannot have.  They are environment
 variables your `build.sh` exports before it runs the driver, each 0 unless set, and
-each one the assembler sees too (`cpu.inc`).  Cleo sets none; with none set a game's
-disc is exactly what it was.  Commando sets them all:
+each one the assembler sees too (`cpu.inc`).  With none set a game's disc is
+exactly what it was.  Cleo sets NIBSPR and SPRGEOM; Commando sets them all:
 
 ```sh
 export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1 SPRGEOM=1 TIGHTBSS=1 MAXSPR=24
@@ -749,7 +749,7 @@ export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TA
 | Option | What it does | What the game does for it |
 |---|---|---|
 | `MASTERONLY` | builds the Master alone: no Model B assembly, link or files on the disc, the Master linked at its own addresses (not pinned to the Model B's), its layout the level files'; the boot loader tells a Model B the game needs a Master 128 | writes its assets once, to `build/master`; its code may be 65C02 throughout |
-| `NIBSPR` | sprites stored as 4-bit pixels of one palette (below) | writes `nibtab.bin`, its palette's expansion tables, and 4-bit images; BOXN = 0 |
+| `NIBSPR` | sprites stored as 4-bit pixels of one palette (below) | writes `nibtab.bin`, its palette's expansion tables, and 4-bit images; its boxes, if any, as opaque 4-bit images |
 | `GAMEHAZEL` | the segments HAZCODE, HAZDATA, HAZBSS in HAZEL ($C000-$DFFF, 8K), copied there once at boot and seen by both images; ACCCON Y stays set; SPRX is read from the disc at every level load (HAZEL no longer keeps it).  Needs MASTERONLY | puts code and variables there (they are visible whatever bank is paged); zeroes its HAZBSS itself; uses no `bankimm` there (read PBANK, as the menus do) |
 | `GAMESOUND` | the vsync calls the game's `hook_sound` instead of the engine's sound effects; the tune is still the engine's | defines `hook_sound`, resident (HAZEL, say): it runs in the interrupt, X and Y saved, and may use only its own zero page |
 | `DRAWFLAGS` | bit 7 of a sprite's x high byte (`spx+1` at `addsprite`) mirrors it, so one image is drawn either way round | sets the bit; map x stays below 32768 |
@@ -782,7 +782,7 @@ so bit 7 is otherwise always set).  The geometry is the game's, assembled where
 byte by id, the sprite's shape; and by shape `SPRG_W` (W), `SPRG_RX` and `SPRG_RY`
 (refx, refy, signed) and `SPRG_LN` (the rows stored).  Sprites that share a shape
 share its entry.  Commando's 180 ids have 106 shapes: 180 + 4 x 106 bytes once, and
-360 in each level, where 8 bytes an id took 1,440 in both.
+360 in each level, where 8 bytes an id took 1,440 in both.  The boxes and their "still" aliases work as without it: DIR_LO/DIR_HI cover BOXID0 + BOXN ids and the prologue folds an alias onto its box.  A game that mirrors by sprite id rather than with DRAWFLAGS sets `SPRGFL = 1` in its assets.inc and adds `SPRG_FL` by shape, the directory's flags byte (bit 0 mirrored); Cleo does.
 
 **What else a Master-only game may use.**  Beyond bank 7 and (GAMEHAZEL) HAZEL: the
 objects' area LV_OBJS at $1C00 keeps what the loader put there all through the level
@@ -823,8 +823,8 @@ Nothing else in main RAM is the game's.
   engine's code (ENGCODE: about 1.8K on the Model B, 1.5K on the Master) and its
   variables (ENGBSS: 82 + 21 x MAXSPR (19 with TIGHTBSS) + 8 x (BOXID0 + BOXN) + 2 x BOXID0 bytes, the
   last term none with NIBSPR, and the directory's 2 x BOXID0 in place of the 8 x with
-  SPRGEOM -- 1,736 for Cleo, 2,646 for Commando): what is left,
-  about 10K for Cleo, is yours for code, data and variables.  The link says when it
+  SPRGEOM (2 x (BOXID0 + BOXN)) -- 822 for Cleo, 2,646 for Commando): what is left,
+  about 11K for Cleo, is yours for code, data and variables.  The link says when it
   is full.  The menus' image is the same less the music player's 157: about 13.9K
   for Cleo.
 - **Zero page:** ZPGAME is $81-$EF with both machines (111 bytes), from $7A (or $7B

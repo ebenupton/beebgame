@@ -1144,6 +1144,233 @@ scroll_validate:
         sta BUF_CX+1,y
         rts
 
+; draw all listed sprites into current buffer (skipping unchanged kept ones)
+        .segment "ENGCODE"          ; bank 7, with the prologue and the records
+        PAD ::PADB_SP, ::PADM_SP
+draw_sprites:
+        ; Two passes.  A box star is an opaque rectangle with its background baked in,
+        ; so it has to go down before anything that shares its space -- drawn in list
+        ; order it would paint that background over whatever was standing there.
+        lda #1
+        sta dpass
+  .if TIGHTBSS
+@pass:  stz spi
+        lda recb                    ; the buffer's first record, stepped with spi
+        sta rq
+@l:     ldx spi                     ; X = the sprite's number: every field is ,x
+        cpx NSPR
+        bcs @endpass
+        ldy SPR_ID,x                ; Y = id for both compares
+        cpy #BOXID0
+        lda dpass
+        adc #$FF
+        beq @next
+        cpy #BOXID0+BOXN            ; a box star the logic says nothing can disturb, and
+        bcc @write                  ; the same frame already in the same place: if
+        lda KEEP,x                  ; nothing has been repainted under it, its screen pixels
+                                    ; are still right, so leave it alone
+        cmp #2
+        bne @write
+        ldy rq                      ; and it was not cut off at a window edge, so all
+        lda REC_H,y                 ; of it is on screen and still intact
+        bpl @next
+@write: ldy rq
+        lda SPR_XL,x
+        sta spx
+        sta REC_XL,y
+        lda SPR_XH,x
+    .if DRAWFLAGS
+        sta REC_XH,y                ; (the record keeps the flags: a flip is a change)
+        asl                         ; bit 7, mirror, into C
+        lda #0
+        rol
+        sta sp_dfl
+        lda SPR_XH,x
+        and #$7F
+        sta spx+1
+    .else
+        sta spx+1
+        sta REC_XH,y
+    .endif
+        lda SPR_YL,x
+        sta spy
+        sta REC_YL,y
+        lda SPR_YH,x
+        sta spy+1
+        sta REC_YH,y
+        lda #0
+        sta REC_W,y
+        lda SPR_ID,x
+        sta REC_ID,y
+        jsr drawsprite              ; (it writes the rectangle: REC_CX.. at rq)
+@next:  inc rq
+        inc spi
+        bne @l                      ; spi <= NSPR: never wraps to 0
+@endpass:
+        dec dpass
+        bpl @pass                   ; (in range on both machines)
+        ldx curbuf
+        lda NSPR
+        sta RECCNT,x
+        rts
+  .else
+@pass:  stz spi                     ; A dead: lda recp next
+        lda recp
+        sta rp
+        lda recp+1
+        sta rp+1
+@l:     ldx spi                     ; X = the sprite's number: every field is ,x
+        cpx NSPR
+        bcs @endpass
+        ldy SPR_ID,x                ; Y = id for both compares
+        cpy #BOXID0
+        lda dpass
+        adc #$FF
+        beq @next
+        cpy #BOXID0+BOXN            ; a box star the logic says nothing can disturb, and
+        bcc @write                  ; the same frame already in the same place: if
+        lda KEEP,x                  ; nothing has been repainted under it, its screen pixels
+                                    ; are still right, so leave it alone
+        cmp #2
+        bne @write
+        ldy #REC_H                  ; and it was not cut off at a window edge, so all
+        lda (rp),y                  ; of it is on screen and still intact
+        bpl @next
+@write: ldy #1
+        lda SPR_XL,x
+        sta spx
+        sta (rp),y
+        iny
+        lda SPR_XH,x
+  .if DRAWFLAGS
+        sta (rp),y                  ; (the record keeps the flags: a flip is a change)
+        asl                         ; bit 7, mirror, into C
+        lda #0
+        rol
+        sta sp_dfl
+        lda SPR_XH,x
+        and #$7F
+        sta spx+1
+  .else
+        sta spx+1
+        sta (rp),y
+  .endif
+        iny
+        lda SPR_YL,x
+        sta spy
+        sta (rp),y
+        iny
+        lda SPR_YH,x
+        sta spy+1
+        sta (rp),y
+        ldy #REC_W
+        lda #0
+        sta (rp),y
+        lda SPR_ID,x
+        staz rp                     ; sta (rp) - offset 0 needs no index
+        jsr drawsprite
+@next:  lda rp
+        clc
+        adc #RECSZ
+        sta rp
+        bcs @rpc                    ; (the carry out of line, after the rts)
+@rpb:   inc spi
+        bne @l                      ; spi <= NSPR: never wraps to 0
+@endpass:
+        dec dpass
+        bpl @pass                   ; (in range on both machines)
+        ldx curbuf
+        lda NSPR
+        sta RECCNT,x
+        rts
+@rpc:   inc rp+1
+        jmp @rpb
+  .endif
+
+; erase_old: redraw tiles under old records that are not kept (after draw_sprites
+; only for where the two loops fall: pads.inc)
+        .segment "ENGCODE"          ; bank 7, with the records (the rects it redraws
+        PAD ::PADB_EO, ::PADM_EO
+erase_old:                          ; go to bank 6's drawrect_clip through callbank)
+        ldx curbuf
+        lda RECCNT,x
+        beq @done
+        sta lcnt
+  .if TIGHTBSS
+        stz lidx
+        lda recb                    ; the buffer's first record, stepped with lidx
+        sta rq
+@l:     ldx lidx
+        cpx NSPR
+        bcs @erase
+        lda KEEP,x
+        bne @next
+@erase: ldy rq
+        lda REC_W,y
+        beq @next
+        sta rc_w
+        lda REC_H,y
+        and #$1F
+        sta rc_h
+        lda REC_H,y                 ; bits 5-6: the column's high bits
+        lsr
+        lsr
+        lsr
+        lsr
+        lsr
+        and #3
+        sta rc_x+1
+        lda REC_CX,y
+        sta rc_x
+        lda REC_CY,y
+        sta rc_y
+  .else
+        stz lidx
+        lda recp
+        sta rp
+        lda recp+1
+        sta rp+1
+@l:     ldx lidx
+        cpx NSPR
+        bcs @erase
+        lda KEEP,x
+        bne @next
+@erase: ldy #REC_W
+        lda (rp),y
+        beq @next
+        sta rc_w
+        iny                         ; REC_H
+        lda (rp),y
+        and #$7F
+        sta rc_h
+        ldy #REC_CX
+        lda (rp),y
+        sta rc_x
+        iny
+        lda (rp),y
+        sta rc_x+1
+        iny                         ; REC_CY
+        lda (rp),y
+        sta rc_y
+  .endif
+        bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is drawrect_clip
+        jsr callbank
+  .if TIGHTBSS
+@next:  inc rq
+  .else
+@next:  lda rp
+        clc
+        adc #RECSZ
+        sta rp
+        bcc :+
+        inc rp+1
+:
+  .endif
+        inc lidx
+        dec lcnt
+        bne @l
+@done:  rts
+
 ; ============================================================================
 ; Persistent sprite records.  match_sprites: KEEP[i] = new sprite i identical to record i
 ; ============================================================================
@@ -1430,6 +1657,12 @@ drawsprite:
   .endif
   .if SPRGEOM
 sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane, no sp_mh)
+    .if BOXN
+        cmp #BOXID0+BOXN            ; the "nothing can disturb it" aliases draw the same
+        bcc :+                      ; picture as the ids BOXN below them
+        sbc #BOXN
+:
+    .endif
         tax
         bankimm ldy, BANK_SPR, BANK_LVL
         lda DIR_HI,x
@@ -1442,14 +1675,19 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         sta sp_ptr+1
         lda DIR_LO,x
         sta sp_ptr
-    .if DRAWFLAGS
+        ldy SPRG_IX,x
+        sty sp_g
+    .ifdef SPRGFL                   ; the game's flags by shape (assets.inc says so): a
+        lda SPRG_FL,y               ; game that mirrors by id rather than by the list
+      .if DRAWFLAGS
+        eor sp_dfl
+      .endif
+    .elseif DRAWFLAGS
         lda sp_dfl                  ; (the list's mirror is the only flag: every scanline
-    .else                           ;  stored is clear, NIBSPR's images; no boxes)
+    .else                           ;  stored is clear, NIBSPR's images)
         lda #0
     .endif
         sta sp_flags
-        ldy SPRG_IX,x
-        sty sp_g
         lda SPRG_W,y
         sta sp_w
         lda SPRG_LN,y
@@ -2401,7 +2639,8 @@ sprdisp_tab: .word sprFN, sprFN, sprFN, sprFN
 ; stored (flag bit 1 clear: the prologue's half-res arithmetic, two scanlines a
 ; byte), and a sprite's first line in a char is always even (lb0 = 2*sy + wfine).
 ; Every bank that holds sprites has the tables and both blitters (banks.s): no box,
-; no copy blitter (BOXN must be 0).
+; no copy blitter: a box is an opaque 4-bit image, drawn by these (its flag's dispatch
+; entry is sprFN).
 .macro NPAIR k, mirror              ; lines k, k+1 of the cell: source byte k/2
         .local opq, done
   .if k = 0
@@ -2625,9 +2864,6 @@ sprscold2:
         spcold sprsback
 sprdisp_tab: .word sprFN, sprFM, sprFN, sprFM, sprFN
 .endmacro
-  .if NIBSPR
-        .assert BOXN = 0, error, "4-bit sprites (NIBSPR) have no boxes: BOXN must be 0"
-  .endif
         .segment "SPR4CODE"
         .scope spr4
   .if ::NIBSPR
@@ -3397,6 +3633,14 @@ mark_dirty:                         ; A = tx, X = ty  (adds to both buffers' lis
         sta BUF_CX+1,y
         bne @next                   ; (always)
 
+; sign extend A -> tmp3 (0 or $FF)
+        .segment "ENGCODE"          ; (its one caller is the sprite prologue: bank 7)
+sext:   and #$80
+        beq :+
+        lda #$FF
+:       sta tmp3
+        rts
+
         .segment "ENGCODE"          ; bank 7 (drawrect_clip through callbank)
 draw_dirty:
         ldx curbuf
@@ -4061,240 +4305,6 @@ mapput: pha
 
 
 
-; sign extend A -> tmp3 (0 or $FF)
-        .segment "ENGCODE"          ; (its one caller is the sprite prologue: bank 7)
-sext:   and #$80
-        beq :+
-        lda #$FF
-:       sta tmp3
-        rts
-
-; draw all listed sprites into current buffer (skipping unchanged kept ones)
-        .segment "ENGCODE"          ; bank 7, with the prologue and the records
-        PAD ::PADB_SP, ::PADM_SP
-draw_sprites:
-        ; Two passes.  A box star is an opaque rectangle with its background baked in,
-        ; so it has to go down before anything that shares its space -- drawn in list
-        ; order it would paint that background over whatever was standing there.
-        lda #1
-        sta dpass
-  .if TIGHTBSS
-@pass:  stz spi
-        lda recb                    ; the buffer's first record, stepped with spi
-        sta rq
-@l:     ldx spi                     ; X = the sprite's number: every field is ,x
-        cpx NSPR
-        bcs @endpass
-        ldy SPR_ID,x                ; Y = id for both compares
-        cpy #BOXID0
-        lda dpass
-        adc #$FF
-        beq @next
-        cpy #BOXID0+BOXN            ; a box star the logic says nothing can disturb, and
-        bcc @write                  ; the same frame already in the same place: if
-        lda KEEP,x                  ; nothing has been repainted under it, its screen pixels
-                                    ; are still right, so leave it alone
-        cmp #2
-        bne @write
-        ldy rq                      ; and it was not cut off at a window edge, so all
-        lda REC_H,y                 ; of it is on screen and still intact
-        bpl @next
-@write: ldy rq
-        lda SPR_XL,x
-        sta spx
-        sta REC_XL,y
-        lda SPR_XH,x
-    .if DRAWFLAGS
-        sta REC_XH,y                ; (the record keeps the flags: a flip is a change)
-        asl                         ; bit 7, mirror, into C
-        lda #0
-        rol
-        sta sp_dfl
-        lda SPR_XH,x
-        and #$7F
-        sta spx+1
-    .else
-        sta spx+1
-        sta REC_XH,y
-    .endif
-        lda SPR_YL,x
-        sta spy
-        sta REC_YL,y
-        lda SPR_YH,x
-        sta spy+1
-        sta REC_YH,y
-        lda #0
-        sta REC_W,y
-        lda SPR_ID,x
-        sta REC_ID,y
-        jsr drawsprite              ; (it writes the rectangle: REC_CX.. at rq)
-@next:  inc rq
-        inc spi
-        bne @l                      ; spi <= NSPR: never wraps to 0
-@endpass:
-        dec dpass
-        bpl @pass                   ; (in range on both machines)
-        ldx curbuf
-        lda NSPR
-        sta RECCNT,x
-        rts
-  .else
-@pass:  stz spi                     ; A dead: lda recp next
-        lda recp
-        sta rp
-        lda recp+1
-        sta rp+1
-@l:     ldx spi                     ; X = the sprite's number: every field is ,x
-        cpx NSPR
-        bcs @endpass
-        ldy SPR_ID,x                ; Y = id for both compares
-        cpy #BOXID0
-        lda dpass
-        adc #$FF
-        beq @next
-        cpy #BOXID0+BOXN            ; a box star the logic says nothing can disturb, and
-        bcc @write                  ; the same frame already in the same place: if
-        lda KEEP,x                  ; nothing has been repainted under it, its screen pixels
-                                    ; are still right, so leave it alone
-        cmp #2
-        bne @write
-        ldy #REC_H                  ; and it was not cut off at a window edge, so all
-        lda (rp),y                  ; of it is on screen and still intact
-        bpl @next
-@write: ldy #1
-        lda SPR_XL,x
-        sta spx
-        sta (rp),y
-        iny
-        lda SPR_XH,x
-  .if DRAWFLAGS
-        sta (rp),y                  ; (the record keeps the flags: a flip is a change)
-        asl                         ; bit 7, mirror, into C
-        lda #0
-        rol
-        sta sp_dfl
-        lda SPR_XH,x
-        and #$7F
-        sta spx+1
-  .else
-        sta spx+1
-        sta (rp),y
-  .endif
-        iny
-        lda SPR_YL,x
-        sta spy
-        sta (rp),y
-        iny
-        lda SPR_YH,x
-        sta spy+1
-        sta (rp),y
-        ldy #REC_W
-        lda #0
-        sta (rp),y
-        lda SPR_ID,x
-        staz rp                     ; sta (rp) - offset 0 needs no index
-        jsr drawsprite
-@next:  lda rp
-        clc
-        adc #RECSZ
-        sta rp
-        bcs @rpc                    ; (the carry out of line, after the rts)
-@rpb:   inc spi
-        bne @l                      ; spi <= NSPR: never wraps to 0
-@endpass:
-        dec dpass
-        bpl @pass                   ; (in range on both machines)
-        ldx curbuf
-        lda NSPR
-        sta RECCNT,x
-        rts
-@rpc:   inc rp+1
-        jmp @rpb
-  .endif
-
-; erase_old: redraw tiles under old records that are not kept (after draw_sprites
-; only for where the two loops fall: pads.inc)
-        .segment "ENGCODE"          ; bank 7, with the records (the rects it redraws
-        PAD ::PADB_EO, ::PADM_EO
-erase_old:                          ; go to bank 6's drawrect_clip through callbank)
-        ldx curbuf
-        lda RECCNT,x
-        beq @done
-        sta lcnt
-  .if TIGHTBSS
-        stz lidx
-        lda recb                    ; the buffer's first record, stepped with lidx
-        sta rq
-@l:     ldx lidx
-        cpx NSPR
-        bcs @erase
-        lda KEEP,x
-        bne @next
-@erase: ldy rq
-        lda REC_W,y
-        beq @next
-        sta rc_w
-        lda REC_H,y
-        and #$1F
-        sta rc_h
-        lda REC_H,y                 ; bits 5-6: the column's high bits
-        lsr
-        lsr
-        lsr
-        lsr
-        lsr
-        and #3
-        sta rc_x+1
-        lda REC_CX,y
-        sta rc_x
-        lda REC_CY,y
-        sta rc_y
-  .else
-        stz lidx
-        lda recp
-        sta rp
-        lda recp+1
-        sta rp+1
-@l:     ldx lidx
-        cpx NSPR
-        bcs @erase
-        lda KEEP,x
-        bne @next
-@erase: ldy #REC_W
-        lda (rp),y
-        beq @next
-        sta rc_w
-        iny                         ; REC_H
-        lda (rp),y
-        and #$7F
-        sta rc_h
-        ldy #REC_CX
-        lda (rp),y
-        sta rc_x
-        iny
-        lda (rp),y
-        sta rc_x+1
-        iny                         ; REC_CY
-        lda (rp),y
-        sta rc_y
-  .endif
-        bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is drawrect_clip
-        jsr callbank
-  .if TIGHTBSS
-@next:  inc rq
-  .else
-@next:  lda rp
-        clc
-        adc #RECSZ
-        sta rp
-        bcc :+
-        inc rp+1
-:
-  .endif
-        inc lidx
-        dec lcnt
-        bne @l
-@done:  rts
 
 ; ============================================================================
 ; blank_below: the 6845 always displays the first scanline of a frame, whatever R6

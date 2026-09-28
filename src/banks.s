@@ -145,9 +145,9 @@ SPRMASK:    .res 2*BOXID0           ; mask plane address by sprite id (the boxes
                                     ; prologue (this bank)
   .endif
   .if SPRGEOM                       ; (the split directory: the level's part, by id, the
-SPR_TABLE:  .res 2*BOXID0           ;  images' addresses: low bytes, then high bytes -- 0
+SPR_TABLE:  .res 2*(BOXID0+BOXN)    ;  images' addresses: low bytes, then high bytes -- 0
 DIR_LO      = SPR_TABLE             ;  not in this level, bit 7 clear in bank 5; the
-DIR_HI      = SPR_TABLE+BOXID0      ;  geometry is the game's, SPRG_*)
+DIR_HI      = SPR_TABLE+BOXID0+BOXN ;  geometry is the game's, SPRG_*; the boxes' too)
   .else
 SPR_TABLE:  .res (BOXID0+BOXN)*8    ; the sprite directory as the packer finished it:
                                     ; an entry a sprite id, BOXID0 images then BOXN boxes
