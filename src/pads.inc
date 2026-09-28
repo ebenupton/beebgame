@@ -12,14 +12,15 @@ PADM_FC5 = 28                       ;         before the copy blitter
 ; places the code after it.  Found together over the profile's bank 7 branches and
 ; reads (Cleo's test/cycprof.mjs PHASEDUMP, then test/padopt.py): they move with the
 ; kernel's start (disc.s: the driver slot's size sets it), so re-find them when it moves.
+; So is the order of ENGCODE's blocks in engine.s (Cleo's test/blockopt.py, first).
 PADB_MS = 0                         ; before match_sprites (bank 7's first)
 PADM_MS = 4
 PADB_SP = 0                         ; before draw_sprites
 PADM_SP = 0
 PADB_EO = 0                         ; before erase_old
 PADM_EO = 0
-PADB_DS = 2                         ; before drawsprite
-PADM_DS = 42
+PADB_DS = 0                         ; before drawsprite
+PADM_DS = 40
 PADB_CP = 0                         ; before copy_partial
 PADM_CP = 37
 PADB_BB = 2                         ; the Model B: after blank_below

@@ -19,8 +19,11 @@
 ; level is gathered from the disc into the banks by the loader (ldprog.s), which runs
 ; in main RAM while the palette is black.
 ; ============================================================================
-IMG_GAME  = 0                       ; bank 7's images (disc.s load_image, ldprog.s
-IMG_MENU  = 1                       ; image_load)
+IMG_GAME  = 0                       ; bank 7's images (ldprog.s image_load)
+IMG_MENU  = 1
+LDOP_GAME  = $80 | IMG_GAME         ; a load of an image and where it goes on (disc.s
+LDOP_TITLE = $80 | IMG_MENU         ; go_game, go_title, go_menu; ldprog.s ld_entry):
+LDOP_OVER  = $82 | IMG_MENU         ; bit 0 the image, bit 7 not a level
 
 SWAPTAB   = $BB00                   ; static in bank 4, below the mask tables: dot
 MASKTAB0  = $BC00                   ; reversal (bank 5 draws nothing mirrored); the

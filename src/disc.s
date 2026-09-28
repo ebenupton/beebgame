@@ -24,11 +24,9 @@ ld_dst:   .res 2
 ld_trk:   .res 1
 ld_sc:    .res 1
 ld_cnt:   .res 1
-ld_level: .res 1
-ld_img:   .res 1                    ; load_image's image (the test harness reads it too)
-ld_arg:   .res 1                    ; go_menu's A across it
+ld_img:   .res 1                    ; the image in bank 7 (ldprog.s: the test harness reads it)
 ld_open:  .res 1                    ; the disc is still open: go_game's load goes on into
-                                    ; the level's (ld_resume clears it: every load ends so)
+                                    ; the level's (ldprog.s ld_resume clears it: every load ends so)
 
 ; ---------------------------------------------------------------- the drivers
 ; Each controller's driver -- its NMI stub, its track read, its helpers -- is assembled
@@ -271,81 +269,56 @@ disc_init:
 @drvsel: .byte FDC_DRV0, FDC_DRV1, FDC_DRV0|FDC_SIDE1, FDC_DRV1|FDC_SIDE1
         .segment "KRNCODE"
 
-; ---------------------------------------------------------------- the loader
-; The driver's NMI stub goes to its page and the load-time program to LDPROG, then it runs:
-; it comes back with bank 7 paged and the display RAM it used as scratch.
-disc_boot:
+        jmp read_sectors
+
+; ---------------------------------------------------------------- the loads
+; Every load is LDPROG's: the kernel only stops the tune, parks the chain, copies the
+; driver's NMI stub to its page and reads LDPROG, which does the rest -- the level or the image, the chain's
+; restart, and for an image the game's hook it goes on to (ldprog.s ld_entry).
+; load_level_b: X = level index 0..15, everything the level needs into the banks (the
+; palette is black; the game's load_level goes on from the header afterwards).
+; Bank 7 below the kernel holds one of two images: the game's (GAME: the logic, the
+; renderer's bank 7 half, the game loop) or the menus' (MENU: the menus, the tune,
+; the font, the title pieces).  Either comes off the disc over the other, and control
+; goes to its hook with the stack as boot left it: nothing the other image called is
+; returned to.  go_title is start-up's way in (init.s: the menus' image, then
+; hook_title); go_game the menus' way out (the game's image and the bar's template,
+; then hook_image and hook_play, whose first level load goes straight on: ld_open);
+; go_menu the game's (A = 0 lost, 1 won: the menus' image, then hook_over).
+go_title:
+        ldx #LDOP_TITLE
+        bne ld_go                   ; (always)
+go_game:
+        ldx #LDOP_GAME
+        bne ld_go
+go_menu:
+        ldx #LDOP_OVER
+        bne ld_go
+load_level_b:
+        ldy ld_open                 ; straight on from go_game's image load: the chain is
+        bne ld_on                   ; parked, LDPROG in place
+ld_go:  sta LDZP                    ; (LDPROG's zero page: free until it runs)
+        stx LDZP+1
+        jsr music_stop              ; (the tune's player is the menus')
+        jsr load_begin              ; the chain parks the CRTC in a standard frame first
+        sei                         ; (engine.s load_begin)
         ldx DRV_NMILEN              ; the driver's NMI stub to its page (its labels are
 :       lda DRV_NMI-1,x             ; its run addresses there)
         sta NMIPAGE-1,x
         dex
         bne :-
-        lda #<F_LDPROG_SEC
+        lda #<F_LDPROG_SEC          ; and LDPROG to its place
         sta ld_sec
         lda #F_LDPROG_N
         sta ld_n
         lda #>LDPROG
         sta ld_dst+1
-        lda #0                      ; >F_LDPROG_SEC and <LDPROG: both zero
-        sta ld_sec+1
-        sta ld_dst
-        .assert >F_LDPROG_SEC = 0 && <LDPROG = 0, error, "disc_boot: a zero assumed"
-        jmp read_sectors
-
-; X = level index 0..15: everything the level needs into the banks (the palette is
-; black; the game's load_level goes on from the header afterwards)
-load_level_b:
-        stx ld_level
-        lda ld_open                 ; straight on from go_game's image load: the chain is
-        bne @on                     ; parked, LDPROG in place
-        jsr music_stop
-        jsr load_begin              ; the chain parks the CRTC in a standard frame first
-        sei                         ; (engine.s load_begin)
-        jsr disc_boot
-@on:    ldx ld_level
-        jsr LDPROG                  ; lv_load
-        jmp ld_resume
-
-; ---------------------------------------------------------------- the images
-; Bank 7 below the kernel holds one of two images: the game's (GAME: the logic, the
-; renderer's bank 7 half, the game loop) or the menus' (MENU: the menus, the tune,
-; the font, the title pieces).  Either comes off the disc over the other, and control
-; goes to its entry with the stack as boot left it: nothing the other image called
-; is returned to.
-go_title:                           ; start-up's way in (init.s): the menus' image
-        ldx #IMG_MENU
-        jsr load_image
-        jsr ld_resume
-        jmp hook_title              ; (the game's: README.md)
-go_game:                            ; the menus' way out: the game's image (and the bar's
-        ldx #IMG_GAME               ; template: ldprog.s), then its level loop, whose level
-        jsr load_image              ; load goes straight on (interrupts off till it ends)
-        ldx #$3F                    ; (init.s: the stack is 64 bytes)
-        txs
-        inc ld_open                 ; (0 -> 1: the last load's ld_resume)
-        jsr hook_image              ; (the game's: README.md -- Cleo's resets its HUD's cache)
-game_in:                            ; (a label for the test harness: the game's image in,
-        jmp hook_play               ;  its entry not yet run)
-go_menu:                            ; the game's way out, A = 0 lost, 1 won: the menus'
-        sta ld_arg                  ; image, then its win/lose screen
-        ldx #IMG_MENU
-        jsr load_image
-        jsr ld_resume
-        ldx #$3F
-        txs
-        lda ld_arg
-        jmp hook_over
-load_image:                         ; X = IMG_GAME or IMG_MENU
-        stx ld_img
-        jsr music_stop              ; (the tune's player is the menus')
-        jsr load_begin
-        sei
-        jsr disc_boot
-        ldx ld_img
-        jmp LDPROG+3                ; image_load (ldprog.s)
-ld_resume:                          ; (interrupts still off: a flag raised during the load
-        lda #0                      ;  is stale, and load_end clears it before the cli)
-        sta ld_open
-        jsr load_end
-        cli
-        rts
+        stx ld_sec+1                ; (X = 0: >F_LDPROG_SEC and <LDPROG)
+        stx ld_dst
+        .assert >F_LDPROG_SEC = 0 && <LDPROG = 0, error, "ld_go: a zero assumed"
+        jsr read_sectors
+        ldx LDZP+1
+        lda LDZP
+ld_on:  jmp LDPROG                  ; ld_entry: a level returns, an image goes on
+game_in:                            ; (LDPROG's way to hook_play: a label for the test
+        jmp hook_play               ;  harness, the game's image in, its entry not yet run)

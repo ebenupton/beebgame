@@ -11,6 +11,9 @@
 .endmacro
         OUTC IMG_GAME
         OUTC IMG_MENU
+        OUTC LDOP_GAME
+        OUTC LDOP_TITLE
+        OUTC LDOP_OVER
         OUTC TILES
         OUTC TOFF
         OUTC NFLAT

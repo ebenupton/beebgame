@@ -112,7 +112,8 @@ import re
 want = ['boot','dsk_type','dsk_drv','read_sectors','ld_sec','ld_n','ld_dst',
         'LV_HDR','LV_OBJS','LV_ATTR0','LV_ALTCLS','TILES','SPRMASK','SPR_TABLE','mapshr','MAPSTRIDE','FLATTAB',
         'half0','half1','half2','halfhi','halfhi5','halfsub','mir0','MIRTAB','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
-        'MAP5','LDZP','BARADDR','STAGE','STAGE_LVL','LDPROG','PBANK','PBOARD','dsk_banks','dsk_board']
+        'MAP5','LDZP','BARADDR','STAGE','STAGE_LVL','LDPROG','PBANK','PBOARD','dsk_banks','dsk_board',
+        'ld_img','ld_open','LOADREQ','game_in']
 addr = {}
 import os
 BD = os.environ['BD']
@@ -127,6 +128,11 @@ did = re.search(r'^sym\tid=(\d+),name="drawrect",', dbg, re.M).group(1)
 s0f = re.search(r'^sym\tid=\d+,name="@s0f",[^\n]*parent=%s,[^\n]*val=0x([0-9A-F]+)' % did, dbg, re.M)
 addr['SOLIDF'] = int(s0f.group(1), 16) + 1
 want.append('SOLIDF')
+# the game's hooks (README.md): equates, so in the debug info and not labels.txt --
+# the load-time program goes on to them after an image load (ldprog.s ld_entry)
+for h in ('hook_title', 'hook_image', 'hook_over'):
+    addr[h] = int(re.search(r'^sym\tid=\d+,name="%s",[^\n]*val=0x([0-9A-F]+)' % h, dbg, re.M).group(1), 16)
+    want.append(h)
 # bank 7's images (ldprog.s image_load): the game's, the linker's b7.bin (its code,
 # from GAMEDATA; its variables are not in the file), and the menus', MENU
 # (one file on the disc, IMG7: the menus' image to a whole sector, then the game's,

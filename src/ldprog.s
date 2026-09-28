@@ -6,11 +6,11 @@
 ; main and shadow RAM on the Master).  A level is gathered from the shared files --
 ; the tile set's, SPRC, SPRX, the level's own -- by the lists the packer
 ; (Cleo's tools/assets.py) put in the level file: which tiles, and where every image goes.
-; Bank 7 is paged on entry and on return; read_sectors (disc.s) is its kernel's, which
-; no image covers, and reads into main RAM.
+; Bank 7 is paged on entry and after each part; read_sectors (disc.s) is its kernel's,
+; which no image covers, and reads into main RAM.
 ;
-;   LDPROG+0  lv_load     X = level index 0..15
-;   LDPROG+3  image_load  X = IMG_GAME or IMG_MENU: bank 7's image below the kernel
+;   LDPROG+0  ld_entry    X = a level 0..15, or an image load (defs.inc LDOP_):
+;                         the load, the chain's restart, and an image's hook
 ; ============================================================================
         .ifndef BHW                 ; (cpu.inc's flag: the Model B's hardware unless the
 BHW = 1                             ;  build says -D BHW=0, the Master's)
@@ -23,6 +23,7 @@ TILEMIRROR = 0
         .include "levelfmt.inc"     ; the level file's sections and header (tools/levelfile.py)
 ROMSEL     = $FE30
 ROMSEL_CPY = $F4
+VIA_IFR    = $FE4D                  ; (the system VIA's: ld_resume)
 ACCCON     = $FE34                  ; (the Master: bit 2, X, puts the CPU's
                                     ;  $3000-$7FFF in shadow RAM -- where STAGE is)
 ; The banks are whichever sockets the boot loader found RAM in: it left their numbers
@@ -54,8 +55,47 @@ tbase = LDZP + 14                   ; 2: the level file's section table
 nt    = LDZP + 16
 
         .segment "CODE"
-        jmp lv_load
-        jmp image_load
+; ---------------------------------------------------------------- the entry
+; (disc.s ld_go, the chain parked and interrupts off.)  X = a level (load_level_b:
+; its caller is returned to) or LDOP_TITLE, LDOP_GAME, LDOP_OVER (go_title, go_game,
+; go_menu: the image, then the game's hook; A = go_menu's for hook_over)
+ld_entry:
+        cpx #$80
+        bcs ld_image
+        jsr lv_load
+ld_resume:                          ; every load ends here (interrupts still off: a flag
+        lda #0                      ; raised during the load is stale)
+        sta ld_open
+        lda #3                      ; load_end: resume asked -- the next real vsync arms
+        sta LOADREQ                 ; T1, turns its interrupt on and clears this (curR7
+        lda #$42                    ; holds LDR7 from the switch); until then a T1 flag is
+        sta VIA_IFR                 ; stale.  A vsync flag raised meanwhile is stale too
+        cli                         ; (engine.s load_begin)
+        rts
+ld_image: sta ldarg
+        stx ldop
+        txa
+        and #1                      ; the image (defs.inc LDOP_)
+        sta ld_img                  ; (the kernel's: the test harness reads it)
+        tax
+        jsr image_load
+        lda ldop
+        cmp #LDOP_TITLE
+        beq @title                  ; (start-up's stack, as boot left it)
+        ldx #$3F                    ; (init.s: the stack is 64 bytes)
+        txs
+        cmp #LDOP_GAME
+        bne @over
+        inc ld_open                 ; (0 -> 1: the level loop's first load goes straight
+        jsr hook_image              ;  on; the game's: Cleo's resets its HUD's cache)
+        jmp game_in                 ; hook_play
+@over:  jsr ld_resume
+        lda ldarg
+        jmp hook_over
+@title: jsr ld_resume
+        jmp hook_title
+ldop:   .res 1
+ldarg:  .res 1
 
 ; ---------------------------------------------------------------- the file table
 ; index -> sector lo, hi, sectors (from files.inc: the disc's own order)
@@ -136,7 +176,7 @@ readpage:                           ; file A -> page X (main RAM)
         lda ftab+1,x
         sta ld_sec+1
         lda ftab+2,x
-        sta ld_n                    ; (ld_dst's low byte: 0 from disc_boot, and never
+        sta ld_n                    ; (ld_dst's low byte: 0 from disc.s ld_go, and never
         .assert <LDPROG = 0, error, "ld_dst's low byte is 0"
         jmp read_sectors            ;  changed -- every destination is a page)
 

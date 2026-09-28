@@ -1186,124 +1186,131 @@ addsprite:
         inc NSPR
 @full:  rts
 
-; draw all listed sprites into current buffer (skipping unchanged kept ones)
-        .segment "ENGCODE"          ; bank 7, with the prologue and the records
-        PAD ::PADB_SP, ::PADM_SP
-draw_sprites:
-        ; Two passes.  A box star is an opaque rectangle with its background baked in,
-        ; so it has to go down before anything that shares its space -- drawn in list
-        ; order it would paint that background over whatever was standing there.
-        lda #1
-        sta dpass
-@pass:  stz spi                     ; A dead: lda recp next
-        lda recp
-        sta rp
-        lda recp+1
-        sta rp+1
-@l:     ldx spi                     ; X = the sprite's number: every field is ,x
-        cpx NSPR
-        bcs @endpass
-        ldy SPR_ID,x                ; Y = id for both compares
-        cpy #BOXID0
-        lda dpass
-        adc #$FF
-        beq @next
-        cpy #BOXID0+BOXN            ; a box star the logic says nothing can disturb, and
-        bcc @write                  ; the same frame already in the same place: if
-        lda KEEP,x                  ; nothing has been repainted under it, its screen pixels
-                                    ; are still right, so leave it alone
-        cmp #2
-        bne @write
-        ldy #9                      ; and it was not cut off at a window edge, so all
-        lda (rp),y                  ; of it is on screen and still intact
-        bpl @next
-@write: ldy #1
-        lda SPR_XL,x
-        sta spx
-        sta (rp),y
-        iny
-        lda SPR_XH,x
-        sta spx+1
-        sta (rp),y
-        iny
-        lda SPR_YL,x
-        sta spy
-        sta (rp),y
-        iny
-        lda SPR_YH,x
-        sta spy+1
-        sta (rp),y
-        ldy #8
-        lda #0
-        sta (rp),y
-        lda SPR_ID,x
-        staz rp                     ; sta (rp) - offset 0 needs no index
-        jsr drawsprite
-@next:  lda rp
-        clc
-        adc #10
-        sta rp
-        bcs @rpc                    ; (the carry out of line, after the rts)
-@rpb:   inc spi
-        bne @l                      ; spi <= NSPR: never wraps to 0
-@endpass:
-        dec dpass
-        bpl @pass                   ; (in range on both machines)
-        ldx curbuf
-        lda NSPR
-        sta RECCNT,x
+; ============================================================================
+; copy_partial: copy lines wfine..7 of ring row wcy into lines 0..(7-wfine) of the
+; ring row above the window (the "A" section's source), all 80 columns.
+; ============================================================================
+        .segment "ENGCODE"          ; bank 7, beside render_core
+        PAD ::PADB_CP, ::PADM_CP    ; (each machine's code off page crossings: pads.inc)
+copy_partial:                       ; the whole row, every frame the fine scroll is not 0
+        lda wfine                   ; (tracking the columns drawn since the last copy
+        bne :+                      ;  saves under 0.3% of a frame: measured)
         rts
-@rpc:   inc rp+1
-        jmp @rpb
-
-; erase_old: redraw tiles under old records that are not kept (after draw_sprites
-; only for where the two loops fall: pads.inc)
-        .segment "ENGCODE"          ; bank 7, with the records (the rects it redraws
-        PAD ::PADB_EO, ::PADM_EO
-erase_old:                          ; go to bank 6's drawrect_clip through callbank)
-        ldx curbuf
-        lda RECCNT,x
-        beq @done
-        sta lcnt
-        stz lidx
-        lda recp
-        sta rp
-        lda recp+1
-        sta rp+1
-@l:     ldx lidx
-        cpx NSPR
-        bcs @erase
-        lda KEEP,x
-        bne @next
-@erase: ldy #8
-        lda (rp),y
-        beq @next
-        sta rc_w
-        iny
-        lda (rp),y
-        and #$7F
-        sta rc_h
-        ldy #5
-        lda (rp),y
-        sta rc_x
-        iny
-        lda (rp),y
-        sta rc_x+1
-        iny
-        lda (rp),y
-        sta rc_y
-        bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is drawrect_clip
-        jsr callbank
-@next:  lda rp
+:
+        lda #ROWCHARS
+        sta cnt
+        lda #0
+        sta tmp4                    ; first column to copy
         clc
-        adc #10
-        sta rp
-        bcc :+
-        inc rp+1
-:       inc lidx
-        dec lcnt
-        bne @l
+        adc wcx
+        sta w16
+        lda wcx+1
+        adc #0
+        sta w16+1
+  .if BHW
+        lda barq                    ; the composed row is the ring row above the window,
+        bne @nomir                  ; the last slot when the window starts at slot 0
+        lda tmp4                    ; C = 0 from the w16+1 adc (wcx < $8000)
+        adc cnt
+        tax
+        dex
+        lda tmp4
+        jsr mirdirty                ; (bank 7's copy)
+@nomir:
+  .endif
+        lda wcy
+        jsr ringaddr7               ; sp = source start (row wcy, column wcx)
+        ; source: sp is the char, and the copy starts wfine lines into it.  Offsetting
+        ; sp by wfine (under 8, and a char is 8-aligned) keeps its page crossings on
+        ; the real char boundaries, so spnext's fold still lands where it should
+        lda sp
+        clc
+        adc wfine
+        sta sp
+        ; dest: the same column of the composed row, ring char (ringS + col - 80)
+        ; mod RINGCHARS -- the row above the window -- as a real address in the ring
+        lda tmp4                    ; C = 0: sp was a char (8-aligned) + wfine (< 8)
+        adc #<(-ROWCHARS)           ; ringS + tmp4 - 80: this low add cannot carry (tmp4 <= 79)
+        adc ringS
+        sta ptr
+        lda ringS+1
+        adc #$FF                    ; C = 1: >= 0, already in the ring
+        bcs @pnf
+  .if BHW
+        tax                         ; < 0: + RINGCHARS, 16 bit (23 rows is not whole pages)
+        lda ptr
+        adc #<RINGCHARS
+        sta ptr
+        txa
+  .endif
+        adc #>RINGCHARS
+@pnf:   asl ptr                     ; char -> byte address (A:ptr), + RINGBASE (the rols
+        rol                         ; leave C clear: the offset is under $5000)
+        asl ptr
+        rol
+        asl ptr
+        rol
+  .if BHW
+        tax
+        lda ptr                     ; the base is xx80, and which xx is the buffer's
+        adc #<RING_A
+        sta ptr
+        txa
+        adc ringbhi
+  .else
+        adc #>RINGBASE
+  .endif
+        sta ptr+1
+        ; Y is the dest line, 0..7-wfine, and the source line is Y + wfine through the
+        ; offset sp: enter the unrolled copy at the pair for this wfine.  (A loop here
+        ; is 40 bytes smaller and ~1% of a frame slower: every frame with vertical
+        ; movement recomposes all 80 columns.)
+        ldx wfine
+        lda @ftab-2,x               ; the loop's back branch, patched to this wfine's entry
+        sta @back+1
+        ldx cnt                     ; char counter in X: dex/beq is 3 cycles cheaper
+        clc
+        bcc @back                   ; in at the patched entry (C = 0)
+@ftab:  .byte <(@g4-(@back+2)), 0, <(@g2-(@back+2)), 0, <(@g0-(@back+2))   ; wfine 2: six lines, 4: four, 6: two
+@g4:    ldy #5
+        lda (sp),y
+        sta (ptr),y
+        dey
+        lda (sp),y
+        sta (ptr),y
+@g2:    ldy #3
+        lda (sp),y
+        sta (ptr),y
+        dey
+        lda (sp),y
+        sta (ptr),y
+@g0:    ldy #1
+        lda (sp),y
+        sta (ptr),y
+        dey
+        lda (sp),y
+        sta (ptr),y
+        ; next char, both with the ring fold on the page crossing: the composed row
+        ; can straddle the ring end like any other row (the page steps out of line)
+        spnext @sfold
+@sback: dex
+        beq @done
+        lda ptr
+        clc
+        adc #8
+        sta ptr
+        bcs @pfold
+@back:  bcc @g4                     ; patched (@ftab): C = 0 at every arrival
+        SAMEPAGE *, @g4
+        SAMEPAGE *, @g0
 @done:  rts
+@sfold: spcold @sback
+@pfold: lda ptr+1
+        adc #0                      ; C = 1: the bcs; ringup's cmp resets it
+        ringup ptr
+        sta ptr+1
+        clc
+        bcc @back
 
 ; draw one sprite: A = id ; spx, spy = game pixels, map coordinates (ref point)
 ; The directory is the level's, in bank 7 at SPR_TABLE (ldprog.s); the data is in
@@ -2204,177 +2211,6 @@ sprdisp_tab: .word sprFN, sprFN, sprFN, sprFN
 ; Every image is full-res, so entries 0/1 of sprdisp_tab (the half-res flag clear)
 ; alias the full blitters: the flag bit is vestigial.
 
-; ============================================================================
-; copy_partial: copy lines wfine..7 of ring row wcy into lines 0..(7-wfine) of the
-; ring row above the window (the "A" section's source), all 80 columns.
-; ============================================================================
-        .segment "ENGCODE"          ; bank 7, beside render_core
-        PAD ::PADB_CP, ::PADM_CP    ; (copy_partial's loop, blank_below's: each in a page
-                                    ;  -- the Master's, whose code runs on from the start)
-copy_partial:                       ; the whole row, every frame the fine scroll is not 0
-        lda wfine                   ; (tracking the columns drawn since the last copy
-        bne :+                      ;  saves under 0.3% of a frame: measured)
-        rts
-:
-        lda #ROWCHARS
-        sta cnt
-        lda #0
-        sta tmp4                    ; first column to copy
-        clc
-        adc wcx
-        sta w16
-        lda wcx+1
-        adc #0
-        sta w16+1
-  .if BHW
-        lda barq                    ; the composed row is the ring row above the window,
-        bne @nomir                  ; the last slot when the window starts at slot 0
-        lda tmp4                    ; C = 0 from the w16+1 adc (wcx < $8000)
-        adc cnt
-        tax
-        dex
-        lda tmp4
-        jsr mirdirty                ; (bank 7's copy)
-@nomir:
-  .endif
-        lda wcy
-        jsr ringaddr7               ; sp = source start (row wcy, column wcx)
-        ; source: sp is the char, and the copy starts wfine lines into it.  Offsetting
-        ; sp by wfine (under 8, and a char is 8-aligned) keeps its page crossings on
-        ; the real char boundaries, so spnext's fold still lands where it should
-        lda sp
-        clc
-        adc wfine
-        sta sp
-        ; dest: the same column of the composed row, ring char (ringS + col - 80)
-        ; mod RINGCHARS -- the row above the window -- as a real address in the ring
-        lda tmp4                    ; C = 0: sp was a char (8-aligned) + wfine (< 8)
-        adc #<(-ROWCHARS)           ; ringS + tmp4 - 80: this low add cannot carry (tmp4 <= 79)
-        adc ringS
-        sta ptr
-        lda ringS+1
-        adc #$FF                    ; C = 1: >= 0, already in the ring
-        bcs @pnf
-  .if BHW
-        tax                         ; < 0: + RINGCHARS, 16 bit (23 rows is not whole pages)
-        lda ptr
-        adc #<RINGCHARS
-        sta ptr
-        txa
-  .endif
-        adc #>RINGCHARS
-@pnf:   asl ptr                     ; char -> byte address (A:ptr), + RINGBASE (the rols
-        rol                         ; leave C clear: the offset is under $5000)
-        asl ptr
-        rol
-        asl ptr
-        rol
-  .if BHW
-        tax
-        lda ptr                     ; the base is xx80, and which xx is the buffer's
-        adc #<RING_A
-        sta ptr
-        txa
-        adc ringbhi
-  .else
-        adc #>RINGBASE
-  .endif
-        sta ptr+1
-        ; Y is the dest line, 0..7-wfine, and the source line is Y + wfine through the
-        ; offset sp: enter the unrolled copy at the pair for this wfine.  (A loop here
-        ; is 40 bytes smaller and ~1% of a frame slower: every frame with vertical
-        ; movement recomposes all 80 columns.)
-        ldx wfine
-        lda @ftab-2,x               ; the loop's back branch, patched to this wfine's entry
-        sta @back+1
-        ldx cnt                     ; char counter in X: dex/beq is 3 cycles cheaper
-        clc
-        bcc @back                   ; in at the patched entry (C = 0)
-@ftab:  .byte <(@g4-(@back+2)), 0, <(@g2-(@back+2)), 0, <(@g0-(@back+2))   ; wfine 2: six lines, 4: four, 6: two
-@g4:    ldy #5
-        lda (sp),y
-        sta (ptr),y
-        dey
-        lda (sp),y
-        sta (ptr),y
-@g2:    ldy #3
-        lda (sp),y
-        sta (ptr),y
-        dey
-        lda (sp),y
-        sta (ptr),y
-@g0:    ldy #1
-        lda (sp),y
-        sta (ptr),y
-        dey
-        lda (sp),y
-        sta (ptr),y
-        ; next char, both with the ring fold on the page crossing: the composed row
-        ; can straddle the ring end like any other row (the page steps out of line)
-        spnext @sfold
-@sback: dex
-        beq @done
-        lda ptr
-        clc
-        adc #8
-        sta ptr
-        bcs @pfold
-@back:  bcc @g4                     ; patched (@ftab): C = 0 at every arrival
-        SAMEPAGE *, @g4
-        SAMEPAGE *, @g0
-@done:  rts
-@sfold: spcold @sback
-@pfold: lda ptr+1
-        adc #0                      ; C = 1: the bcs; ringup's cmp resets it
-        ringup ptr
-        sta ptr+1
-        clc
-        bcc @back
-
-; ============================================================================
-; blank_below: the 6845 always displays the first scanline of a frame, whatever R6
-; says, so the blanking section's row 0 line 0 -- the ring slot below the playfield --
-; is one line more under the picture.  Elsewhere it is the next map line; parked on
-; the map's bottom row it is whatever that never-drawn slot last held.  So when the
-; window sits on the bottom row, blank the slot, once per buffer per arrival.
-; ============================================================================
-        .segment "ENGCODE"          ; bank 7, beside render_core
-blank_below:
-        lda wfine
-        bne @no
-        lda wy
-        cmp maxwy
-        bne @no
-        lda wy+1
-        cmp maxwy+1
-        bne @no
-        ldx curbuf
-        lda BUF_BOTOK,x
-        bne @no
-        inc BUF_BOTOK,x
-        lda wcx                     ; the row below the playfield: map char row
-        sta w16                     ; wcy + VISROWS at the window's column -- rows
-        lda wcx+1                   ; are not slot aligned, so this is a run of 80
-        sta w16+1                   ; chars that may straddle the ring end
-        lda wcy
-        adc #VISROWS-1              ; C = 1 from cmp maxwy+1 (equal)
-        jsr ringaddr7               ; sp = its ring address
-        ldx #ROWCHARS
-@char:  lda #0
-        ldy #7
-        .repeat 7
-        sta (sp),y
-        dey
-        .endrepeat
-        sta (sp),y
-        spnext @fold                ; 8 on, folding at the ring end (out of line)
-@fback: dex
-        bne @char
-        SAMEPAGE *, @char
-@no:    rts
-@fold:  spcold @fback
-        PAD ::PADB_BB, 0            ; (the Model B's bank 7 code ends at the kernel: what
-                                    ;  is above this pad places the two loops over it)
 
 
 ; ============================================================================
@@ -2739,69 +2575,6 @@ select_backbuf:
 @rlo:   .byte <SPRREC, <(SPRREC+MAXREC*10)
 @rhi:   .byte >SPRREC, >(SPRREC+MAXREC*10)
 
-; render everything queued for the current back buffer and request flip
-        .segment "ENGCODE"          ; bank 7, with the game loop
-render_frame:
-        jsr wait_flip               ; the previous frame's flip must land before this
-                                    ; buffer is touched
-        ; ---- the bar first.  It is single buffered and drawn where it is displayed,
-        ; so it has to be finished before the CRTC reaches it: T starts QROWS-QVSYNC
-        ; rows after the vsync wait_flip just returned from (32 lines on the Master,
-        ; 64 on the Model B).  Only digits: the template comes with the game's image (the
-        ; BAR file) and nothing erases it -- the menus keep to the ring (menu_sections).
-        lda BARDIRTY
-        beq :+
-        jsr hook_hud                ; (the game's: README.md)
-  .if BHW
-        dec BARDIRTY                ; only ever set to 1: 1 -> 0
-  .else
-        stz BARDIRTY
-  .endif
-:
-        ; derive char window
-        lda wx+1
-        lsr
-        sta wcx+1
-        lda wx
-        ror
-        sta wcx
-        lda wy
-        and #3
-        asl
-        sta wfine
-        lda wy+1                    ; wcy = wy >> 2, a full 16-bit shift: the tall maps
-        lsr                         ; go past wy = 512, where shifting the high byte
-        sta wcy                     ; once only loses 128 rows
-        lda wy
-        ror
-        lsr wcy
-        ror
-        sta wcy
-        jsr render_core
-        stz NSPR                    ; A dead: build_sections starts ldx/lda
-        jsr build_sections
-        ; hand over to ISR
-        lda curbuf
-  .if .not BHW
-        sta NEXTBUF
-  .endif
-        beq :+
-        lda #48
-:       sta NEXTSECT
-        lda #1
-        sta flipreq
-render_done:                        ; (label for the phase timer harness)
-        ; no wait here: the next logic step runs while the flip is pending and
-        ; the next render_frame waits for it before touching the buffer
-        eor curbuf                  ; A = 1: curbuf ^ 1
-        sta curbuf
-        rts
-
-; spin until any pending flip has been taken by the vsync ISR
-wait_flip:
-        lda flipreq
-        bne wait_flip
-        rts
 
         .segment "KRNCODE"
 ; menu_sections: the menus' frame.  build_sections, then buffer 0's first section (the
@@ -2827,8 +2600,8 @@ menu_sections:
 ; step programs a standard 39-row frame instead of the bar, with the vsync on the
 ; row the chain puts it, so the sync never moves, and turns the T1 interrupt off.
 ; The palette is black throughout, so what the frame shows does not matter.
-; load_end lets the next vsync re-arm the chain: its re-phase writes R4 = curR7 +
-; QROWS-1-QVSYNC, which with curR7 = LDR7 is the standard frame's own total, and the
+; The load's end (ldprog.s ld_resume) lets the next vsync re-arm the chain: its
+; re-phase writes R4 = curR7 + QROWS-1-QVSYNC, which with curR7 = LDR7 is the standard frame's own total, and the
 ; bar step at that frame's end takes the display back as if it had never stopped.
 LDR4 = BARROWS + VISROWS + QROWS - 1      ; 38: a standard 312-line frame
 LDR7 = BARROWS + VISROWS + QVSYNC         ; the row the chain's vsync is on
@@ -2842,12 +2615,6 @@ load_begin:
 :       lda LOADREQ
         cmp #2
         bne :-
-        rts
-load_end:                           ; (with interrupts off: disc.s)
-        lda #3                      ; resume asked: the next real vsync arms T1, turns
-        sta LOADREQ                 ; its interrupt on and clears this (curR7 holds
-        lda #$42                    ; LDR7 from the switch); until then a T1 flag is
-        sta VIA_IFR                 ; stale.  A vsync flag raised meanwhile is stale too
         rts
 
         .segment "ENGCODE"          ; bank 7 drives the frame and keeps the records; bank
@@ -3325,7 +3092,7 @@ irq_handler:
         sta CRTC_IDX
         lda #LDR7
         sta CRTC_DAT
-        sta curR7                   ; load_end's first vsync re-phases to LDR4 from this
+        sta curR7                   ; the resume's first vsync re-phases to LDR4 from this
         lda #$40
         sta VIA_IER                 ; T1 off: the chain is stopped
         lda VIA_T1CL
@@ -3803,6 +3570,235 @@ sext:   and #$80
         beq :+
         lda #$FF
 :       sta tmp3
+        rts
+
+; draw all listed sprites into current buffer (skipping unchanged kept ones)
+        .segment "ENGCODE"          ; bank 7, with the prologue and the records
+        PAD ::PADB_SP, ::PADM_SP
+draw_sprites:
+        ; Two passes.  A box star is an opaque rectangle with its background baked in,
+        ; so it has to go down before anything that shares its space -- drawn in list
+        ; order it would paint that background over whatever was standing there.
+        lda #1
+        sta dpass
+@pass:  stz spi                     ; A dead: lda recp next
+        lda recp
+        sta rp
+        lda recp+1
+        sta rp+1
+@l:     ldx spi                     ; X = the sprite's number: every field is ,x
+        cpx NSPR
+        bcs @endpass
+        ldy SPR_ID,x                ; Y = id for both compares
+        cpy #BOXID0
+        lda dpass
+        adc #$FF
+        beq @next
+        cpy #BOXID0+BOXN            ; a box star the logic says nothing can disturb, and
+        bcc @write                  ; the same frame already in the same place: if
+        lda KEEP,x                  ; nothing has been repainted under it, its screen pixels
+                                    ; are still right, so leave it alone
+        cmp #2
+        bne @write
+        ldy #9                      ; and it was not cut off at a window edge, so all
+        lda (rp),y                  ; of it is on screen and still intact
+        bpl @next
+@write: ldy #1
+        lda SPR_XL,x
+        sta spx
+        sta (rp),y
+        iny
+        lda SPR_XH,x
+        sta spx+1
+        sta (rp),y
+        iny
+        lda SPR_YL,x
+        sta spy
+        sta (rp),y
+        iny
+        lda SPR_YH,x
+        sta spy+1
+        sta (rp),y
+        ldy #8
+        lda #0
+        sta (rp),y
+        lda SPR_ID,x
+        staz rp                     ; sta (rp) - offset 0 needs no index
+        jsr drawsprite
+@next:  lda rp
+        clc
+        adc #10
+        sta rp
+        bcs @rpc                    ; (the carry out of line, after the rts)
+@rpb:   inc spi
+        bne @l                      ; spi <= NSPR: never wraps to 0
+@endpass:
+        dec dpass
+        bpl @pass                   ; (in range on both machines)
+        ldx curbuf
+        lda NSPR
+        sta RECCNT,x
+        rts
+@rpc:   inc rp+1
+        jmp @rpb
+
+; erase_old: redraw tiles under old records that are not kept (after draw_sprites
+; only for where the two loops fall: pads.inc)
+        .segment "ENGCODE"          ; bank 7, with the records (the rects it redraws
+        PAD ::PADB_EO, ::PADM_EO
+erase_old:                          ; go to bank 6's drawrect_clip through callbank)
+        ldx curbuf
+        lda RECCNT,x
+        beq @done
+        sta lcnt
+        stz lidx
+        lda recp
+        sta rp
+        lda recp+1
+        sta rp+1
+@l:     ldx lidx
+        cpx NSPR
+        bcs @erase
+        lda KEEP,x
+        bne @next
+@erase: ldy #8
+        lda (rp),y
+        beq @next
+        sta rc_w
+        iny
+        lda (rp),y
+        and #$7F
+        sta rc_h
+        ldy #5
+        lda (rp),y
+        sta rc_x
+        iny
+        lda (rp),y
+        sta rc_x+1
+        iny
+        lda (rp),y
+        sta rc_y
+        bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is drawrect_clip
+        jsr callbank
+@next:  lda rp
+        clc
+        adc #10
+        sta rp
+        bcc :+
+        inc rp+1
+:       inc lidx
+        dec lcnt
+        bne @l
+@done:  rts
+
+; ============================================================================
+; blank_below: the 6845 always displays the first scanline of a frame, whatever R6
+; says, so the blanking section's row 0 line 0 -- the ring slot below the playfield --
+; is one line more under the picture.  Elsewhere it is the next map line; parked on
+; the map's bottom row it is whatever that never-drawn slot last held.  So when the
+; window sits on the bottom row, blank the slot, once per buffer per arrival.
+; ============================================================================
+        .segment "ENGCODE"          ; bank 7, beside render_core
+blank_below:
+        lda wfine
+        bne @no
+        lda wy
+        cmp maxwy
+        bne @no
+        lda wy+1
+        cmp maxwy+1
+        bne @no
+        ldx curbuf
+        lda BUF_BOTOK,x
+        bne @no
+        inc BUF_BOTOK,x
+        lda wcx                     ; the row below the playfield: map char row
+        sta w16                     ; wcy + VISROWS at the window's column -- rows
+        lda wcx+1                   ; are not slot aligned, so this is a run of 80
+        sta w16+1                   ; chars that may straddle the ring end
+        lda wcy
+        adc #VISROWS-1              ; C = 1 from cmp maxwy+1 (equal)
+        jsr ringaddr7               ; sp = its ring address
+        ldx #ROWCHARS
+@char:  lda #0
+        ldy #7
+        .repeat 7
+        sta (sp),y
+        dey
+        .endrepeat
+        sta (sp),y
+        spnext @fold                ; 8 on, folding at the ring end (out of line)
+@fback: dex
+        bne @char
+        SAMEPAGE *, @char
+@no:    rts
+@fold:  spcold @fback
+        PAD ::PADB_BB, 0            ; (the Model B's bank 7 code ends at the kernel: this
+                                    ;  pad places what is above it -- pads.inc)
+
+
+; render everything queued for the current back buffer and request flip
+        .segment "ENGCODE"          ; bank 7, with the game loop
+render_frame:
+        jsr wait_flip               ; the previous frame's flip must land before this
+                                    ; buffer is touched
+        ; ---- the bar first.  It is single buffered and drawn where it is displayed,
+        ; so it has to be finished before the CRTC reaches it: T starts QROWS-QVSYNC
+        ; rows after the vsync wait_flip just returned from (32 lines on the Master,
+        ; 64 on the Model B).  Only digits: the template comes with the game's image (the
+        ; BAR file) and nothing erases it -- the menus keep to the ring (menu_sections).
+        lda BARDIRTY
+        beq :+
+        jsr hook_hud                ; (the game's: README.md)
+  .if BHW
+        dec BARDIRTY                ; only ever set to 1: 1 -> 0
+  .else
+        stz BARDIRTY
+  .endif
+:
+        ; derive char window
+        lda wx+1
+        lsr
+        sta wcx+1
+        lda wx
+        ror
+        sta wcx
+        lda wy
+        and #3
+        asl
+        sta wfine
+        lda wy+1                    ; wcy = wy >> 2, a full 16-bit shift: the tall maps
+        lsr                         ; go past wy = 512, where shifting the high byte
+        sta wcy                     ; once only loses 128 rows
+        lda wy
+        ror
+        lsr wcy
+        ror
+        sta wcy
+        jsr render_core
+        stz NSPR                    ; A dead: build_sections starts ldx/lda
+        jsr build_sections
+        ; hand over to ISR
+        lda curbuf
+  .if .not BHW
+        sta NEXTBUF
+  .endif
+        beq :+
+        lda #48
+:       sta NEXTSECT
+        lda #1
+        sta flipreq
+render_done:                        ; (label for the phase timer harness)
+        ; no wait here: the next logic step runs while the flip is pending and
+        ; the next render_frame waits for it before touching the buffer
+        eor curbuf                  ; A = 1: curbuf ^ 1
+        sta curbuf
+        rts
+
+; spin until any pending flip has been taken by the vsync ISR
+wait_flip:
+        lda flipreq
+        bne wait_flip
         rts
 
 ; ============================================================================

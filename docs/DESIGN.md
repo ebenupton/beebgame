@@ -230,14 +230,14 @@ while the other is in: what both need is the kernel's.
 | ENGBSS, page aligned: the engine's variables | after GAMEBSS | same |
 | free | | |
 | GAMEDATA, GAMECODE: the game's tables and code (the file GAME starts here) | (the game's size) | |
-| ENGCODE: the engine's bank 7 code, ending at the kernel | $B0DA-$B7B8 | $B0DA-$B6B6 |
+| ENGCODE: the engine's bank 7 code, ending at the kernel | $B12A-$B806 | $B12A-$B704 |
 | **or the menus' image** (MENU) | | |
 | MUSCODE: the engine's music player | $8000-$809C | $8000-$8098 |
 | MNUCODE, MNUDATA, MNUBSS: the game's menus | from $809D | same |
 | **the kernel**, resident | | |
-| KRNDATA: the row multiples (kept inside a page) | $B7B9-$B7F8 | same |
-| KRNCODE | $B7F9-$BE53 | $B7F9-$BB4F |
-| KRNBSS: the disc driver's and the swap's variables | $BE54-$BE62 | same |
+| KRNDATA: the row multiples (kept inside a page) | $B807-$B846 | same |
+| KRNCODE | $B847-$BE55 | $B847-$BB51 |
+| KRNBSS: the disc driver's and the swap's variables | $BE56-$BE62 | same |
 | the driver slot: the 8271's driver or the 1770's, as the boot loader found | $BE63-$BEFF | same |
 | KRNHW (the Model B): SECTAB, BUF_SEC0, BUF_SEC0T1, LOADREQ, page aligned | $BF00-$BF6B | -- |
 
@@ -249,11 +249,12 @@ size puts it, whatever the game's is (the Master's, pinned to the Model B's star
 runs on from there and falls short).  ENGCODE is `render_frame`
 and `render_core`, the sprite prologue (`drawsprite`), `draw_sprites`,
 `match_sprites`, `erase_old`, `copy_partial`, `blank_below`, `mark_dirty`,
-`draw_dirty`, `lvreset`, and on the Model B `mirror_copy`.  ENGBSS is SPRMASK and
+`draw_dirty`, `lvreset`, and on the Model B `mirror_copy` -- in whatever order keeps
+their hot loops in a page (below: the pads).  ENGBSS is SPRMASK and
 SPR_TABLE (the level's sprite directory: an entry of 8 bytes for each of the game's
 BOXID0 + BOXN sprite ids), the sprite records (SPRREC, RECCNT, KEEP) and the dirty
 lists.  KRNCODE is `build_sections`, `menu_sections`, `calc_ring`, `ringaddr7`,
-`load_begin`/`load_end`, the palette, `music_stop`, `read_sectors` and the swap, and
+`load_begin`, the palette, `music_stop`, `read_sectors` and the loads' way in (`ld_go`), and
 on the Model B the interrupt's work (`isr_body`, `scan_keys`, `sound_tick`: the
 Master's handler has them in main RAM).  A game may place its own resident code and
 data in KRNCODE with `PLACEH "CODE", "KRNCODE"` (its sound effects must be there:
@@ -492,7 +493,7 @@ The switch is made in the interrupt handler's bar step, so it happens at the fra
 boundary however long the handler's other work runs (a version that waited for a
 vsync and polled for the bar's T1 switched one section late when the vsync's work ran
 past that T1, and made a short frame).  While stopped the vsync still counts, scans
-the keys and plays the sound.  `load_end` sets 3; the next vsync turns T1's interrupt
+the keys and plays the sound.  LDPROG's `ld_resume` sets 3 at the load's end; the next vsync turns T1's interrupt
 on again and its re-phase, with curR7 = LDR7, is exactly the standard frame's total,
 so the bar step at that frame's end takes the display back as if it had never stopped.
 The palette is black throughout.
@@ -737,9 +738,10 @@ a patch in a piece that may not be copied would be lost).
 
 ### A level load
 
-The game calls `load_level_b` (X = the level): `music_stop`, `load_begin`,
-interrupts off, the driver's NMI stub to $0D00, LDPROG read to $0E00 and run (`lv_load`, X =
-the level).  LDPROG runs in main RAM, where it can page any bank; it reads the socket
+The game calls `load_level_b` (X = the level): the kernel's `ld_go` does
+`music_stop`, `load_begin`, interrupts off, the driver's NMI stub to $0D00, and LDPROG
+read to $0E00 and run (`ld_entry`, X = the level).  Everything after that is
+LDPROG's: the kernel holds only what must run before LDPROG is in place.  LDPROG runs in main RAM, where it can page any bank; it reads the socket
 of every bank from PBANK and sets the write bank by PBOARD by hand.
 
 1. The level file to STAGE_LVL.  It ends with the Master's LV_PAGE0 in two whole
@@ -760,21 +762,24 @@ of every bank from PBANK and sets the write bank by PBOARD by hand.
    no table is built at load.
 7. FLATTAB to bank 6.  On the Master, LV_PAGE0 to $0400 and both screens cleared.
 
-Back in bank 7, `load_end`, interrupts on, and the game goes on from the header (the
+Then LDPROG's `ld_resume` (the chain's restart asked for, interrupts on) returns to the
+game, which goes on from the header (the
 map's size and the window's limits, which it sets for the engine; `lvreset`).
 
 ### Bank 7's images
 
-`image_load` (LDPROG+3, X = IMG_GAME or IMG_MENU) is the same machinery: the image
-staged and copied to its place, then its bank numbers and write-bank stores patched
-as the boot loader patches BANKS.  The game's image brings more: its variables
+`go_title`, `go_game` and `go_menu` go through the same `ld_go` with X an image load
+(defs.inc LDOP_), and LDPROG's `image_load` is the same machinery as a level's: the
+image staged and copied to its place, then its bank numbers and write-bank stores
+patched as the boot loader patches BANKS.  The game's image brings more: its variables
 (GAMEBSS) are zeroed, so a game starts the same whatever the menus left there, and the
-bar template is read to its place.  The kernel's `go_game` (the menus' way out) loads
-the game's image, calls `hook_image` and jumps to `hook_play` with the stack reset and
-the disc still open (`ld_open`): the first level's load goes straight on without
-parking the chain and reading LDPROG again.  `go_menu` (the game's way out, with A for
-the menus) loads the menus' image and jumps to `hook_over`; `go_title` (start-up)
-loads it and jumps to `hook_title`.
+bar template is read to its place.  Then LDPROG goes on to the game's hook (their
+addresses come from the game's debug info: `build.sh`).  For `go_game` (the menus'
+way out) it calls `hook_image` and jumps to `hook_play` (through the kernel's
+`game_in`, a label for the test harness) with the stack reset and the disc still open
+(`ld_open`): the first level's load goes straight on without parking the chain and
+reading LDPROG again.  For `go_menu` (the game's way out, with A for the menus) it
+resumes the chain and jumps to `hook_over`; for `go_title` (start-up), `hook_title`.
 
 ## The level files
 
