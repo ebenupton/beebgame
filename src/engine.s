@@ -127,8 +127,30 @@ CRTCB_B   = CRTCBASE              ; main and shadow (ACCCON D picks)
   .endif
 WINPX     = ROWCHARS*2            ; window width in game pixels
 VISLINES  = VISROWS*8
-MAXREC    = MAXSPRDEF             ; (assets.inc)
+  .ifndef MAXSPRDEF                 ; the sprite slots: the build's MAXSPR (build.sh), or the
+MAXSPRDEF = 28                      ;  game's assets.inc (Cleo sizes it from its levels), else 28
+  .endif
+MAXREC    = MAXSPRDEF
 MAXSPR    = MAXSPRDEF
+; a sprite record (SPRREC, a buffer's for each sprite it drew): id, x (2), y (2), then
+; the screen rectangle erase_old redraws -- its map char column, char row, width in
+; chars (0: nothing drawn) and height in char rows, bit 7 set when it was cut at a
+; window edge.  TIGHTBSS packs the column's high bits (a map is 1024 chars wide at
+; most: 2 bits) into the height's byte, bits 5-6 (the height is BUFROWS at most)
+  .if TIGHTBSS
+RECSZ     = 9
+REC_CX    = 5                       ; the column's low byte
+REC_CY    = 6
+REC_W     = 7
+REC_H     = 8                       ; height | column high << 5 | clipped << 7
+        .assert BUFROWS < 32, error, "TIGHTBSS: a record's height is 5 bits"
+  .else
+RECSZ     = 10
+REC_CX    = 5                       ; (2 bytes)
+REC_CY    = 7
+REC_W     = 8
+REC_H     = 9                       ; height | clipped << 7
+  .endif
 
 DIRTYMAX = 20                     ; dirty tiles a buffer can queue: a switch marks 2 x its
                                   ; height at once, 18 for the tallest (level 7's main map);
@@ -301,7 +323,7 @@ PBANK:     .res 4                   ; the physical bank of each of banks 4..7 (t
 PBOARD:    .res 1                   ; and the board: BOARD_STD / WATFORD / SOLIDISK (defs.inc),
                                     ; right after PBANK (boot copies the five together)
         .segment "ENGBSS"           ; bank 7: the sprite prologue's records
-SPRREC:    .res 2*MAXREC*10
+SPRREC:    .res 2*MAXREC*RECSZ
 RECCNT:    .res 2
 KEEP:      .res MAXREC
     .if BHW
@@ -1182,7 +1204,7 @@ match_sprites:
         sta KEEP,x                  ; same screen pixels in the same place: skip the erase
 @next:  lda rp
         clc
-        adc #10
+        adc #RECSZ
         sta rp
         bcc :+
         inc rp+1
@@ -1598,18 +1620,22 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         sta sp_r0                   ; sta sets no flags: Z still from the third lsr
 @nopart:
         ; ---- record rect in current sprite record
-        ldy #5
+        ldy #REC_CX
         lda wcx
         clc
         adc sp_c0
         sta w16                     ; @rows needs this same sum: keep it, don't rebuild it
         sta (rp),y
+  .if .not TIGHTBSS
         iny
+  .endif
         lda wcx+1
         adc #0
         sta w16+1
+  .if .not TIGHTBSS
         sta (rp),y
-        iny
+  .endif
+        iny                         ; REC_CY
         lda wcy                     ; C = 0: wcx+1 <= $7F, so the adc #0 above cannot carry
         adc sp_r0
         sta (rp),y
@@ -1627,10 +1653,20 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         inca
   .endif
         sta (rp),y
-        iny
+        iny                         ; REC_H
         lda sp_r1
         sbc sp_r0                   ; C still set by the width sbc above (sp_c1 >= sp_c0)
         adc #0                      ; and set by this one (sp_r1 >= sp_r0): + 1
+  .if TIGHTBSS
+        sta tmp3                    ; (free here: mtab is set in @rows)
+        lda w16+1                   ; the column's high bits (< 4) to bits 5-6
+        asl
+        asl
+        asl
+        asl
+        asl
+        ora tmp3
+  .endif
         ldx spclip
         beq :+                      ; may be visible next time and it has to be redrawn
         ora #$80
@@ -2901,8 +2937,8 @@ select_backbuf:
   .else
         rts
   .endif
-@rlo:   .byte <SPRREC, <(SPRREC+MAXREC*10)
-@rhi:   .byte >SPRREC, >(SPRREC+MAXREC*10)
+@rlo:   .byte <SPRREC, <(SPRREC+MAXREC*RECSZ)
+@rhi:   .byte >SPRREC, >(SPRREC+MAXREC*RECSZ)
 
 
         .segment "KRNCODE"
@@ -3940,7 +3976,7 @@ draw_sprites:
                                     ; are still right, so leave it alone
         cmp #2
         bne @write
-        ldy #9                      ; and it was not cut off at a window edge, so all
+        ldy #REC_H                  ; and it was not cut off at a window edge, so all
         lda (rp),y                  ; of it is on screen and still intact
         bpl @next
 @write: ldy #1
@@ -3970,7 +4006,7 @@ draw_sprites:
         lda SPR_YH,x
         sta spy+1
         sta (rp),y
-        ldy #8
+        ldy #REC_W
         lda #0
         sta (rp),y
         lda SPR_ID,x
@@ -3978,7 +4014,7 @@ draw_sprites:
         jsr drawsprite
 @next:  lda rp
         clc
-        adc #10
+        adc #RECSZ
         sta rp
         bcs @rpc                    ; (the carry out of line, after the rts)
 @rpb:   inc spi
@@ -4012,28 +4048,46 @@ erase_old:                          ; go to bank 6's drawrect_clip through callb
         bcs @erase
         lda KEEP,x
         bne @next
-@erase: ldy #8
+@erase: ldy #REC_W
         lda (rp),y
         beq @next
         sta rc_w
-        iny
+        iny                         ; REC_H
+  .if TIGHTBSS
+        lda (rp),y
+        and #$1F
+        sta rc_h
+        lda (rp),y                  ; bits 5-6: the column's high bits
+        lsr
+        lsr
+        lsr
+        lsr
+        lsr
+        and #3
+        sta rc_x+1
+        ldy #REC_CX
+        lda (rp),y
+        sta rc_x
+        iny                         ; REC_CY
+  .else
         lda (rp),y
         and #$7F
         sta rc_h
-        ldy #5
+        ldy #REC_CX
         lda (rp),y
         sta rc_x
         iny
         lda (rp),y
         sta rc_x+1
-        iny
+        iny                         ; REC_CY
+  .endif
         lda (rp),y
         sta rc_y
         bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is drawrect_clip
         jsr callbank
 @next:  lda rp
         clc
-        adc #10
+        adc #RECSZ
         sta rp
         bcc :+
         inc rp+1

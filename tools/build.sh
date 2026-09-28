@@ -32,6 +32,11 @@
 #                for drawrect's map row); the Master alone
 #   DRAWFLAGS=1  the sprite list carries draw flags in the high bits of its x (bit 7:
 #                mirror the image), so one image is drawn either way round
+#   TIGHTBSS=1   the engine's bank 7 variables packed: the sprite records 9 bytes (the
+#                rectangle's column high bits in the height's byte) and ENGBSS not
+#                page aligned (after GAMEBSS as it falls)
+#   MAXSPR=n     the sprite slots (the most sprites on screen at once), in place of
+#                the game's assets.inc MAXSPRDEF; 28 when neither sets it
 #   SPRGEOM=1    the sprite directory split (NIBSPR only): the level carries the images'
 #                addresses alone (DIR_LO, DIR_HI), the game the geometry every level
 #                shares, deduplicated (SPRG_IX by id; SPRG_W, SPRG_RX, SPRG_RY, SPRG_LN
@@ -46,11 +51,12 @@ mkdir -p build
 if [ "$TILEMIRROR" = 1 ]; then MIRDEF="-D TILEMIRROR=1"; else TILEMIRROR=0; MIRDEF=""; fi
 export TILEMIRROR
 # the options, as the assembler's flags (cpu.inc defaults each to 0)
-for o in MASTERONLY NIBSPR GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP SPRGEOM; do
+for o in MASTERONLY NIBSPR GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP SPRGEOM TIGHTBSS; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then MIRDEF="$MIRDEF -D $o=1"; else eval "$o=0"; fi
     export $o
 done
+[ -z "$MAXSPR" ] || MIRDEF="$MIRDEF -D MAXSPRDEF=$MAXSPR"
 [ "$GAMEHAZEL" = 0 ] || [ "$MASTERONLY" = 1 ] || { echo "GAMEHAZEL=1 needs MASTERONLY=1: the Model B has no HAZEL"; exit 1; }
 if [ "$MASTERONLY" = 1 ]; then TARGETS=master; else TARGETS="modelb master"; fi
 settarget() {                       # $1: modelb or master
@@ -69,6 +75,7 @@ for t in $TARGETS; do
     [ -n "$SKIP_ASSETS" ] || sh -c "$GAME_ASSETS"
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
     [ "$NIBSPR" = 1 ] && sed -i.bak 's#start = \$BB00, size = \$0500#start = $BC00, size = $0400#; s#B4X:     start = \$8000, size = \$0400#B4X:     start = $8000, size = $0600#; s#B5X:     start = \$8000, size = \$0300#B5X:     start = $8000, size = $0600#' $BD/game.cfg   # (the sprite banks: the expansion tables, no mask pages; both blitters in each, larger)
+    [ "$TIGHTBSS" = 1 ] && sed -i.bak '/^ *ENGBSS:/s#, align = \$100##' $BD/game.cfg   # (ENGBSS where GAMEBSS ends)
     [ "$TILEMIRROR" = 1 ] && sed -i.bak 's#start = \$8000, size = \$0700#start = $8000, size = $0800#; s#start = \$8000, size = \$0300#start = $8000, size = $0340#' $BD/game.cfg
     for f in BANKS MENU GAME IMG7 LDPROG; do [ -f $BD/$f ] || : > $BD/$f; done
     python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc     # (the loader's: one definition)

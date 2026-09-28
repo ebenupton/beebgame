@@ -57,6 +57,9 @@ TALLMAP = 0                         ; maps taller than 128 tiles (the Master alo
         .ifndef DRAWFLAGS
 DRAWFLAGS = 0                       ; draw flags in the sprite list's x high byte
         .endif
+        .ifndef TIGHTBSS
+TIGHTBSS = 0                        ; 9-byte sprite records, ENGBSS not page aligned
+        .endif
         .ifndef SPRGEOM
 SPRGEOM = 0                         ; the directory split: the level's addresses, the game's geometry
         .endif

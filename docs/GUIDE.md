@@ -491,7 +491,7 @@ Label `frame_top` exactly as Cleo does: the test harness runs frame to frame by 
 - **The sprites.**  Empty the list (`stz NSPR`), then for each sprite set `spx`, `spy`
   (game pixels, map coordinates: the sprite's reference point; across, the sprite
   lands on the even game pixel at or left of it) and `lda #id / jsr addsprite`.  At most
-  `MAXSPR` a frame (the engine's name for your assets.inc's `MAXSPRDEF`: Step 8).  `render_frame` erases what moved,
+  `MAXSPR` a frame (your assets.inc's `MAXSPRDEF`, Step 8, or the build's `MAXSPR`, Step 11; 28 when neither sets it).  `render_frame` erases what moved,
   keeps what did not and draws the rest.
 - **The map.**  Read and write it through `maprow` (A = a tile row: `mapptr` = the row),
   `mapbyte` and `mapput` (Y = the column); after a change, `lda #tx / ldx #ty / jsr
@@ -575,7 +575,7 @@ checks): build them from the Model B's layout.
 | `FLAT0`, `NFLAT` | the fill ids: NFLAT flat tiles from FLAT0, then the two solids at 254 and 255, so FLAT0 = 254 - NFLAT (asserted) |
 | `MAXMIR` | mirrored tiles at most (TILEMIRROR only; else 0) |
 | `BOXID0`, `BOXN` | the first box id, and how many boxes (*Sprite ids, and boxes*) |
-| `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once |
+| `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once (optional: 28 if left out; or set `MAXSPR` in your build.sh instead, Step 11) |
 | `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | the resident and staged sprites (below) |
 | `SPR5_MIRROR`, `SPR4_COPY` | 0: nothing mirrored in bank 5, nothing opaque in bank 4 (keep them 0: bank 5 has no SWAPTAB to mirror with, and bank 4's copy blitter is untested.  With NIBSPR both banks mirror whatever these say) |
 | `MAP5` | the map's place in bank 5 ($9C00) |
@@ -743,7 +743,7 @@ each one the assembler sees too (`cpu.inc`).  Cleo sets none; with none set a ga
 disc is exactly what it was.  Commando sets them all:
 
 ```sh
-export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1 SPRGEOM=1
+export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1 SPRGEOM=1 TIGHTBSS=1 MAXSPR=24
 ```
 
 | Option | What it does | What the game does for it |
@@ -754,6 +754,8 @@ export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TA
 | `GAMESOUND` | the vsync calls the game's `hook_sound` instead of the engine's sound effects; the tune is still the engine's | defines `hook_sound`, resident (HAZEL, say): it runs in the interrupt, X and Y saved, and may use only its own zero page |
 | `DRAWFLAGS` | bit 7 of a sprite's x high byte (`spx+1` at `addsprite`) mirrors it, so one image is drawn either way round | sets the bit; map x stays below 32768 |
 | `TALLMAP` | maps up to 256 tiles tall (the window's character row keeps its high bits for the tile blitter's map row).  The Master alone: its ring is 32 rows | nothing |
+| `TIGHTBSS` | the engine's bank 7 variables packed: a sprite record is 9 bytes (the rectangle's column high bits share the height's byte: a map is at most 1,024 characters wide), and ENGBSS follows GAMEBSS where it ends instead of at the next page | nothing |
+| `MAXSPR=n` | the sprite slots, the most sprites on screen at once (the list, and a record each a buffer): n in place of assets.inc's `MAXSPRDEF` (set one or the other); 28 when neither is set | adds at most n sprites a frame (Commando: its sort list's 24) |
 | `SPRGEOM` | the sprite directory split (NIBSPR only): the level file carries each id's image address alone, 2 bytes an id, and the geometry, the same in every level, is the game's (below) | writes the level's directory with `levelfile.directory_split`, and assembles the geometry tables `SPRG_IX`, `SPRG_W`, `SPRG_RX`, `SPRG_RY`, `SPRG_LN` in bank 7 (its GAMEDATA) or HAZEL |
 
 **4-bit sprites (NIBSPR).**  An image is stored as a byte a game-pixel row for each
@@ -817,7 +819,7 @@ Nothing else in main RAM is the game's.
 - **Bank 7:** the game's image is 14,080 bytes, $8000-$B6FF.  Take off the level's
   tables and the page alignment after them (768: GAMEBSS starts at $8300), the
   engine's code (ENGCODE: about 1.8K on the Model B, 1.4K on the Master) and its
-  variables (ENGBSS: 82 + 21 x MAXSPR + 8 x (BOXID0 + BOXN) + 2 x BOXID0 bytes, the
+  variables (ENGBSS: 82 + 21 x MAXSPR (19 with TIGHTBSS) + 8 x (BOXID0 + BOXN) + 2 x BOXID0 bytes, the
   last term none with NIBSPR, and the directory's 2 x BOXID0 in place of the 8 x with
   SPRGEOM -- 1,736 for Cleo, 2,646 for Commando): what is left,
   about 9.9K for Cleo, is yours for code, data and variables.  The link says when it

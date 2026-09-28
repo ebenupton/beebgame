@@ -877,6 +877,13 @@ for byte the same).  What each changes:
   change to `match_sprites`), takes bit 7 into `sp_dfl` (a zero-page byte) and gives
   the prologue x without it; `drawsprite` XORs `sp_dfl` into the directory's flags.
 - **TALLMAP.**  `wcyh` (zero page) and `drawrect`'s full map row: *The display*.
+- **TIGHTBSS.**  `RECSZ` 9: the record's offsets are `REC_CX` (the column's low
+  byte), `REC_CY`, `REC_W`, `REC_H` = height | column high bits << 5 | clipped << 7
+  (engine.s; BUFROWS < 32 asserted).  The prologue packs them (`tmp3` as scratch: mtab
+  is set later), `erase_old` unpacks them.  build.sh drops ENGBSS's `align = $100`
+  from the linked cfg.
+- **MAXSPR.**  build.sh passes `-D MAXSPRDEF=n`; engine.s defaults MAXSPRDEF to 28
+  when neither the build nor assets.inc sets it.
 - **SPRGEOM.**  SPR_TABLE is 2 x BOXID0 bytes, `DIR_LO` then `DIR_HI` (banks.s);
   `ldprog.s` copies that many (`DIRLEN`).  The prologue takes the id in X: the
   address from DIR_LO/DIR_HI (high byte 0: return; bit 7 clear: bank 5, the bit put
