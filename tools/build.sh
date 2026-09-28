@@ -62,7 +62,7 @@ for t in $TARGETS; do
     mkdir -p $BD
     [ -n "$SKIP_ASSETS" ] || sh -c "$GAME_ASSETS"
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
-    [ "$NIBSPR" = 1 ] && sed -i.bak 's#start = \$BB00, size = \$0500#start = $BC00, size = $0400#' $BD/game.cfg   # (bank 4's tables: the expansion, no mask pages)
+    [ "$NIBSPR" = 1 ] && sed -i.bak 's#start = \$BB00, size = \$0500#start = $BC00, size = $0400#; s#B4X:     start = \$8000, size = \$0400#B4X:     start = $8000, size = $0600#; s#B5X:     start = \$8000, size = \$0300#B5X:     start = $8000, size = $0600#' $BD/game.cfg   # (the sprite banks: the expansion tables, no mask pages; both blitters in each, larger)
     [ "$TILEMIRROR" = 1 ] && sed -i.bak 's#start = \$8000, size = \$0700#start = $8000, size = $0800#; s#start = \$8000, size = \$0300#start = $8000, size = $0340#' $BD/game.cfg
     for f in BANKS MENU GAME IMG7 LDPROG; do [ -f $BD/$f ] || : > $BD/$f; done
     python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc     # (the loader's: one definition)
@@ -230,7 +230,7 @@ for l in open(BD + '/labels.txt'):
     p = l.split()
     if len(p) >= 3 and p[0] == 'al':
         lab[p[2].lstrip('.')] = int(p[1], 16)
-pieces = [(4, 0x8000, 'b4x.bin'), (4, 0xBB00, 'b4t.bin'),
+pieces = [(4, 0x8000, 'b4x.bin'), (4, 0xBC00 if os.environ.get('NIBSPR') == '1' else 0xBB00, 'b4t.bin'),   # (NIBSPR: its tables from $BC00)
           (5, 0x8000, 'b5x.bin'), (5, 0xBC00, 'b5t.bin'),
           (6, 0x8000, 'b6x.bin'),                                 # (B6X in the cfg)
           (7, 0x7000, 'boot.bin'),        # main RAM (BOOTRAM): start-up and the low-RAM image

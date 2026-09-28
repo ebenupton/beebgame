@@ -2,7 +2,13 @@
 """Convert a MIDI file into a 50Hz 3-voice note stream for the engine's SN76489 music
 player (engine.s music_tick: the game puts the stream at MUSIC_ADDR).
 
-   python3 beebgame/tools/midi2snd.py <in.mid> <out>
+   python3 beebgame/tools/midi2snd.py <in.mid> <out> [<voices>]
+
+<voices> says where each of the three voices takes its note from, a frame at a time:
+"CHANNELS:RANK" three times, comma-separated channels, joined by "/"; RANK is max, min,
+max2 (the second highest) or min2 (the second lowest) of the notes sounding on those
+MIDI channels.  The default, Cleo's tune, is "1:max/0:min/0:min2" (the melody the
+highest note of channel 1, the backing the two lowest of channel 0).
 
 Output: the period table, 72 x 2 bytes for MIDI notes 24..95; then
 records of 4 bytes: frames, note0, note1, note2 (0 = rest, else the MIDI note, which
@@ -12,6 +18,16 @@ backing (lowest two notes of any chord).
 import struct, os, sys
 
 SRC, OUT = sys.argv[1], sys.argv[2]
+VOICES = []
+for v in (sys.argv[3] if len(sys.argv) > 3 else '1:max/0:min/0:min2').split('/'):
+    chs, rank = v.split(':')
+    assert rank in ('max', 'min', 'max2', 'min2'), rank
+    VOICES.append(([int(c) for c in chs.split(',')], rank))
+assert len(VOICES) == 3, 'three voices'
+def pick(notes, rank):
+    ns = sorted(notes)
+    k = {'max': -1, 'min': 0, 'max2': -2, 'min2': 1}[rank]
+    return ns[k] if len(ns) > (k if k >= 0 else -k - 1) else 0
 
 d = open(SRC, 'rb').read()
 
@@ -58,7 +74,7 @@ events.sort(key=lambda e: (e[0], e[3]))
 last_tick = max(e[0] for e in events)
 nframes = int(last_tick / ticks_per_frame) + 1
 # per frame active notes per channel
-active = {0: set(), 1: set()}
+active = {ch: set() for ch in range(16)}
 frames = []
 ei = 0
 for f in range(nframes):
@@ -69,11 +85,7 @@ for f in range(nframes):
             active[ch].add(note)
         else:
             active[ch].discard(note)
-    mel = max(active[1]) if active[1] else 0
-    back = sorted(active[0])[:2]
-    v1 = back[0] if len(back) > 0 else 0
-    v2 = back[1] if len(back) > 1 else 0
-    frames.append((mel, v1, v2))
+    frames.append(tuple(pick(set().union(*(active[c] for c in chs)), rank) for chs, rank in VOICES))
 
 # run-length encode
 records = []

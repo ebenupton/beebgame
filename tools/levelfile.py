@@ -65,6 +65,7 @@ DIR_ENTRY = 8                   # SPR_TABLE: an entry a sprite id, BOXID0 + BOXN
                                 # game's numbers, from its assets.inc: Level.boxid0, boxn)
 STAGE_LVL_B = 0x7C00 - 0x5C00   # the Model B's level stage (without LV_PAGE0)
 STAGE_M = 0x8000 - 0x3000       # the Master's stage
+MASTERONLY = os.environ.get('MASTERONLY') == '1'   # (the build's: no Model B, no limit of its)
 PAGE0_LEN = 512
 DIR_BANK5 = 0x10                # a directory entry's flags: the data is in bank 5
 
@@ -185,7 +186,7 @@ def encode(lv):
         data += body[name]
     out = bytes(table + data)
     assert len(out) % 256 == 0
-    assert len(out) - PAGE0_LEN <= STAGE_LVL_B, ('too big for the Model B\'s stage', len(out))
+    assert len(out) - PAGE0_LEN <= STAGE_LVL_B or MASTERONLY, ('too big for the Model B\'s stage', len(out))
     assert len(out) <= STAGE_M, ('too big for the Master\'s stage', len(out))
     return out
 
@@ -229,7 +230,7 @@ def check(data, boxid0, boxn):
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     assert offs[0] == 2 * len(SECTIONS) and offs == sorted(offs), 'the section table'
     assert offs[SEC['page0']] % 256 == 0 and len(data) - offs[SEC['page0']] == PAGE0_LEN, 'LV_PAGE0'
-    assert len(data) - PAGE0_LEN <= STAGE_LVL_B and len(data) <= STAGE_M, 'too big for a stage'
+    assert (len(data) - PAGE0_LEN <= STAGE_LVL_B or MASTERONLY) and len(data) <= STAGE_M, 'too big for a stage'
     sec = decode(data, boxid0)
     f = sec['fields']
     assert len(sec['objs']) == OBJ_BYTES * f['nobj'] and f['nobj'] <= OBJ_MAX, 'the objects'
