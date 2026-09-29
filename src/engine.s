@@ -353,6 +353,7 @@ SECTAB:    .res 2*48
 SFXDUR:    .res 1
 LOADREQ:   .res 1
 dispD:     .res 1
+DSECT:     .res 1                   ; the step after the bar's: the one that switches D
 NEXTBUF:   .res 1
     .endif
         .segment "MNUBSS"           ; the menus' image: the tune's player lives there
@@ -2916,7 +2917,14 @@ sprdisp_tab: .word sprFN, sprFM, sprFN, sprFM, sprFN
 ; ============================================================================
   .if BHW
 BARLEAD = 0
+BARLATE = 0
+STEPLATE = 0
   .else
+BARLATE = 13                        ; us the Master's bar step fires later than its hold
+STEPLATE = 20                       ;  once carried it (26 cycles), and every step after
+                                    ;  the one that switches D (39: the D write and the
+                                    ;  hold): VS2T, the bar's length and entry 0's
+                                    ;  duration carry them
 BARLEAD = 10                        ; us the Master's bar step fires early, beyond the
                                     ; lead every step has, so ACCCON D can be switched in
                                     ; the blanking of the bar's last line (its handler)
@@ -2941,9 +2949,9 @@ build_sections:
         sta BUF_SEC0,x
         lda #<BARCRTC
         sta BUF_SEC0+1,x
-        lda #<(BARROWS*8*LINE-2-BARLEAD)
+        lda #<(BARROWS*8*LINE-2-BARLEAD-BARLATE)
         sta BUF_SEC0T1,x
-        lda #>(BARROWS*8*LINE-2-BARLEAD)
+        lda #>(BARROWS*8*LINE-2-BARLEAD-BARLATE)
         sta BUF_SEC0T1+1,x
         txa                         ; Z from X = curbuf*2
         beq :+
@@ -3092,7 +3100,8 @@ build_sections:
         beq @e0
         ldx #48
 @e0:    lda SECTAB+6,x
-        adc #BARLEAD                ; C = 0: the last carry-writer was @sq2's adc #8
+        adc #BARLEAD+STEPLATE       ; C = 0: the last carry-writer was @sq2's adc #8 (and
+                                    ;  the steps after the D step's fire STEPLATE later)
         sta SECTAB+6,x
         bcc @e1
         inc SECTAB+7,x
@@ -3742,15 +3751,16 @@ irq_handler:
         jmp @ldcheck                ; a load asked for, under way or ending: load_begin
 @chain: ldx SECIDX
   .if .not BHW
-        cpx DISPSECT                ; the first step is the start of the bar itself, which
-        beq @noD                    ; is only main RAM to the CRTC while D = 0: leave it
-        lda ACCCON
-        and #$FE
-        ora dispD
-        sta ACCCON
-@noD:   ldy #5                      ; ~26 cycles: the first CRTC write must follow the
-@hold:  dey                         ; restart, and the step fires ahead of it
+        cpx DSECT                   ; the step after the bar's switches D to the displayed
+        bne @noD                    ; buffer's -- before the boundary -- then holds so its
+        lda ACCCON                  ; first CRTC write follows the restart.  Every other
+        and #$FE                    ; step needs neither (D is 0 for the bar from the
+        ora dispD                   ; vsync, and already right after it): it fires later
+        sta ACCCON                  ; instead, by STEPLATE (the bar's by BARLATE), and
+        ldy #5                      ; spends nothing waiting
+@hold:  dey
         bne @hold
+@noD:
   .endif
         lda #9
         sta CRTC_IDX
@@ -3793,7 +3803,7 @@ irq_handler:
         sta CRTC_DAT
 @xit:
   .if BHW
-        rts                         ; to the stub
+        jmp irq_ret                 ; to the stub (low.s)
   .else
         ldy irq_y                   ; @exit inlined: no jmp on the chain-step path
         ldx irq_x
@@ -3809,12 +3819,7 @@ irq_handler:
         jmp @chain
 @ldsw:  ; ---- this restart is a standard frame, not the bar: see load_begin.  R9 = 7
         ; and R6 = BARROWS are the vsync's pre-arm already, and R12/R13 hold the bar.
-  .if .not BHW
-        ldy #5                      ; the same hold as the bar's, so R4 lands in the
-@ldhold: dey                        ; first scanline
-        bne @ldhold
-  .endif
-        lda #4
+        lda #4                      ; (the bar's step fires BARLATE later: no hold)
         sta CRTC_IDX
         lda #LDR4
         sta CRTC_DAT
@@ -3916,6 +3921,10 @@ irq_handler:
         sta VIA_IFR
         sty SECIDX
   .if .not BHW
+        tya                         ; the step after the bar's (DSECT: the chain step)
+        clc
+        adc #8
+        sta DSECT
         lda #1                      ; the bar is below $3000: it is only main RAM to the
         trb ACCCON                  ; CRTC while D = 0
   .endif
@@ -3925,10 +3934,11 @@ irq_handler:
         lda MUSON
         sta MUSTICK
     .if BHW
-        rts
+        jmp irq_vret                ; (the stub steps the tune)
     .endif
   .elseif BHW
-        jmp sound_tick              ; (the stub steps the tune)
+        jsr sound_tick
+        jmp irq_vret                ; (the stub steps the tune)
   .else
         jsr sound_tick
   .endif
@@ -3960,9 +3970,9 @@ irq_handler:
 ; bank too) before the body, which makes both the vsync's T1 restart and every step
 ; later -- STUBLAT ticks in all -- where the Master's handler holds instead.
   .if BHW
-STUBLAT = 18
+STUBLAT = 18 - 22                   ; (22: the stub's pagelogic inlined, jmp for jsr)
   .else
-STUBLAT = 0
+STUBLAT = -BARLATE                  ; (the bar's step fires later: no hold in it)
   .endif
 VS2T = (QROWS-QVSYNC)*8*LINE - 2*LINE - 35 - 36 - STUBLAT - 8 + 2
 

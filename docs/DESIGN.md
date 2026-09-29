@@ -451,8 +451,13 @@ R9 and R4 together decide where the new section ends: the CRTC latches end-of-fr
 the start of the scanline where row = R4 and line = R9, so for a two-line section both
 must be in place before scanline 1, 128 cycles after the restart; R6 is compared from
 scanline 1 on, so Q's R6 = 0 has the same deadline.  The chain is phased (VS2T) so the
-step fires before the restart -- the Master's handler holds about 26 cycles, the Model
-B's bank switch in the stub serves the same purpose -- and then writes R9, R4, R6, R7
+step's first CRTC write lands just after the restart.  Every cycle before that write is
+lead the phasing allows for, so none is spent waiting where it can be avoided: the
+Model B's stub pages bank 7 in inline and jumps to the body and back (`STUBLAT`);
+on the Master only the step after the bar's -- the one that switches ACCCON D to the
+displayed buffer, which must happen before its boundary -- writes D and holds about
+26 cycles, and the others fire later instead (BARLATE for the bar's, STEPLATE for the
+rest: VS2T, the bar's length and entry 0's duration carry them).  Then it writes R9, R4, R6, R7
 in that order (with R4 third it landed at about 140 cycles for a two-line P2, the
 section never ended, and both borders lit on every scroll frame).  R12/R13 go last,
 after the T1 reload and the index bookkeeping, so they land on scanline 1: written

@@ -16,22 +16,30 @@
 
 ; ---------------------------------------------------------------- interrupts
 ; The Model B's: the chain step and the vsync work are in bank 7 with their tables,
-; and this pages it in around them.  The step's timing (VS2T) allows for the ~30 cycles that
-; takes, in place of the hold loop the Master's handler has.  The title tune's
-; player is in the menus' image of bank 7: MUSON is set only while that image is in,
-; and the tune is stepped from here once a frame, bank 7 still paged -- the vsync's
-; sound_tick raises MUSTICK; the T1 steps are this same stub.
+; and this pages it in around them: pagelogic inlined and a jmp each way, because
+; every cycle before the step's first CRTC write is lead the chain's timing (VS2T's
+; STUBLAT) has to allow for, in place of the hold loop the Master's handler has.  The
+; body comes back to irq_ret from a step, to irq_vret from the vsync, which steps the
+; title tune: its player is in the menus' image of bank 7, MUSON is set only while that
+; image is in, and the vsync's sound_tick raises MUSTICK.
   .if BHW                           ; (the Master's handler is in main RAM with its
 irq_handler:                        ;  chain: engine.s)
         stx irq_x
         sty irq_y
         lda ROMSEL_CPY
         pha
-        jsr pagelogic               ; bank 7, write bank too (VS2T allows for it)
-        jsr isr_body
-        lda MUSTICK                 ; the vsync's sound_tick, while the tune plays; the
-        bne @mus                    ; T1 steps come through here too and must not count
-@nomus: pla
+        bankimm lda, BANK_LVL, 0    ; bank 7, and its write bank (pagelogic's, inline)
+        sta ROMSEL_CPY
+        sta ROMSEL
+        wrsel BANK_LVL, 0
+        jmp isr_body
+irq_vret:                           ; the vsync's way back: the tune's step, while it plays
+        lda MUSTICK
+        beq irq_ret
+        dec MUSTICK                 ; (1 -> 0: MUSON's value, which is 0 or 1)
+        jsr music_tick              ; (bank 7, and its write bank: paged above)
+irq_ret:                            ; a step's way back
+        pla
         sta ROMSEL_CPY
         sta ROMSEL
         tax                         ; the interrupted code may store next
@@ -40,9 +48,6 @@ irq_handler:                        ;  chain: engine.s)
         ldx irq_x
         lda $FC
         rti
-@mus:   dec MUSTICK                 ; (1 -> 0: MUSON's value, which is 0 or 1)
-        jsr music_tick              ; (bank 7, and its write bank: pagelogic's, above)
-        jmp @nomus
   .endif
 
 ; ---------------------------------------------------------------- the tile blitter's map
