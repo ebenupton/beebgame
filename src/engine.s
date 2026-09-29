@@ -1201,7 +1201,9 @@ draw_sprites:
         sta REC_YH,y
         lda #0
         sta REC_W,y
-        lda SPR_ID,x
+        lda #$80                    ; clipped until the prologue says otherwise: a sprite
+        sta REC_H,y                 ; wholly off the window writes no rectangle, and must
+        lda SPR_ID,x                ; not look drawn and intact to the next keep test
         sta REC_ID,y
         jsr drawsprite              ; (it writes the rectangle: REC_CX.. at rq)
 @next:  inc rq
@@ -1267,6 +1269,9 @@ draw_sprites:
         ldy #REC_W
         lda #0
         sta (rp),y
+        iny                         ; REC_H: clipped until the prologue says otherwise --
+        lda #$80                    ; a sprite wholly off the window writes no rectangle,
+        sta (rp),y                  ; and must not look drawn and intact to the next keep
         lda SPR_ID,x
         staz rp                     ; sta (rp) - offset 0 needs no index
         jsr drawsprite
@@ -1693,8 +1698,12 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         sta sp_w
         lda SPRG_LN,y
         sta sp_lines
-        asl                         ; two scanlines a stored row
         sta sp_ext
+        lda sp_flags
+        and #2                      ; every scanline stored (a box's screen bytes): the
+        bne :+                      ; lines are scanlines; else two scanlines a stored row
+        asl sp_ext
+:
         ; ---- horizontal: sx = spx - refx - wx ; c0 = sx >> 1
         lda SPRG_RX,y
         and #$80
@@ -2640,8 +2649,8 @@ sprdisp_tab: .word sprFN, sprFN, sprFN, sprFN
 ; stored (flag bit 1 clear: the prologue's half-res arithmetic, two scanlines a
 ; byte), and a sprite's first line in a char is always even (lb0 = 2*sy + wfine).
 ; Every bank that holds sprites has the tables and both blitters (banks.s): no box,
-; no copy blitter: a box is an opaque 4-bit image, drawn by these (its flag's dispatch
-; entry is sprFN).
+; a box (flag bit 3) is its screen bytes, every scanline, drawn by the copy blitter
+; (NIBCOPY: its flag's dispatch entry), so a box's backdrop keeps any dither exactly.
 .macro NPAIR k, mirror              ; lines k, k+1 of the cell: source byte k/2
         .local opq, done
   .if k = 0
@@ -2784,7 +2793,28 @@ p2:     NPAIR 4, mirror
 p3:     NPAIR 6, mirror
         jmp ret
 .endmacro
-.macro NIB_LOOPS bank               ; the row loop and both blitters, in each sprite bank
+.macro NIBCOPY name, ret            ; a box (flag bit 3): every scanline stored, screen bytes,
+        .local part, pl             ; opaque -- a straight copy, lines tmp..tmp2 of the cell
+name:   lda tmp2                    ; (any first line: a box's rows need not pair)
+        cmp #7
+        bne part
+        lda tmp
+        bne part
+  .repeat 8, k                      ; a whole cell: 13 cycles a byte against the 4-bit
+        ldy #k                      ; blitter's 21
+        lda (ptr),y
+        sta (sp),y
+  .endrepeat
+        jmp ret
+part:   ldy tmp
+pl:     lda (ptr),y
+        sta (sp),y
+        cpy tmp2                    ; C = 1 at the last line (iny keeps C)
+        iny
+        bcc pl
+        jmp ret
+.endmacro
+.macro NIB_LOOPS bank               ; the row loop and all three blitters, in each sprite bank
 ds_entry:                           ; BANKENTRY: the dispatch jump is patched here, in
         wrsel bank, bank            ; the bank that owns it (the write bank first)
         ldx sp_disp
@@ -2861,9 +2891,10 @@ sprpinc: inc ptr+1
 sprscold: jmp sprscold2
         NIBBLIT sprFN, 0, sprretP
         NIBBLIT sprFM, 1, sprretM
+        NIBCOPY sprFC, sprretP
 sprscold2:
         spcold sprsback
-sprdisp_tab: .word sprFN, sprFM, sprFN, sprFM, sprFN
+sprdisp_tab: .word sprFN, sprFM, sprFN, sprFM, sprFC
 .endmacro
         .segment "SPR4CODE"
         .scope spr4

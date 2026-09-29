@@ -104,6 +104,7 @@ fi
 DISC="$DISC SPRX:$REF/SPRX SPRC:$REF/SPRC TILES0:build/TILES0 TILES1:build/TILES1"
 for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do DISC="$DISC L$l:$REF/L$l"; done
 DISC="$DISC TILES2:build/TILES2"
+[ -f $REF/BAKE ] && DISC="$DISC BAKE:$REF/BAKE"   # the game's per-level baked sprites, if any (ldprog.s)
 [ -f build/LOADER ] || : > build/LOADER
 printf '*RUN LOADER\r' > build/BOOT
 

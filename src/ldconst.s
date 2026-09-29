@@ -17,6 +17,7 @@
         OUTC TILES
         OUTC TOFF
         OUTC NFLAT
+        OUTC BAKEFILE
         OUTC BOXID0
         OUTC BOXN
         OUTC NMIPAGE

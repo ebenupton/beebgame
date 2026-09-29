@@ -164,6 +164,9 @@ ftab:   FILE "SPRX"                 ; 0: the sprites placed per level (imgtab's 
         LFILE "L14"
         LFILE "L15"
         FILE "TILES2"               ; 24: and its indoor file
+  .ifdef BAKEFILE
+        FILE "BAKE"                 ; 25: the game's per-level sprites (its sectors are the
+  .endif                            ;  level's chunk: set by the placement walk)
 tfi:    .byte 3, 4, 24              ; the tile set's files by number
 FI_SPRX = 0
 FI_SPRC = 1
@@ -171,6 +174,7 @@ FI_MENU = 5
 FI_GAME = 6
 FI_BAR = 7
 FI_L0 = 8
+FI_BAKE = 25
 
 ; read file A to dst (main RAM)
 readfile:                           ; file A -> dst (page-aligned: its low byte is not read)
@@ -262,6 +266,7 @@ lv_load:
   .if .not BHW
         jsr mainram                 ; (X here is whatever buffer the game drew last)
   .endif
+        stx lvnum                   ; (the level's chunk of BAKE: the placement walk)
         txa
         clc
         adc #FI_L0
@@ -603,57 +608,24 @@ lv_load:
 @unkeep:
         jsr unkeep
   .endif
-@sfile: lda #SEC_PLACE
-        jsr section
-        lda src
-        sta lp
-        lda src+1
-        sta lp+1
-@pl:    ldy #0
-        lda (lp),y
-        cmp #$FF
+@sfile: jsr placewalk
+  .ifdef BAKEFILE
+        ldx lvnum                   ; this level's chunk of BAKE: its sectors (0: none)
+        lda bakechunks+32,x
         beq @plend
-        sta item
-        jsr imgent                  ; ent -> imgtab's entry for the item
-
-        lda (ent),y
-        cmp fnum
-        bne @mask
-        ldy #1                      ; the image: src = STAGE + offset, cnt = length
-        jsr srccnt
-        ldy #2
-        lda (lp),y
-        sta dst
-        iny
-        lda (lp),y
-        sta dst+1
-        jsr plcopy                  ; to the placement's bank
-@mask:  ldy #5
-        lda (ent),y
-        cmp fnum
-        bne @plnext
-        ldy #8
-        lda (ent),y
-        iny
-        ora (ent),y
-        beq @plnext                 ; no mask
-        ldy #6
-        jsr srccnt
-        ldy #4
-        lda (lp),y
-        sta dst
-        iny
-        lda (lp),y
-        sta dst+1
-        jsr plcopy                  ; to the placement's bank
-@plnext:
-        lda lp
+        sta ftab+3*FI_BAKE+2
+        lda bakechunks,x            ; and where it starts in the file
         clc
-        adc #6
-        sta lp
-        bcc @pl
-        inc lp+1
-        bne @pl                     ; (lp+1 is never 0)
+        adc #<F_BAKE_SEC
+        sta ftab+3*FI_BAKE
+        lda bakechunks+16,x
+        adc #>F_BAKE_SEC
+        sta ftab+3*FI_BAKE+1
+        lda #FI_BAKE
+        sta fnum
+        jsr stage
+        jsr placewalk
+  .endif
 @plend:
         ; ---- the directory and SPRMASK, as the packer finished them
         lda #SEC_DIR
@@ -846,7 +818,8 @@ tcopy:                              ; tile A of the staged file, its row C (or a
   .else
         jmp scopy
   .endif
-nfiles: .res 1                      ; (lv_load's: the set's file count,
+lvnum:  .res 1                      ; (lv_load's: the level,
+nfiles: .res 1                      ;  the set's file count,
 hdst:   .res 2                      ;  the next half's slot,
 sv_halfhi:  .res 1                  ;  the tile shape on its way to banks 5 and 6)
 sv_solid:   .res 1
@@ -860,6 +833,76 @@ sv_halfsub: .res 1
 sv_mir0:    .res 1
    .endif
   .endif
+placewalk:                          ; the placement list's items from file fnum, staged
+        lda #SEC_PLACE
+        jsr section
+        lda src
+        sta lp
+        lda src+1
+        sta lp+1
+@pl:    ldy #0
+        lda (lp),y
+        cmp #$FF
+        beq @pwdone
+        sta item
+        jsr imgent                  ; ent -> imgtab's entry for the item
+
+        lda (ent),y
+        cmp fnum
+        bne @mask
+        ldy #1                      ; the image: src = STAGE + offset, cnt = length
+        jsr srccnt
+  .ifdef BAKEFILE
+        lda fnum                    ; a baked item: the level's own, its offset in the
+        cmp #FI_BAKE                ; chunk in the placement entry (its mask field, which
+        bne :+                      ; a box has no use for)
+        ldy #4
+        lda (lp),y
+        clc
+        adc #<STAGE
+        sta src
+        iny
+        lda (lp),y
+        adc #>STAGE
+        sta src+1
+:
+  .endif
+        ldy #2
+        lda (lp),y
+        sta dst
+        iny
+        lda (lp),y
+        sta dst+1
+        jsr plcopy                  ; to the placement's bank
+@mask:  ldy #5
+        lda (ent),y
+        cmp fnum
+        bne @plnext
+        ldy #8
+        lda (ent),y
+        iny
+        ora (ent),y
+        beq @plnext                 ; no mask
+        ldy #6
+        jsr srccnt
+        ldy #4
+        lda (lp),y
+        sta dst
+        iny
+        lda (lp),y
+        sta dst+1
+        jsr plcopy                  ; to the placement's bank
+@plnext:
+        lda lp
+        clc
+        adc #6
+        sta lp
+        bcc @pl
+        inc lp+1
+        bne @pl                     ; (lp+1 is never 0)
+@pwdone:
+        rts
+
 section:                            ; A = a section (SEC_) -> src = its start in the staged file
         asl                         ; (C = 0: A < 128)
         tay
@@ -1107,4 +1150,7 @@ wrhi:   .byte >wr_game, >wr_menu
         .assert IMG_MENU = 1, error, "image_load's tables: the game's, then the menus'"
 
 ; ---------------------------------------------------------------- the packer's tables
+  .ifdef BAKEFILE
+bakechunks: .incbin "bakechunks.bin"  ; by level: the chunk's sector offset lo x 16, hi x 16, count x 16
+  .endif
 imgtab: .incbin "imgtab.bin"  ; per item: file, offset, length, mask file, offset, length

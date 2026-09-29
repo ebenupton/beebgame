@@ -867,8 +867,16 @@ to its tools.  With none set the build is what it always was (the masked sprites
   and B5X to $600.  The prologue skips SPRMASK and the mask pointers; the directory's
   `lines` is the rows stored and flag bit 1 clear, so its half-res arithmetic (two
   scanlines a stored byte, `sp_rinc` 4) is the 4-bit layout exactly.  No SPRMASK in
-  ENGBSS or the level file (`levelfile.Level(nibble=True)`).  A box is an opaque
-  4-bit image: its flag's dispatch entry is `sprFN`, so it needs no copy blitter.
+  ENGBSS or the level file (`levelfile.Level(nibble=True)`).  A box (flag bit 3) is
+  its screen bytes, every scanline stored (flag bit 1, lines = 2h), and its dispatch
+  entry is the copy blitter `NIBCOPY` in both banks (13 cycles a byte, unrolled for a
+  whole cell), so a box's backdrop keeps any dither exactly.
+- **BAKEFILE** (the game's assets.inc): a file BAKE of per-level sprites, one
+  sector-aligned chunk a level (`bakechunks.bin`: its sector offset and count by
+  level).  After SPRX, `ldprog.s` points ftab's entry 25 at the level's chunk, stages
+  it and runs the placement walk (`placewalk`) again: an item whose imgtab file is
+  BAKE takes its offset in the chunk from its placement entry's mask field.  Cleo
+  bakes every trampoline's rest state and some stars over their own backdrops.
 - **GAMEHAZEL.**  master.cfg's HAZ area ($C000-$DFFF) takes HAZCODE, HAZDATA and
   HAZBSS into `hazel.bin`, a BANKS piece with bank byte 1, which the loader copies
   with ACCCON Y set and leaves set for good.  `ldprog.s`'s `mainram` keeps Y, and
