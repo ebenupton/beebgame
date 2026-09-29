@@ -130,6 +130,13 @@ wide, but both ring ends are page aligned (asserted: RINGEND_B = $8000, RINGEND_
 page boundary), so `ringup`'s test is a byte compare against the buffer's `ringehi`,
 and both bases are at xx80 (asserted), so the low byte folds by a constant.
 
+A row of the tile blitter (`drawrect`) can straddle the ring end but a run -- the
+chars of one tile, at most four -- never does: a ring row is 80 chars and the ring a
+whole number of rows (on either machine), so the end falls on a map column that is a
+multiple of 80, a tile boundary.  A run can only end exactly at the end, which carries
+into a new page: `@advc`, on that carry, folds the pointer back to the base.  So the
+runs have no wrap test and no char-at-a-time path.
+
 During a load the display is black and is the loader's: the NMI routine at $0D00
 (NMIPAGE), the load-time program at $0E00 (LDPROG, at most $0E00 bytes), a shared file
 staged at $1C00-$5BFF (STAGE, 16K), the level's own file at $5C00-$7BFF (STAGE_LVL, 8K;

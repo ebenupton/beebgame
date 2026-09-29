@@ -210,7 +210,6 @@ rc_gi:    .res 1
 rc_subc:  .res 1
 rowoff:   .res 1                  ; rc_sub | rc_subc*8 : byte offset into the tile for this run
 rc_n:     .res 1
-rc_wrap:  .res 1                  ; row may cross the ring end (needs per-run wrap check)
 rc_tx0:   .res 1                  ; per-rect invariants: first tile column,
 rc_nt:    .res 1                  ;   tiles-1 per row,
 rc_sc0:   .res 1                  ;   rc_x & 3 (chars into the first tile),
@@ -676,16 +675,12 @@ drawrect:
         sta sp
         lda rc_sp+1
         sta sp+1
-        ; a row spans <= 640 bytes: it can only cross the ring end if sp is within 768
-  .if BHW
-        cmp ringe3                  ; >RINGEND - 3 for the buffer being drawn
-  .else
-        cmp #(>RINGEND - 3)
-  .endif
+        ; (a row may straddle the ring end, a run never does: a ring row is 80 chars
+        ; and the ring a whole number of them, so the end falls on a map column that
+        ; is a multiple of 80 -- a tile boundary, where a run starts.  A run can end
+        ; exactly there, which @advc folds.)
         lda #0
         sta rc_gi
-        rol
-        sta rc_wrap
         lda rc_sc0
         sta rc_subc
         lda rc_w
@@ -711,8 +706,6 @@ drawrect:
         asl
         asl
         sta tmp
-        ldy rc_wrap
-        bne @swrap                  ; the run may cross the ring end: checked out of line
 @sdisp:
   .if BHW
         lda @mt-2,x                 ; jmpx less its pha/pla
@@ -725,19 +718,6 @@ drawrect:
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
         jmpx @mt-2
   .endif
-@swrap: adc sp                      ; C is clear: the asl's above shifted out zeros
-        lda sp+1
-  .if BHW
-        adc ringneg
-  .else
-        adc #(256 - >RINGEND)
-  .endif
-        bcc @sdisp
-@s0slow:                            ; a run across the ring end (once a row at most): the
-        lda @s0f+1                  ; pair cascade's char-at-a-time copy, as a pair
-        sta tp
-        sta tp+1
-        jmp @fslow
 @tile:  sta tp+1                    ; the tile pointer's high byte
         lda GATHERL,x               ; every tile is in bank 6, selected once per tile row
         and #7                      ; the kind: 0 a full tile, 4..6 a half, 3 a mirror
@@ -758,8 +738,6 @@ drawrect:
         asl
         asl
         sta tmp                     ; bytes
-        ldy rc_wrap
-        bne @twrap                  ; the row may cross the ring end: checked out of line
 @tdisp:
   .if BHW
         lda @jt-2,x                 ; jmpx less its pha/pla: every @b entry
@@ -771,30 +749,6 @@ drawrect:
         jmpx @jt-2
   .endif
 @jt:    .word @b7, @b15, @b23, @b31
-@twrap: adc sp                      ; C is clear: the asl's above shifted out zeros (rc_n <= 4)
-        lda sp+1
-  .if BHW
-        adc ringneg                 ; 256 - >RINGEND for the buffer being drawn
-  .else
-        adc #(256 - (>RINGEND))     ; = adc #$80: C set iff sp+1+C >= >RINGEND
-  .endif
-        bcc @tdisp                  ; (else on into @slow)
-@slow:  ; a run that crosses the ring end: copy a char at a time through the fold.  It
-        ; sits beside its test so that a branch reaches it (at most once per row).
-@sc:    ldy #7                      ; X = 2*rc_n (@tpset's tax) counts the chars down
-:       lda (tp),y
-        sta (sp),y
-        dey
-        bpl :-
-        lda tp                      ; a run stays inside its tile's 32-byte char row, so
-        clc                         ; this never carries before the last char, and after
-        adc #8                      ; that tp is dead (@run rewrites both bytes)
-        sta tp
-        spnext
-        dex
-        dex
-        bne @sc
-        jmp @runend                 ; (out of bra's reach from here)
         ; unrolled copy, one block per char in descending char order so that entry at
         ; char n-1 copies chars n-1..0.
 .macro CPYN                         ; next line: A = (tp),y -> (sp),y ; y++
@@ -860,8 +814,23 @@ drawrect:
 @rfold: ringfold rc_sp
         sta rc_sp+1
         rts
-@advc:  inc sp+1                    ; no ringup: both entries to @advsp have already
-        jmp @runend                 ; proved the run stays below RINGEND (rc_wrap)
+@advc:  inc sp+1                    ; a page on: if it is the ring's end (page aligned,
+  .if BHW                           ; so sp's low byte is 0) the run ended exactly there
+        lda sp+1                    ; (drawrect: never inside one): back to its base
+        cmp ringehi
+        bcc @runend
+        lda ringbhi
+        sta sp+1
+        lda #<RING_A                ; (both rings' base low bytes)
+        sta sp
+        .assert <RING_A = <RING_B, error, "@advc: the rings' base low bytes differ"
+  .else
+        bpl @runend                 ; RINGEND = $8000: N from the inc
+        lda #>RINGBASE
+        sta sp+1                    ; (<RINGBASE = 0 = sp's low byte)
+        .assert <RINGBASE = 0 && RINGEND = $8000, error, "@advc: the Master's ring"
+  .endif
+        jmp @runend
   .if TILEMIRROR                    ; (cpu.inc: off by default -- no level needs a mirror)
         ; ---- a mirrored full tile: its source's chars right to left, each byte's two
         ; game pixels swapped -- ((b & $33) << 2) | ((b & $CC) >> 2); the dither is per
@@ -955,8 +924,6 @@ drawrect:
         asl
         asl
         sta tmp
-        ldy rc_wrap                 ; test without destroying A (= 8*rc_n)
-        bne @fwrap                  ; the run may cross the ring end: checked out of line
 @fdisp:
   .if BHW
         lda @ft-2,x                 ; jmpx @ft-2 less its pha/pla, and no load: A is
@@ -991,21 +958,6 @@ drawrect:
         ldy #8*c+1
         sta (sp),y
 .endmacro
-@fwrap: adc sp                      ; C is clear: the asl's above shifted out zeros (rc_n <= 4)
-        lda sp+1
-  .if BHW
-        adc ringneg
-  .else
-        adc #(256 - >RINGEND)
-  .endif
-        bcc @fdisp                  ; (else on into @fslow)
-@fslow: lda rc_n
-        sta tmp2
-@fsc:   PCHAR 0
-        spnext
-        dec tmp2
-        bne @fsc
-        jmp @runend
 @f31:   PCHAR 3
 @f23:   PCHAR 2
 @f15:   PCHAR 1
@@ -3267,9 +3219,6 @@ select_backbuf:
         sec
         sbc #3
         sta ringe3
-        lda #0
-        sbc ringehi                 ; C = 1 still: ringehi >= 3, so the sbc #3 kept it
-        sta ringneg
   .else
         php                         ; the ISR writes ACCCON's D bit; this read-modify-
         sei                         ; write of the X bit must not straddle one

@@ -69,8 +69,7 @@ SFXREQ:   .res 1                    ; a sound effect asked for (the game; sound_
 mtmp:     .res 1                    ; cpu.inc's scratch (inca/deca/bitimm/ldazy)
 ringbhi:  .res 1                    ; the buffer being drawn: ring base high byte,
 ringehi:  .res 1                    ;   ring end high byte (ringup's fold test),
-ringe3:   .res 1                    ;   >RINGEND-3 and 256->RINGEND (drawrect's wrap test)
-ringneg:  .res 1
+ringe3:   .res 1                    ;   >RINGEND-3 (mirror.s)
 mrow:     .res 1                    ; the map char row in the ring's last slot (calc_ring)
 wcxm:     .res 1                    ; ringS mod 80: the mirror's first useful char
 sp_disp:  .res 1                    ; the sprite's blitter index, for the loop's bank
