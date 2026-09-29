@@ -458,6 +458,35 @@ n2:     tax
 :
   .endif
 .endmacro
+.macro pagestep p, back             ; p's low byte has just carried out of a step forward
+  .if ::BHW                        ; (under $80: p's low byte is now below it): its high
+        inc p+1                     ; byte on one page, folded at the ring end.  C = 0 out
+        lda p+1                     ; (and, without back, a single anonymous label, as ringup's).  With
+        cmp ringehi                 ; back, the Model B's common case branches there
+    .ifblank back
+        bcc :+
+    .else
+        bcc back
+    .endif
+        sbc #>RINGBYTES+1           ; C = 1 from the compare: back a ring, less the low
+        sta p+1                     ; byte's borrow -- it is below <RINGBYTES ($80), so
+        lda p                       ; the fold always borrows, and the low byte's is +$80
+        eor #<RINGBYTES
+        sta p
+        clc
+        .assert <RINGBYTES = $80, error, "pagestep: the Model B's ring folds its low byte by $80"
+    .ifblank back
+:
+    .endif
+  .else
+        inc p+1                     ; RINGEND = $8000: N from the inc, and the page after
+        bpl :+                      ; the end is $80 exactly (a step under a page), the
+        lda #>RINGBASE              ; low byte unchanged (<RINGBYTES = 0)
+        sta p+1
+        .assert <RINGBYTES = 0 && RINGEND = $8000, error, "pagestep: the Master's ring"
+:       clc
+  .endif
+.endmacro
 .macro ringdn                       ; A = high byte after moving back
         cmp #>RINGBASE
         bcs :+
@@ -472,20 +501,14 @@ n2:     tax
         sta sp
   .if .blank(cold)
         bcc :++                     ; past the fold's own anonymous label
-        lda sp+1
-        adc #0                      ; C = 1 (the bcc fell through): +1, 2 bytes not 6
-        ringup sp
-        sta sp+1
+        pagestep sp
 :
   .else
         bcs cold
   .endif
 .endmacro
 .macro spcold back                  ; spnext's page step, out of line: back to `back`
-        lda sp+1
-        adc #0                      ; C = 1: spnext's bcs
-        ringup sp
-        sta sp+1
+        pagestep sp                 ; (C = 0)
         jmp back
 .endmacro
 
@@ -814,24 +837,8 @@ drawrect:
 @rfold: ringfold rc_sp
         sta rc_sp+1
         rts
-@advc:  inc sp+1                    ; a page on: if it is the ring's end (page aligned,
-  .if BHW                           ; so sp's low byte is 0) the run ended exactly there
-        lda sp+1                    ; (drawrect: never inside one): back to its base
-        cmp ringehi
-        bcc @runnext                ; (C = 0)
-        lda ringbhi
-        sta sp+1
-        lda #<RING_A                ; (both rings' base low bytes)
-        sta sp
-        .assert <RING_A = <RING_B, error, "@advc: the rings' base low bytes differ"
-  .else
-        bpl @advk                   ; RINGEND = $8000: N from the inc
-        lda #>RINGBASE
-        sta sp+1                    ; (<RINGBASE = 0 = sp's low byte)
-        .assert <RINGBASE = 0 && RINGEND = $8000, error, "@advc: the Master's ring"
-  .endif
-@advk:  clc                         ; (the loop back's C)
-        jmp @runnext
+@advc:  pagestep sp, @runnext        ; a page on: the ring's end only if the run ended
+        jmp @runnext                ; exactly there (never inside one: drawrect); C = 0
   .if TILEMIRROR                    ; (cpu.inc: off by default -- no level needs a mirror)
         ; ---- a mirrored full tile: its source's chars right to left, each byte's two
         ; game pixels swapped -- ((b & $33) << 2) | ((b & $CC) >> 2); the dither is per
@@ -1600,12 +1607,8 @@ copy_partial:                       ; the whole row, every frame the fine scroll
         SAMEPAGE *, @g0
 @done:  rts
 @sfold: spcold @sback
-@pfold: lda ptr+1
-        adc #0                      ; C = 1: the bcs; ringup's cmp resets it
-        ringup ptr
-        sta ptr+1
-        clc
-        bcc @back
+@pfold: pagestep ptr, @back
+        bcc @back                   ; (C = 0: pagestep's)
 
 ; draw one sprite: A = id ; spx, spy = game pixels, map coordinates (ref point)
 ; The directory is the level's, in bank 7 at SPR_TABLE (ldprog.s); the data is in
