@@ -66,10 +66,10 @@ maprow6:                            ; A = tile row -> ptr = LV_MAP + row * (1 <<
 mapstrip:                           ; (ptr) = the row's first tile: its gather, run in
         bankimm lda, BANK_MAP, 0    ; bank 5 beside the map (engine.s gather5), into
         sta ROMSEL_CPY              ; GATHERL/GATHERH here; bank 6 back (read only: no
-        sta ROMSEL                  ; write bank -- scroll_validate sets its own)
+        sta ROMSEL                  ; write bank: its callers store into no bank)
         jsr gather5
-page6:  bankimm lda, BANK_TILES, 0  ; (selbb and validate: page6 first, then the write
-        sta ROMSEL_CPY              ; bank for what they store in bank 6)
+page6:  bankimm lda, BANK_TILES, 0  ; (selbb and validate: page6 first; selbb the write
+        sta ROMSEL_CPY              ; bank for what it stores in bank 6)
         sta ROMSEL
         rts
 
@@ -81,9 +81,8 @@ selbb:  jsr page6
         jsr select_backbuf
         jmp pagelogic
 validate:
-        jsr page6
-        wrsel BANK_TILES, 0
-        jsr scroll_validate
+        jsr page6                   ; (no write bank: scroll_validate and drawrect store
+        jsr scroll_validate         ;  into no bank)
         jmp pagelogic
 
 ; ---------------------------------------------------------------- the direct switch

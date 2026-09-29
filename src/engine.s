@@ -314,7 +314,6 @@ crtcb:     .res 2                   ; build_sections: the buffer's CRTC base
 ; are static too.
         .segment "TILBSS"           ; bank 6: the tile blitter's and the ring work's (the
                                     ; gather's arrays are low RAM's); boot zeroes it
-BUF_CY:    .res 2
         .assert FLAT0 + NFLAT + 2 = 256, error, "the fills are the ids from FLAT0 to 255: NFLAT flat tiles, then the two solids (assets.inc)"
 FLATTAB:   .res 2*(NFLAT+2)         ; the level's flat tiles: (even line, odd line) by
                                     ; id - FLAT0, the loader's; the solids are the last two
@@ -325,6 +324,7 @@ DIRTX     = DIRTYLIST
 DIRTY_    = DIRTYLIST+2*DIRTYMAX
   .endif
         .segment "LOWBSS"           ; main RAM: the buffers' state bank 7 reads too
+BUF_CY:    .res 2                   ; each buffer's window char row, by curbuf
 BUF_CX:    .res 2                   ; each buffer's window x by curbuf: low bytes,
 BUF_CXH:   .res 2                   ; high bytes (bank 7 invalidates a buffer: $80)
 BUF_BOTOK: .res 2                   ; the slot below the playfield is black: scroll_validate
@@ -656,9 +656,9 @@ drawrect:
 @rowy:
         jsr mapstrip                ; the row's gather, run in bank 5 beside the map
                                     ; (gather5, below): GATHERL/H in low RAM.  No write
-                                    ; bank: drawrect stores nothing into a bank (an
-                                    ; interrupt in gather5 leaves it 5: scroll_validate,
-                                    ; which does store, sets it after)
+                                    ; bank: drawrect and its callers store nothing into
+                                    ; a bank (an interrupt in gather5 leaves it 5: the
+                                    ; way back to bank 7, pagelogic, sets 7's)
         ; ---- draw this char row, and (without re-gathering) the odd row of the same tile row
         stz rc_sub
         lda rc_ro0
@@ -1102,9 +1102,7 @@ scroll_validate:
 @done:
         ldx curbuf
         stz BUF_BOTOK,x             ; the window moved: the slot below is stale again
-        bankimm lda, BANK_TILES, BANK_TILES, 2   ; BUF_CY is bank 6's: its write bank
-        wrsel BANK_TILES, BANK_TILES, 2          ; (validate's, but drawrect's gathers may
-        lda wcy                                  ;  have let an interrupt leave it 5)
+        lda wcy
         sta BUF_CY,x
         lda wcx
         sta BUF_CX,x
