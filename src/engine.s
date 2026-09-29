@@ -555,6 +555,20 @@ RINGHI_B:
   .endrepeat
   .endif
 
+; A = a run's chars (rc_n): X for its dispatch -- the Model B's, n, into a table of
+; low bytes; the Master's, 2n, for jmp (abs,x) -- and tmp = its bytes, 8n (C = 0)
+.macro RUNX
+  .if BHW
+        tax
+        asl
+  .else
+        asl
+        tax
+  .endif
+        asl
+        asl
+        sta tmp
+.endmacro
 ; ============================================================================
 ; drawrect: draw map tiles into the current back buffer.
 ;   rc_x (map chars, 16 bit), rc_y (map char rows), rc_w (chars 1..80), rc_h (rows)
@@ -565,6 +579,10 @@ drawrect:
         bne :+
         rts
 :
+  .if BHW                           ; a write window, to @done: the runs patch their
+        bankimm lda, BANK_TILES, BANK_TILES, 3   ; dispatch jumps (cpu.inc; A = bank 6's,
+        wrsel BANK_TILES, BANK_TILES, 3          ; paged already: harmless on a plain one)
+  .endif
   .if BHW
         lda mrow                    ; the map row the mirror follows (calc_ring): a rect
         sec                         ; that touches it says which window columns it wrote
@@ -646,10 +664,9 @@ drawrect:
         jmp @second
 @rowy:
         jsr mapstrip                ; the row's gather, run in bank 5 beside the map
-                                    ; (gather5, below): GATHERL/H in low RAM.  No write
-                                    ; bank: drawrect and its callers store nothing into
-                                    ; a bank (an interrupt in gather5 leaves it 5: the
-                                    ; way back to bank 7, pagelogic, sets 7's)
+                                    ; (gather5, below): GATHERL/H in low RAM.  The write
+                                    ; bank stays drawrect's window's, 6: the gather
+                                    ; stores into no bank, nor does an interrupt
         ; ---- draw this char row, and (without re-gathering) the odd row of the same tile row
         stz rc_sub
         lda rc_ro0
@@ -678,7 +695,8 @@ drawrect:
         adc MAPSTRIDE+1
         sta ptr+1
         jmp @rowy
-@done:  rts
+@done:  wrback BANK_TILES, 4        ; (the window's end)
+        rts
         ; ---- @run's rarer ways, here behind @drawrow in its branches' reach: a fill
         ; other than the solid (to @solid), a half tile
 @fx:    jmp @solid                  ; (C is clear: clear at every entry to @run)
@@ -722,19 +740,13 @@ drawrect:
         bcc :+
         lda cnt
 :       sta rc_n
-        asl
-        tax
-        asl
-        asl
-        sta tmp
+        RUNX                        ; X, tmp = 8*rc_n
 @sdisp:
   .if BHW
-        lda @mt-2,x                 ; jmpx less its pha/pla
-        sta jv
-        lda @mt-1,x
-        sta jv+1
+        lda @mtl-1,x                ; the entry's low byte into the jmp below (the
+        sta @sj+1                   ; blocks share a page: asserted)
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
-        jmp (jv)
+@sj:    jmp @m31
   .else
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
         jmpx @mt-2
@@ -747,28 +759,22 @@ drawrect:
         ora rowoff                  ; (a full tile's lo byte is (id&3)<<6: bits 0-5 clear)
 @tpsta: sta tp
 @tpset:
-        ; chars in this run: min(rc_lim, cnt) -> rc_n, X = 2*rc_n, tmp = 8*rc_n
+        ; chars in this run: min(rc_lim, cnt) -> rc_n, X, tmp = 8*rc_n
         lda rc_lim
         cmp cnt
         bcc :+
         lda cnt
 :       sta rc_n
-        asl
-        tax
-        asl
-        asl
-        sta tmp                     ; bytes
+        RUNX
 @tdisp:
   .if BHW
-        lda @jt-2,x                 ; jmpx less its pha/pla: every @b entry
-        sta jv                      ; loads A before it reads it
-        lda @jt-1,x
-        sta jv+1
-        jmp (jv)
+        lda @jtl-1,x                ; the entry's low byte into the jmp (the blocks
+        sta @tj+1                   ; share a page: asserted)
+@tj:    jmp @b31
   .else
         jmpx @jt-2
-  .endif
 @jt:    .word @b7, @b15, @b23, @b31
+  .endif
         ; unrolled copy, one block per char in descending char order so that entry at
         ; char n-1 copies chars n-1..0.
 .macro CPYN                         ; next line: A = (tp),y -> (sp),y ; y++
@@ -928,22 +934,16 @@ drawrect:
         bcc :+
         lda cnt
 :       sta rc_n
-        asl
-        tax
-        asl
-        asl
-        sta tmp
+        RUNX
 @fdisp:
   .if BHW
-        lda @ft-2,x                 ; jmpx @ft-2 less its pha/pla, and no load: A is
-        sta jv                      ; dead, every entry is a FIL1, which loads tp+1
-        lda @ft-1,x
-        sta jv+1
-        jmp (jv)
+        lda @ftl-1,x                ; the entry's low byte into the jmp (A is dead:
+        sta @fj+1                   ; every entry loads tp); the blocks share a page
+@fj:    jmp @f31
   .else
         jmpx @ft-2
-  .endif
 @ft:    .word @f7, @f15, @f23, @f31
+  .endif
 ; the pair: even lines tp, odd lines tp+1 -- each byte loaded once a char and stored
 ; four times, every store setting its own Y (70 cycles a char, where alternating the
 ; loads down a dey chain was 88)
@@ -973,7 +973,9 @@ drawrect:
 @f7:    PCHAR 0
         jmp @advsp
 
+  .if .not BHW
 @mt:    .word @m7, @m15, @m23, @m31
+  .endif
 .macro MFIL k
         ldy #k
         sta (sp),y
@@ -982,6 +984,7 @@ drawrect:
         sta (sp),y
         .endrepeat
 .endmacro
+        PAD ::PADB_M6, 0            ; (@m31..@m7 in one page: pads.inc)
 @m31:   MFIL 31
 @m23:   MFIL 23
 @m15:   MFIL 15
@@ -993,6 +996,12 @@ drawrect:
         sta (sp),y
         staz sp                     ; line 0 non-indexed
         jmp @advsp
+  .if BHW                           ; the Model B's dispatch: each group's entries by
+@jtl:   .byte <@b7, <@b15, <@b23, <@b31   ; chars (1..4), low bytes only -- the jmp's
+@mtl:   .byte <@m7, <@m15, <@m23, <@m31   ; high byte is its group's page
+@ftl:   .byte <@f7, <@f15, <@f23, <@f31
+        .assert >@b7 = >@b31 && >@m7 = >@m31 && >@f7 = >@f31, error, "a dispatch group straddles a page: pads.inc PADB_M6 (or move it)"
+  .endif
 
 ; @hfill's two loads of a half tile's pair: the table sits above the halves, wherever
 ; the level's tiles ended, and the loader patches the operands.  (Defined here, after
@@ -3457,8 +3466,8 @@ MIRTAB:    .res MAXMIR              ; per mirrored id: the slot of the tile it m
 ; callbank left it -- then drawrect_clip
 bank6_entry:
         .assert * = BANKENTRY, error, "bank6_entry must start bank 6"
-                                    ; (no write bank: drawrect_clip and drawrect store
-                                    ;  nothing into a bank; pagelogic sets 7's after)
+                                    ; (no write bank: drawrect_clip stores into no bank,
+                                    ;  and drawrect opens and closes its own window)
 ; drawrect_clip: drawrect, with the rect clipped to the current window
 ; (rows wcy..wcy+BUFROWS-1, cols wcx..wcx+ROWCHARS-1)
 drawrect_clip:

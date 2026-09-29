@@ -23,4 +23,5 @@ PADB_DS = 0                         ; before drawsprite
 PADM_DS = 5
 PADB_CP = 0                         ; before copy_partial
 PADM_CP = 9
+PADB_M6 = 27                        ; bank 6 (the Model B): before the solid fills, @m31..@m7
 PADB_BB = 0                         ; the Model B: after blank_below
