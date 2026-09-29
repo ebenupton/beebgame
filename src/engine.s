@@ -625,14 +625,12 @@ drawrect:
   .if TALLMAP                       ; (char rows are kept a byte, the ring's modulus needs
         lda rc_y                    ;  no more; the map row does: the rect's full row is
         sec                         ;  the window's, wcyh:wcy, plus its offset from it)
-        sbc wcy                     ; the offset, -128..127
-        tax
-        ldy #0
+        sbc wcy                     ; the offset, -128..127 (A keeps it: ldy, cmp and
+        ldy #0                      ;  dey leave it be)
         cmp #$80
         bcc :+
         dey                         ; (its sign)
-:       txa
-        clc
+:       clc
         adc wcy                     ; (= rc_y: only the carry is wanted)
         tya
         adc wcyh
