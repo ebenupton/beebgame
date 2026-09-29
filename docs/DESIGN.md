@@ -871,12 +871,16 @@ to its tools.  With none set the build is what it always was (the masked sprites
   its screen bytes, every scanline stored (flag bit 1, lines = 2h), and its dispatch
   entry is the copy blitter `NIBCOPY` in both banks (13 cycles a byte, unrolled for a
   whole cell), so a box's backdrop keeps any dither exactly.
-- **BAKEFILE** (the game's assets.inc): a file BAKE of per-level sprites, one
-  sector-aligned chunk a level (`bakechunks.bin`: its sector offset and count by
-  level).  After SPRX, `ldprog.s` points ftab's entry 25 at the level's chunk, stages
-  it and runs the placement walk (`placewalk`) again: an item whose imgtab file is
-  BAKE takes its offset in the chunk from its placement entry's mask field.  Cleo
-  bakes every trampoline's rest state and some stars over their own backdrops.
+- **BAKEITEM0** (the game's assets.inc): items from it on are baked by the loader
+  (`ldprog.s bake`), not copied: the level's own tiles where the object stands, decoded
+  as the Model B's gather does (the solid, the flats, the halves, full tiles: no
+  mirrored ones), with the game's overlay laid over them -- (backdrop AND mask) OR
+  pixels, a column's pixels then its mask, staged in SPRX.  The placement entry's mask
+  field carries the object's tile (x, y); `bakekind.bin` gives each baked slot its kind
+  and `bakegeom.bin` each kind's shape (bytes, lines, the offset from (8x, y) in game
+  pixels across and tile rows down, the overlay's offset in SPRX).  imgtab stops at
+  BAKEITEM0.  Cleo bakes every trampoline's rest state and its costliest stars: 309
+  items over the 16 levels, 0.2-0.34 s of the Model B's CPU a load, nothing on the disc.
 - **GAMEHAZEL.**  master.cfg's HAZ area ($C000-$DFFF) takes HAZCODE, HAZDATA and
   HAZBSS into `hazel.bin`, a BANKS piece with bank byte 1, which the loader copies
   with ACCCON Y set and leaves set for good.  `ldprog.s`'s `mainram` keeps Y, and
