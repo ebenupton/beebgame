@@ -343,24 +343,15 @@ KEEP:      .res MAXREC
 BUF_SEC0:  .res 4
 BUF_SEC0T1: .res 4
 SECTAB:    .res 2*48
-SFXDUR:    .res 1
-LOADREQ:   .res 1                 ; 0 running, 1 stop asked, 2 stopped, 3 resume asked (load_begin)
     .else
         .segment "TABLES"           ; the Master: the interrupt handler and its chain
 BUF_SEC0:  .res 4                   ; are in main RAM, and so is what they keep
 BUF_SEC0T1: .res 4
 SECTAB:    .res 2*48
-SFXDUR:    .res 1
-LOADREQ:   .res 1
 dispD:     .res 1
 DSECT:     .res 1                   ; the step after the bar's: the one that switches D
 NEXTBUF:   .res 1
     .endif
-        .segment "MNUBSS"           ; the menus' image: the tune's player lives there
-MUSDUR:    .res 1                   ; (MUSON is in zero page: the interrupt reads it)
-MUSNOTE:   .res 3
-ISRT1:     .res 1
-ISRT2:     .res 1
         .segment "LOWBSS"           ; main RAM: what more than one bank touches
 SPRLIST:                          ; (a label, not an equate: the tools read labels.txt)
 SPR_ID:    .res MAXSPR            ; the sprite draw list, one array per field (index =
@@ -2453,12 +2444,13 @@ p3:     MPAIR 6, mirror
                                     ; (the bank has no SWAPTAB); withcopy = 0: none drawn
                                     ; by the copy blitter (no sprFC); bank: this copy's
 ds_entry:                           ; BANKENTRY: the dispatch jump is patched here,
-        wrsel bank, bank            ; in the bank that owns it -- so the write bank is
-        ldx sp_disp                 ; set here, not in low RAM's callbank (A = the bank)
+        wrsel bank, bank            ; in the bank that owns it: a write window (A = the
+        ldx sp_disp                 ; bank), closed by the wrback below
         lda sprdisp_tab,x
         sta ds_dispatch+1
         lda sprdisp_tab+1,x
         sta ds_dispatch+2
+        wrback bank                 ; (the window's end: the write bank back to 7's)
 ds_rowloop:
         lda sp_rb
         sta sp
@@ -2776,12 +2768,13 @@ pl:     lda (ptr),y
 .endmacro
 .macro NIB_LOOPS bank               ; the row loop and all three blitters, in each sprite bank
 ds_entry:                           ; BANKENTRY: the dispatch jump is patched here, in
-        wrsel bank, bank            ; the bank that owns it (the write bank first)
+        wrsel bank, bank            ; the bank that owns it: a write window (A = the bank)
         ldx sp_disp
         lda sprdisp_tab,x
         sta ds_dispatch+1
         lda sprdisp_tab+1,x
         sta ds_dispatch+2
+        wrback bank                 ; (the window's end: the write bank back to 7's)
 ds_rowloop:
         lda sp_rb
         sta sp
@@ -3953,11 +3946,12 @@ irq_handler:
 ; section; the further -36 puts it ~30 us before the restart, so that the shape
 ; registers land early in the first scanline -- see the chain step above.  -8: the
 ; step's load-flag test; +2 (ticks): the vsync loads it as immediates, 4 cycles sooner
-; than from memory.  The Model B's stub pages bank 7 in (through pagelogic, the write
-; bank too) before the body, which makes both the vsync's T1 restart and every step
-; later -- STUBLAT ticks in all -- where the Master's handler holds instead.
+; than from memory.  The Model B's stub pages bank 7 in (pagelogic inlined: no write
+; bank, the interrupt stores into none) before the body, which makes both the vsync's
+; T1 restart and every step later -- STUBLAT ticks in all -- where the Master's
+; handler holds instead.
   .if BHW
-STUBLAT = 18 - 22                   ; (22: the stub's pagelogic inlined, jmp for jsr)
+STUBLAT = 18 - 22 - 4               ; (22: the stub's pagelogic inlined, jmp for jsr; 4: its write bank gone, twice)
   .else
 STUBLAT = -BARLATE                  ; (the bar's step fires later: no hold in it)
   .endif
@@ -4295,9 +4289,12 @@ mapput: pha
         bankimm lda, BANK_MAP, 0
         sta ROMSEL_CPY
         sta ROMSEL
-        wrsel BANK_MAP, 0           ; (a store follows)
+        wrsel BANK_MAP, 0           ; a write window: the store
         pla
         sta (mapptr),y
+        pha
+        wrback 0, 2                 ; (closed)
+        pla
         .assert * = pagelogic, error, "mapput falls into pagelogic"
 
 
@@ -4418,16 +4415,15 @@ wait_flip:
         rts
 
 ; ============================================================================
-; pagelogic: bank 7 back, for reading and (on the write-select boards) for writing --
-; the return path of every crossing from bank 7 (map access, callbank, the thunks)
+; pagelogic: bank 7 back, for reading -- the return path of every crossing from bank 7
+; (map access, callbank, the thunks); the write bank is 7's already (cpu.inc)
 ; ============================================================================
         .segment "LOWCODE"
 pagelogic:                          ; A, X, Y and the carry all come through intact:
         pha                         ; these sit in the middle of calls that return values
         bankimm lda, BANK_LVL, 0
         sta ROMSEL_CPY
-        sta ROMSEL
-        wrsel BANK_LVL, 0           ; (the write bank too: bank 7's code stores)
+        sta ROMSEL                  ; (no write bank: it is 7's already -- cpu.inc)
         pla
         rts
         .segment "KRNCODE"

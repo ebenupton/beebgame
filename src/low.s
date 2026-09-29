@@ -28,22 +28,19 @@ irq_handler:                        ;  chain: engine.s)
         sty irq_y
         lda ROMSEL_CPY
         pha
-        bankimm lda, BANK_LVL, 0    ; bank 7, and its write bank (pagelogic's, inline)
-        sta ROMSEL_CPY
-        sta ROMSEL
-        wrsel BANK_LVL, 0
+        bankimm lda, BANK_LVL, 0    ; bank 7, for reading (pagelogic's, inline: the
+        sta ROMSEL_CPY              ; interrupt stores into no bank, so the write bank
+        sta ROMSEL                  ; is left as it was -- cpu.inc)
         jmp isr_body
 irq_vret:                           ; the vsync's way back: the tune's step, while it plays
         lda MUSTICK
         beq irq_ret
         dec MUSTICK                 ; (1 -> 0: MUSON's value, which is 0 or 1)
-        jsr music_tick              ; (bank 7, and its write bank: paged above)
+        jsr music_tick              ; (bank 7: paged above)
 irq_ret:                            ; a step's way back
         pla
         sta ROMSEL_CPY
         sta ROMSEL
-        tax                         ; the interrupted code may store next
-        wrselx 0
         ldy irq_y
         ldx irq_x
         lda $FC
@@ -77,8 +74,9 @@ page6:  bankimm lda, BANK_TILES, 0  ; (selbb and validate: page6 first; selbb th
 ; select_backbuf (it patches ringaddr's operand) and scroll_validate (it draws the
 ; new strips with drawrect itself)
 selbb:  jsr page6
-        wrsel BANK_TILES, 0
+        wrsel BANK_TILES, 0         ; a write window: select_backbuf patches ringaddr
         jsr select_backbuf
+        wrback 0, 1                 ; (closed)
         jmp pagelogic
 validate:
         jsr page6                   ; (no write bank: scroll_validate and drawrect store
@@ -115,3 +113,12 @@ mirwcx:   .res 2                    ; the wcxm the copy was made for
 ; zero page's: engine.s)
 sprc_ok:  .res 1                    ; the resident sprites (SPRC) are in bank 4, and (the
 sprx_ok:  .res 1                    ;  Master) SPRX in HAZEL/ANDY: ldprog.s
+; What the interrupt stores, in main RAM so that it stores into no bank and needs no
+; write bank of its own (cpu.inc: the write bank is 7's but for short windows) -- last
+; in low RAM, so that nothing else moved for it
+SFXDUR:    .res 1                   ; the sound effect's steps to go (sound_tick)
+LOADREQ:   .res 1                   ; 0 running, 1 stop asked, 2 stopped, 3 resume asked (load_begin)
+MUSDUR:    .res 1                   ; the tune's player (music_tick, the menus' image;
+MUSNOTE:   .res 3                   ;  MUSON is in zero page): the note's steps to go,
+ISRT1:     .res 1                   ;  each channel's note, and its scratch
+ISRT2:     .res 1

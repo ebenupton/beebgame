@@ -87,6 +87,7 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
 :       dex
         sta __TILBSS_RUN__,x
         bne :-
+        wrback BANK_LVL             ; (the window's end: the write bank 7's from here on)
         jsr take_over               ; the interrupt: bank 6 still paged, as it was
         jsr pagelogic               ; bank 7 (low RAM's, the image copied above)
         jsr disc_init               ; a 1770: reset, and the head found

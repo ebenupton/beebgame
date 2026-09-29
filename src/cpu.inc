@@ -124,10 +124,9 @@ SPRGEOM = 0                         ; the directory split: the level's addresses
   .endif
 .endmacro
 .macro setbank n, b, tag            ; ROMSEL_CPY first: the MOS's own shadow of ROMSEL,
-        bankimm lda, n, b, tag      ; which the interrupt restores from
-        sta ROMSEL_CPY
+        bankimm lda, n, b, tag      ; which the interrupt restores from (the read bank
+        sta ROMSEL_CPY              ; alone: the write bank stays 7's -- below)
         sta ROMSEL
-        wrsel n, b, tag             ; (the write bank too, on a board)
 .endmacro
 
 ; ---------------------------------------------------------------- the write bank
@@ -137,12 +136,19 @@ SPRGEOM = 0                         ; the directory split: the level's addresses
 ; switch that a store into sideways RAM may follow carries a companion store, assembled
 ; as a second `sta ROMSEL` (harmless: A holds the bank) and listed in the WRFIX segment
 ; for the boot loader to rewrite by board: Watford `sta $FF3n` (n the socket) or, where
-; the bank is in X as well, `sta $FF30,x`; Solidisk `sta $FE60`.  A switch that only
-; READS the bank it pages (mapbyte, mapstrip's way in) needs none.  On the Master the
-; macros are empty.
+; the bank is in X as well, `sta $FF30,x`; Solidisk `sta $FE60`.  (wrback's is `sta
+; $FF30` as assembled: a store into the MOS's ROM, nothing on a plain machine, where
+; ROMSEL would page bank 7 in.)  On the Master the macros are empty.
+; The rule: the write bank is bank 7's, always, but in a WINDOW -- a store into another
+; bank, between a wrsel to it and a wrback that puts 7's back (the sprite banks' entry,
+; mapput, selbb, boot).  Nothing else moves it: a switch that only reads (every other
+; crossing, pagelogic, setbank) leaves it be, and the interrupt stores into no bank
+; (what it keeps is in main RAM), so it neither needs a write bank nor sets one -- an
+; interrupt inside a window finds the window's and leaves it.
 ;   wrsel n, b [, tag]   after a switch to the constant bank n (A = n), in bank b's
 ;                        image (0 = the low-RAM image, as BANKREF)
 ;   wrselx b             after a switch to the bank in A AND X
+;   wrback b [, tag]     a window's end: the write bank back to 7's (A lost)
 .macro WRREC kind, b, name          ; (the record: the image's bank, the store's address,
   .if ::BHW                        ;  the kind: 4..7 a constant bank, $FE "in X")
         .ident(.concat("@wr_", name)):
@@ -166,6 +172,19 @@ SPRGEOM = 0                         ; the directory split: the level's addresses
         WRREC n, b, .sprintf("s_%d", n)
     .else
         WRREC n, b, .sprintf("s_%d_%d", n, tag)
+    .endif
+  .endif
+.endmacro
+.macro wrback b, tag                ; A = bank 7's (Solidisk's store writes A), then a
+  .if ::BHW                        ; store the boot loader makes the board's -- but not
+    .if .blank(tag)                ; a second sta ROMSEL, which would page bank 7 in under
+        bankimm lda, ::BANK_LVL, b, 99   ; whatever runs here: sta $FF30, a store into
+        sta $FF30                        ; the MOS's ROM, nothing on a plain machine
+        WRREC ::BANK_LVL, b, "s_7_99"
+    .else
+        bankimm lda, ::BANK_LVL, b, tag
+        sta $FF30
+        WRREC ::BANK_LVL, b, .sprintf("s_7_%d", tag)
     .endif
   .endif
 .endmacro

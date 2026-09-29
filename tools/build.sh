@@ -281,7 +281,7 @@ assert len(wr0) % 4 == 0, 'wrfix.bin is not whole entries'
 wr = b''.join(wr0[i:i + 4] for i in range(0, len(wr0), 4) if not ingame(wr0[i], wr0[i + 1] | wr0[i + 2] << 8))
 for i in range(0, len(wr), 4):
     bank, addr, kind = wr[i], wr[i + 1] | (wr[i + 2] << 8), wr[i + 3]
-    assert piece_bytes(bank, addr, 3) == b'\x8d\x30\xfe', 'write-bank store %d:$%04X is not sta $FE30' % (bank, addr)
+    assert piece_bytes(bank, addr, 3) in (b'\x8d\x30\xfe', b'\x8d\x30\xff'), 'write-bank store %d:$%04X is not sta $FE30 (or wrback\'s sta $FF30)' % (bank, addr)
     assert kind in (4, 5, 6, 7, 0xFE), 'write-bank store %d:$%04X: kind $%02X' % (bank, addr, kind)
 banks = tab + body + fix + b'\xff' + wr + b'\xff'
 assert 0x2000 + len(banks) <= 0x7000, 'BANKS (read to $2000) would run into the start-up piece at $7000'
