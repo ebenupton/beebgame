@@ -180,7 +180,7 @@ export class Harness {
     return [
       ["wcx", A.wcx, 2], ["wcy", A.wcy, 1], ["wfine", A.wfine, 1], ["wy", A.wy, 2],
       ["curbuf", A.curbuf, 1],   // (not BUF_VALID: the Master encodes it in BUF_CX now)
-      ["BUF_CX", A.BUF_CX, 4], ["BUF_CY", A.BUF_CY, 2],
+      ["BUF_CX", A.BUF_CX, 4, "bufcx"], ["BUF_CY", A.BUF_CY, 2],
       ["BARDIRTY", A.BARDIRTY, 1],   // (one byte: one bar; not BARBG, gone)
       ["MIRR_R", A.MIRR_R, 2], ["MIRR_LO", A.MIRR_LO, 2],
       ["NSPR", A.NSPR, 1], ["SPRLIST", A.SPRLIST, 5 * MAXSPR, "sprites"],
@@ -202,6 +202,8 @@ export class Harness {
         // (each array to its own length, MAXSPR being a build's choice; the rest zero)
         const n = Math.min(len / 5, this.A.SPR_XL - this.A.SPR_ID), F = [this.A.SPR_ID, this.A.SPR_XL, this.A.SPR_XH, this.A.SPR_YL, this.A.SPR_YH];
         this.inBank("SPR_ID", () => { for (let i = 0; i < n; i++) for (let k = 0; k < 5; k++) b[i * 5 + k] = F[k] < 0x10000 ? this.rd(F[k] + i) : 0; });
+      } else if (kind === "bufcx" && this.A.BUF_CXH !== undefined) {   // (split: low, high bytes)
+        this.inBank(name, () => { for (let bf = 0; bf < 2; bf++) { b[2 * bf] = this.rd(addr + bf); b[2 * bf + 1] = this.rd(this.A.BUF_CXH + bf); } });
       } else if (kind === "rec" || kind === "keep") {   // per buffer, the records it holds
         // (MAXREC is a build's choice: each buffer's live records, the rest zero)
         const mr = (this.A.RECCNT - this.A.SPRREC) / 20, cap = len / (kind === "rec" ? 20 : 1);

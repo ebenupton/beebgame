@@ -123,8 +123,8 @@ mirdirty:
         .segment "ENGCODE"          ; (the engine's per-level clear: load_level's)
 lvreset:
         lda #$80                    ; both buffers invalid: an unreachable window x
-        sta BUF_CX+1                ; (scroll_validate redraws them whole)
-        sta BUF_CX+3
+        sta BUF_CXH                 ; (scroll_validate redraws them whole)
+        sta BUF_CXH+1
         lda #0                      ; (the caller stores this A: it must be 0)
         sta RECCNT
         sta RECCNT+1

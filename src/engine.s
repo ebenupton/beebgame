@@ -325,7 +325,8 @@ DIRTX     = DIRTYLIST
 DIRTY_    = DIRTYLIST+2*DIRTYMAX
   .endif
         .segment "LOWBSS"           ; main RAM: the buffers' state bank 7 reads too
-BUF_CX:    .res 4                   ; (bank 7 invalidates a buffer: high byte $80)
+BUF_CX:    .res 2                   ; each buffer's window x by curbuf: low bytes,
+BUF_CXH:   .res 2                   ; high bytes (bank 7 invalidates a buffer: $80)
 BUF_BOTOK: .res 2                   ; the slot below the playfield is black: scroll_validate
                                     ; (bank 6) clears it, blank_below (bank 7) sets it
 DIRTYCNT:  .res 2                   ; (the game loop)
@@ -1017,9 +1018,7 @@ HPAIR1  := HPAIR0 + 5
         .segment "TILCODE"          ; bank 6, with the row loop
 scroll_validate:
         ldx curbuf                  ; (an invalid buffer holds BUF_CX = $80xx, which the
-        txa                         ;  |dx| >= 80 test below sends to @full)
-        asl
-        tay
+                                    ;  |dx| >= 80 test below sends to @full)
         ; dy = wcy - BUF_CY
         lda wcy
         sec
@@ -1028,10 +1027,10 @@ scroll_validate:
         ; dx = wcx - BUF_CX
         lda wcx
         sec
-        sbc BUF_CX,y
+        sbc BUF_CX,x
         sta w16
         lda wcx+1
-        sbc BUF_CX+1,y
+        sbc BUF_CXH,x
         sta w16+1
         ; |dx| >= 80 -> full  (A still holds w16+1, flags still from the sbc)
         beq @dxpos
@@ -1107,13 +1106,10 @@ scroll_validate:
         wrsel BANK_TILES, BANK_TILES, 2          ; (validate's, but drawrect's gathers may
         lda wcy                                  ;  have let an interrupt leave it 5)
         sta BUF_CY,x
-        txa
-        asl
-        tay
         lda wcx
-        sta BUF_CX,y
+        sta BUF_CX,x
         lda wcx+1
-        sta BUF_CX+1,y
+        sta BUF_CXH,x
         rts
 
 ; draw all listed sprites into current buffer (skipping unchanged kept ones)
@@ -1354,11 +1350,10 @@ erase_old:                          ; go to bank 6's drawrect_clip through callb
         .segment "ENGCODE"          ; bank 7, with the records
         PAD ::PADB_MS, ::PADM_MS    ; (each machine's code off page crossings: pads.inc)
 match_sprites:
-        ldx curbuf
-        txa                         ; an invalid buffer (BUF_CX high byte $80: a level
-        asl                         ; start, or a dirty list that overflowed) is about to
-        tay                         ; be redrawn whole, so nothing in it is kept and
-        lda BUF_CX+1,y              ; there is nothing to erase: its records go
+        ldx curbuf                  ; an invalid buffer (BUF_CX high byte $80: a level
+                                    ; start, or a dirty list that overflowed) is about to
+                                    ; be redrawn whole, so nothing in it is kept and
+        lda BUF_CXH,x               ; there is nothing to erase: its records go
         bpl @valid
         stz RECCNT,x
 @valid: lda RECCNT,x
@@ -3631,11 +3626,9 @@ mark_dirty:                         ; A = tx, X = ty  (adds to both buffers' lis
 @next:  dex
         bpl @b
         rts
-@over:  txa                         ; the list is full: that buffer is redrawn whole
-        asl                         ; instead (an unreachable window x; match_sprites
-        tay                         ; drops its records, scroll_validate redraws it)
-        lda #$80
-        sta BUF_CX+1,y
+@over:  lda #$80                    ; the list is full: that buffer is redrawn whole
+        sta BUF_CXH,x               ; instead (an unreachable window x; match_sprites
+                                    ; drops its records, scroll_validate redraws it)
         bne @next                   ; (always)
 
 ; sign extend A -> tmp3 (0 or $FF)
