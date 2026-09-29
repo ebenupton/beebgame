@@ -301,7 +301,7 @@ MUSTICK:   .res 1                   ; a frame's tune step is due: the vsync's so
 rowbit:    .res 1                   ; the char row being drawn, as a flag bit (1, 2)
 dpass:     .res 1                   ; draw_sprites' pass
 spclip:    .res 1                   ; set at every window edge a sprite is cut against
-halfhi:    .res 1                   ; the halves' page (the loader's), for @hfill
+halfhi:    .res 1                   ; the halves' page less 1 (the loader's), for @hfill
         .segment "ZPFD": zeropage   ; $FD-$FF
 MUSON:     .res 1                   ; the tune plays: the interrupt stub steps it
 crtcb:     .res 2                   ; build_sections: the buffer's CRTC base
@@ -659,7 +659,7 @@ drawrect:
 @done:  rts
         ; ---- @run's rarer ways, here behind @drawrow in its branches' reach: a fill
         ; other than the solid (to @solid), a half tile
-@fx:    jmp @solid                  ; (C is set: set at every entry to @run)
+@fx:    jmp @solid                  ; (C is clear: clear at every entry to @run)
 @half:  and rowbit                  ; a half tile: is this row its fill?  (A mirror's 3
         beq @hcopy                  ; is: @hfill tells them apart)
         jmp @hfill
@@ -685,8 +685,8 @@ drawrect:
         sta rc_subc
         lda rc_w
         sta cnt
-        sec                         ; C is set at every entry to @run (@runend's sbc leaves
-        ; it set on the loop back), so the sbc below needs no sec
+        clc                         ; C is clear at every entry to @run (@advsp's sp step
+        ; leaves it clear on the loop back), so the sbc's below borrow one: lda #5
 @run:
         ldx rc_gi
         lda GATHERH,x               ; bit 7 set: a tile page ($80-$BF), copied; clear, a
@@ -695,7 +695,7 @@ drawrect:
         bne @fx                     ; run), $40 up a flat tile or the other solid
         ; ---- id 0, the level's solid, the commonest run: one byte, the loader's
         ; (SOLIDF), stored down every line of it
-@sol0:  lda #4                      ; (C is set at every entry to @run)
+@sol0:  lda #5                      ; (C is clear at every entry to @run: 4 - rc_subc)
         sbc rc_subc                 ; chars in this run, as @tpset
         cmp cnt
         bcc :+
@@ -727,7 +727,7 @@ drawrect:
 @tpsta: sta tp
 @tpset:
         ; chars in this run: min(4 - rc_subc, cnt) -> rc_n, X = 2*rc_n, tmp = 8*rc_n
-        lda #4
+        lda #5                      ; (C clear: 4 - rc_subc)
         sbc rc_subc
         cmp cnt
         bcc :+
@@ -787,16 +787,16 @@ drawrect:
 @b23:   CHARCPY 2
 @b15:   CHARCPY 1
 @b7:    CHARCPY 0
-@advsp: lda sp
-        adc tmp                     ; C is already clear at every entry to @advsp
+@advsp: lda cnt                     ; the chars left: C is clear at every entry to @advsp,
+        sbc rc_n                    ; so cnt - rc_n - 1, -1 at the row's last run -- whose sp
+        bmi @rowdone                ; step is skipped: sp is dead after it (@rowdone steps
+        adc #0                      ; rc_sp); else C = 1: +1 back, and C = 0
+        sta cnt
+        lda sp
+        adc tmp
         sta sp
         bcs @advc                   ; (the carry out of line, after @rowdone)
-@runend:
-        lda cnt
-        sec
-        sbc rc_n
-        sta cnt
-        beq @rowdone
+@runnext:                           ; (C = 0: the loop back's)
         stz rc_subc
         lda rc_sub
         sta rowoff                  ; later tiles in the row start at column 0
@@ -804,7 +804,7 @@ drawrect:
         jmp @run
 @rowdone:
         lda rc_sp                   ; next char row: +640 with ring wrap
-        adc #(<ROWBYTES)-1          ; C = 1: @runend's sbc cannot borrow (rc_n <= cnt)
+        adc #<ROWBYTES              ; C = 0: @advsp's sbc borrowed
         sta rc_sp
         lda rc_sp+1
         adc #>ROWBYTES
@@ -818,19 +818,20 @@ drawrect:
   .if BHW                           ; so sp's low byte is 0) the run ended exactly there
         lda sp+1                    ; (drawrect: never inside one): back to its base
         cmp ringehi
-        bcc @runend
+        bcc @runnext                ; (C = 0)
         lda ringbhi
         sta sp+1
         lda #<RING_A                ; (both rings' base low bytes)
         sta sp
         .assert <RING_A = <RING_B, error, "@advc: the rings' base low bytes differ"
   .else
-        bpl @runend                 ; RINGEND = $8000: N from the inc
+        bpl @advk                   ; RINGEND = $8000: N from the inc
         lda #>RINGBASE
         sta sp+1                    ; (<RINGBASE = 0 = sp's low byte)
         .assert <RINGBASE = 0 && RINGEND = $8000, error, "@advc: the Master's ring"
   .endif
-        jmp @runend
+@advk:  clc                         ; (the loop back's C)
+        jmp @runnext
   .if TILEMIRROR                    ; (cpu.inc: off by default -- no level needs a mirror)
         ; ---- a mirrored full tile: its source's chars right to left, each byte's two
         ; game pixels swapped -- ((b & $33) << 2) | ((b & $CC) >> 2); the dither is per
@@ -877,7 +878,14 @@ drawrect:
         spnext
         dec tmp2
         bne @mc
-        jmp @runend
+        lda cnt                     ; @advsp's count, its sp step done here (spnext)
+        clc
+        sbc rc_n
+        bmi @mdone
+        adc #0
+        sta cnt
+        jmp @runnext
+@mdone: jmp @rowdone
   .endif
         ; ---- fills: a half tile's fill row, a flat tile, the other solid -- no source
         ; bytes: a pair, even lines tp, odd tp+1, down every char
@@ -888,7 +896,7 @@ drawrect:
         beq @mir
   .endif
         lda GATHERH,x               ; the half's pair: k back out of its address
-        sbc halfhi                  ; (C is set at every entry to @run)
+        sbc halfhi                  ; (C is clear at every entry to @run: halfhi is less 1)
         asl
         asl
         asl

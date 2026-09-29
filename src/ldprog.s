@@ -517,8 +517,10 @@ lv_load:
         bne :+
         iny
 :       sty HPAIR1+1
-        lda sv_halfhi
-        sta halfhi                  ; (bank 6's: the row loop's @hfill)
+        ldx sv_halfhi               ; (X, Y free: HPAIR's done)
+        dex
+        stx halfhi                  ; (bank 6's: the row loop's @hfill, less 1 -- its sbc
+                                    ;  borrows: C clear at every entry to @run)
         lda sv_solid
         sta SOLIDF                  ; the row loop's lda #fill for id 0
   .if BHW
