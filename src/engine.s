@@ -207,12 +207,12 @@ rc_w:     .res 1
 rc_h:     .res 1
 rc_sub:   .res 1
 rc_gi:    .res 1
-rc_subc:  .res 1
-rowoff:   .res 1                  ; rc_sub | rc_subc*8 : byte offset into the tile for this run
+rc_lim:   .res 1                  ; the chars this run may take: 4 - its first char in the tile
+rowoff:   .res 1                  ; rc_sub | (4 - rc_lim)*8 : byte offset into the tile for this run
 rc_n:     .res 1
 rc_tx0:   .res 1                  ; per-rect invariants: first tile column,
 rc_nt:    .res 1                  ;   tiles-1 per row,
-rc_sc0:   .res 1                  ;   rc_x & 3 (chars into the first tile),
+rc_sc0:   .res 1                  ;   4 - (rc_x & 3): the first tile's chars (rc_lim's first),
 rc_ro0:   .res 1                  ;   (rc_x & 3) << 3,
 rc_sp:    .res 2                  ;   screen address of the current char row's first char
 irq_x:    .res 1                  ; IRQ handler register save (not reentrant)
@@ -615,6 +615,10 @@ drawrect:
         lsr
         lsr
         sta rc_nt
+        lda #4                      ; the first run's limit, once a rect (each row's first
+        sec                         ; run takes it, @drawrow; the later runs 4, @runnext)
+        sbc rc_sc0
+        sta rc_sc0
         lda rc_y
         jsr ringaddr
         sta rc_sp+1                 ; ringaddr returns A = sp+1 (its last store)
@@ -642,15 +646,20 @@ drawrect:
         lsr
   .endif
         jsr maprow6
+        lda rc_y                    ; only a rect's first tile row can start on an odd
+        and #1                      ; char row -- after it @nextrow always lands even, so
+        beq @rowy                   ; the test is here, once, not in the loop
+        jsr mapstrip                ; (odd: the first tile row's gather, then its second
+                                    ;  char row)
+        jmp @second
 @rowy:
         jsr mapstrip                ; the row's gather, run in bank 5 beside the map
-        wrsel BANK_TILES, BANK_TILES ; (gather5, below): GATHERL/H in low RAM; mapstrip
-                                    ; comes back with A = this bank: the write bank too
+                                    ; (gather5, below): GATHERL/H in low RAM.  No write
+                                    ; bank: drawrect stores nothing into a bank (an
+                                    ; interrupt in gather5 leaves it 5: scroll_validate,
+                                    ; which does store, sets it after)
         ; ---- draw this char row, and (without re-gathering) the odd row of the same tile row
-        lda rc_y                    ; only a rect's first tile row can start on an odd
-        and #1                      ; char row: after that @nextrow always lands even
-        bne @second
-        sta rc_sub                  ; A = 0: rc_y & 1 fell through
+        stz rc_sub
         lda rc_ro0
         sta rowoff
         lda #1                      ; the char row, as a half tile's flag bit
@@ -689,8 +698,8 @@ drawrect:
         and #$E0                    ; outside $E0 through the two eors
         eor rowoff
         jmp @tpsta
-@drawrow:
-        inc rc_y                    ; the row this draws: nothing in @drawrow reads rc_y
+@drawrow:                           ; (rc_y is the rect's first row still: only
+                                    ;  drawrect's entry reads it, and every caller sets it)
         ; ---- screen base (per-rect ringaddr, +640 per row)
         lda rc_sp
         sta sp
@@ -703,11 +712,11 @@ drawrect:
         lda #0
         sta rc_gi
         lda rc_sc0
-        sta rc_subc
+        sta rc_lim
         lda rc_w
         sta cnt
         clc                         ; C is clear at every entry to @run (@advsp's sp step
-        ; leaves it clear on the loop back), so the sbc's below borrow one: lda #5
+        ; leaves it clear on the loop back): @hfill's sbc halfhi and the mirror's borrow one
 @run:
         ldx rc_gi
         lda GATHERH,x               ; bit 7 set: a tile page ($80-$BF), copied; clear, a
@@ -716,8 +725,7 @@ drawrect:
         bne @fx                     ; run), $40 up a flat tile or the other solid
         ; ---- id 0, the level's solid, the commonest run: one byte, the loader's
         ; (SOLIDF), stored down every line of it
-@sol0:  lda #5                      ; (C is clear at every entry to @run: 4 - rc_subc)
-        sbc rc_subc                 ; chars in this run, as @tpset
+@sol0:  lda rc_lim                  ; chars in this run, as @tpset
         cmp cnt
         bcc :+
         lda cnt
@@ -747,9 +755,8 @@ drawrect:
         ora rowoff                  ; (a full tile's lo byte is (id&3)<<6: bits 0-5 clear)
 @tpsta: sta tp
 @tpset:
-        ; chars in this run: min(4 - rc_subc, cnt) -> rc_n, X = 2*rc_n, tmp = 8*rc_n
-        lda #5                      ; (C clear: 4 - rc_subc)
-        sbc rc_subc
+        ; chars in this run: min(rc_lim, cnt) -> rc_n, X = 2*rc_n, tmp = 8*rc_n
+        lda rc_lim
         cmp cnt
         bcc :+
         lda cnt
@@ -818,7 +825,8 @@ drawrect:
         sta sp
         bcs @advc                   ; (the carry out of line, after @rowdone)
 @runnext:                           ; (C = 0: the loop back's)
-        stz rc_subc
+        lda #4                      ; later tiles in the row: whole
+        sta rc_lim
         lda rc_sub
         sta rowoff                  ; later tiles in the row start at column 0
         inc rc_gi
@@ -847,16 +855,14 @@ drawrect:
         and #$C0
         ora rc_sub                  ; the char row
         sta tp
-        lda rc_subc                 ; the first char drawn is the source's 3 - rc_subc
-        eor #3
+        lda rc_lim                  ; the first char drawn is the source's rc_lim - 1 (C = 0:
+        sbc #0                      ;  clear at every entry to @run)
         asl
         asl
         asl
         ora tp
         sta tp
-        lda #4
-        sec
-        sbc rc_subc
+        lda rc_lim
         cmp cnt
         bcc :+
         lda cnt
@@ -925,9 +931,7 @@ drawrect:
         lda FLATTAB+1,y
         sta tp+1
 @fillgo:
-        lda #4
-        sec
-        sbc rc_subc
+        lda rc_lim
         cmp cnt
         bcc :+
         lda cnt
@@ -1099,7 +1103,9 @@ scroll_validate:
 @done:
         ldx curbuf
         stz BUF_BOTOK,x             ; the window moved: the slot below is stale again
-        lda wcy
+        bankimm lda, BANK_TILES, BANK_TILES, 2   ; BUF_CY is bank 6's: its write bank
+        wrsel BANK_TILES, BANK_TILES, 2          ; (validate's, but drawrect's gathers may
+        lda wcy                                  ;  have let an interrupt leave it 5)
         sta BUF_CY,x
         txa
         asl
@@ -3465,7 +3471,8 @@ MIRTAB:    .res MAXMIR              ; per mirrored id: the slot of the tile it m
 ; callbank left it -- then drawrect_clip
 bank6_entry:
         .assert * = BANKENTRY, error, "bank6_entry must start bank 6"
-        wrsel BANK_TILES, BANK_TILES
+                                    ; (no write bank: drawrect_clip and drawrect store
+                                    ;  nothing into a bank; pagelogic sets 7's after)
 ; drawrect_clip: drawrect, with the rect clipped to the current window
 ; (rows wcy..wcy+BUFROWS-1, cols wcx..wcx+ROWCHARS-1)
 drawrect_clip:

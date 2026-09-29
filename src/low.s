@@ -65,8 +65,8 @@ maprow6:                            ; A = tile row -> ptr = LV_MAP + row * (1 <<
 
 mapstrip:                           ; (ptr) = the row's first tile: its gather, run in
         bankimm lda, BANK_MAP, 0    ; bank 5 beside the map (engine.s gather5), into
-        sta ROMSEL_CPY              ; GATHERL/GATHERH here; bank 6 back (the write bank:
-        sta ROMSEL                  ; drawrect sets it after the call)
+        sta ROMSEL_CPY              ; GATHERL/GATHERH here; bank 6 back (read only: no
+        sta ROMSEL                  ; write bank -- scroll_validate sets its own)
         jsr gather5
 page6:  bankimm lda, BANK_TILES, 0  ; (selbb and validate: page6 first, then the write
         sta ROMSEL_CPY              ; bank for what they store in bank 6)
@@ -91,8 +91,8 @@ validate:
 ; of banks 4, 5 and 6: the sprite row loop in 4 and 5, bank6_entry + drawrect_clip in 6
 ; (each sets its own write bank) -- and page bank 7 back (pagelogic).
 callbank:                           ; A = the bank (the write bank is set by the
-        sta ROMSEL_CPY              ; entry itself: ds_entry, drawrect_clip -- A still
-        sta ROMSEL                  ; holds the bank there)
+        sta ROMSEL_CPY              ; entry itself where it stores: ds_entry -- A still
+        sta ROMSEL                  ; holds the bank there; drawrect_clip stores nothing)
         jsr BANKENTRY
         jmp pagelogic
 
