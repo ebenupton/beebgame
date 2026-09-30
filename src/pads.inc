@@ -15,12 +15,12 @@ PADM_FC5 = 28                       ;         before the copy blitter
 ; So is the order of ENGCODE's blocks in engine/frame.s (Cleo's test/blockopt.py, first).
 PADB_MS = 0                         ; before match_sprites
 PADM_MS = 4
-PADB_SP = 10                         ; before draw_sprites
+PADB_SP = 7                         ; before draw_sprites
 PADM_SP = 0
-PADB_EO = 5                         ; before erase_old
+PADB_EO = 8                         ; before erase_old
 PADM_EO = 0
 PADB_DS = 0                         ; before drawsprite
-PADM_DS = 8
+PADM_DS = 11
 PADB_CP = 0                         ; before copy_partial
 PADM_CP = 9
 PADB_T6 = 14                        ; bank 6, the Model B: after ringmodtab, before drawrect

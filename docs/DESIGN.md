@@ -196,7 +196,7 @@ $8000.
 
 | Range | Model B | Master |
 |---|---|---|
-| the row loop (SPR4CODE: `ds_entry`, the 4-bit blitter and its mirrored twin, the copy blitter) | $8000-$83E4 | $8000-$83A9 |
+| the row loop (SPR4CODE: `ds_entry`, the 4-bit blitter and its mirrored twin, the copy blitter) | $8000-$83CA | $8000-$83A7 |
 | the resident sprites' bank-4 part (SPRC_BASE, SPRC_LEN: the game's) | from B4_CODE_END | same |
 | the level's staged sprites | to $BBFF | same |
 | L0TAB, L1TAB, NMASK (the expansion tables: `nibtab.bin`, the game's) | $BC00-$BEFF | same |
@@ -206,7 +206,7 @@ $8000.
 
 | Range | Model B | Master |
 |---|---|---|
-| the row loop (SPR5CODE: the same as bank 4's) | $8000-$83E4 | $8000-$83A9 |
+| the row loop (SPR5CODE: the same as bank 4's) | $8000-$83CA | $8000-$83A7 |
 | MAP5CODE: `gather5` | $83E5-$844B | $83E5-$83F9 |
 | the resident sprites' bank-5 part (SPRC5_BASE, SPRC5_LEN: the game's) | from B5_CODE_END | same |
 | the level's staged sprites | to $9BFF | same |
@@ -705,8 +705,15 @@ doubled unless flag bit 1 is set.  It clips the sprite to the
 window, writes the record, notes the mirror's columns (Model B), computes the source
 and screen pointers and the blitter index, and hands over through `callbank` to the
 row loop in the bank the image is in.  The row loop (`NIB_LOOPS`, `engine/sprloops.s`)
-is assembled into both sprite banks, since it reads the image bytes; `ds_entry` sets
-the write bank and patches its own dispatch.
+is assembled into both sprite banks, since it reads the image bytes; `ds_entry` opens
+a write window into its bank for the whole row loop (as `drawrect` does), because
+each row patches the column loop's `jmp`.  The lines a row draws in every cell are the
+same all along it -- 0-7, but from `sp_ra0` on the first row and to `sp_ra1` on the
+last -- so the row loop, not the column, chooses the blitter's entry for them
+(`sprrow_tab`, from `sp_disp`, the prologue's: the blitter's first entry): to line 7
+the unrolled cell entered at its first line, otherwise the partial loop.  The
+commonest blitter, `sprFN`, falls into its column step, and the column countdown ends
+in the patched `jmp` itself.
 
 The 4-bit blitter (`NIBBLIT`: `sprFN`, and `sprFM` mirrored): an image is stored
 column by column, a byte a game-pixel row, the byte's two game pixels 4 bits each (the
@@ -722,8 +729,9 @@ always even (lb0 = 2 x sy + wfine), so a cell's lines go in pairs, a source byte
 pair.  A sprite's screen position is in whole bytes across (`drawsprite`'s c0 = sx >>
 1: 2 game pixels, 4 screen pixels) and game pixels down (2 scanlines).  A box (flag
 bit 3) is not 4-bit: it is its screen bytes, every scanline stored (flag bit 1, lines
-= 2h), drawn by the copy blitter (`NIBCOPY`, `sprFC`: 13 cycles a byte, unrolled for
-a whole cell), so a box's backdrop keeps any dither exactly.  Every blitter is in both
+= 2h), drawn by the copy blitter (`NIBCOPY`, `sprFC`: 13 cycles a byte, unrolled to line
+7 from any first line -- each line sets its own Y -- and the Master's line 0
+non-indexed), so a box's backdrop keeps any dither exactly.  Every blitter is in both
 banks.
 
 **Resident and staged sprites.**  Which sprites are loaded once and which each level

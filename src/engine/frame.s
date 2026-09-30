@@ -18,7 +18,6 @@
 ;   drawsprite     the sprite prologue: clip, record, set up and call the row loop
 ;   render_core    the frame's steps, in order
 ;   mark_dirty     queue a changed map tile for both buffers (the game's call)
-;   sext           sign-extend A into tmp3
 ;   draw_dirty     redraw the back buffer's queued dirty tiles
 ;   blank_below    black the ring slot below the playfield on the map's bottom row
 ;   render_frame   the game's call: render the back buffer and request the flip
@@ -690,7 +689,7 @@ drawsprite:
         asl sp_ext
 :
         ; ---- horizontal: sx = spx - refx - wx ; c0 = sx >> 1
-        lda SPRG_RX,y               ; tmp3 = refx's sign extension (sext inlined)
+        lda SPRG_RX,y               ; tmp3 = refx's sign
         and #$80
         beq @sxp
         lda #$FF
@@ -755,7 +754,10 @@ drawsprite:
 @vert:
         ldy sp_g
         lda SPRG_RY,y
-        jsr sext                    ; tmp3 = refy's sign (Y kept)
+        and #$80                    ; tmp3 = refy's sign
+        beq @rpos
+        lda #$FF
+@rpos:  sta tmp3
         lda spy
         sec
         sbc SPRG_RY,y
@@ -1106,18 +1108,6 @@ mark_dirty:
 @over:  lda #$80
         sta BUF_CXH,x               ; an unreachable window x
         bne @next                   ; (always)
-
-; ----------------------------------------------------------------------------
-; sext: sign-extend A into tmp3
-;   In:   A
-;   Out:  tmp3 = 0 or $FF, by A's bit 7;  A = tmp3;  X, Y kept
-; ----------------------------------------------------------------------------
-        .segment "ENGCODE"          ; (its one caller is the sprite prologue: bank 7)
-sext:   and #$80
-        beq :+
-        lda #$FF
-:       sta tmp3
-        rts
 
 ; ============================================================================
 ; draw_dirty: redraw the back buffer's queued dirty tiles, and empty its list
