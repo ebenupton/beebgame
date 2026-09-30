@@ -74,7 +74,9 @@ STEPLATE = 0
   .else
 BARLATE = 13
 STEPLATE = 20
-BARLEAD = 10
+BARLEAD = 23
+QLEAD = 6                           ; Q's step: D lands in the blanking before Q (crtctime)
+P2EARLY = 12                        ; a bottom partial's step: early enough behind a 2-line one
   .endif
         .segment "KRNCODE"          ; the kernel: the menus build their frame with it too
 build_sections:
@@ -227,15 +229,19 @@ build_sections:
         sta SECTAB+4,x              ; R6
         lda #30
         sta SECTAB+5,x              ; R7
-        ;      w16 has not moved: the address the P2 @addr left in the previous entry
-        ;      is this one's too
-        lda SECTAB-8,x
-        sta SECTAB,x
-        lda SECTAB-8+1,x
-        sta SECTAB+1,x
 
-        ; ---- Q: blanking and the vsync; it hands the chain back to the bar
-@sq2:   txa                         ; X = Q's entry
+        ; ---- Q: blanking and the vsync; it hands the chain back to the bar.  Its
+        ; start (entry X's next address) is a black line whatever the fine scroll:
+        ; a 6845 shows a frame's first scanline whatever R6 says, so Q's line 0 is
+        ; one line more under the picture -- as the next map row it would be junk
+        ; at the map's bottom, and a repeat of P2's first line under a fine scroll.
+        ; (QBLANK: defs.s -- the Master's 640 zeroed bytes below the bar; the Model
+        ; B's own bar, until its palette can blank that scanline.)
+@sq2:   lda #>(QBLANK / 8)
+        sta SECTAB,x
+        lda #<(QBLANK / 8)
+        sta SECTAB+1,x
+        txa                         ; X = Q's entry
         clc
         adc #8
         tax
@@ -257,6 +263,39 @@ build_sections:
         sta SECTAB+4,x              ; R6 = 0: display off
         lda #QVSYNC
         sta SECTAB+5,x              ; R7: the only entry whose R7 is this
+  .if .not BHW
+        ; ---- the Master: Q's step puts D back to 0 before Q's first scanline (QBLANK is
+        ;      main RAM: under $3000, D = 1 would read HAZEL/ANDY), so like the D step
+        ;      it fires early, by QLEAD: the section before Q -- whose duration the entry
+        ;      before that carries -- runs STEPLATE + QLEAD shorter.  The vsync takes
+        ;      this buffer's Q entry from BUF_QS into QSECT.
+        txa
+        ldy curbuf
+        beq @q0
+        ldy #2
+@q0:    sta BUF_QS,y
+        lda SECTAB-16+6,x
+        sec
+        sbc #STEPLATE+QLEAD
+        sta SECTAB-16+6,x
+        bcs @q1
+        dec SECTAB-16+7,x
+@q1:    lda wfine                   ; and a bottom partial's step fires P2EARLY early
+        beq @q3                     ; (its writes still follow its restart), so the
+        lda SECTAB-24+6,x           ; step before Q's is done in time behind a two-line
+        sec                         ; one: P ends P2EARLY sooner, P2 runs it longer
+        sbc #P2EARLY
+        sta SECTAB-24+6,x
+        bcs @q2
+        dec SECTAB-24+7,x
+@q2:    lda SECTAB-16+6,x
+        clc
+        adc #P2EARLY
+        sta SECTAB-16+6,x
+        bcc @q3
+        inc SECTAB-16+7,x
+@q3:    clc                         ; (the BARLEAD block's adc wants C = 0)
+  .endif
   .if BARLEAD
         ; ---- the Master: the T1 that ends the bar fired BARLEAD early, so the section
         ;      after the bar -- whose duration entry 0 carries -- runs BARLEAD longer to
@@ -265,7 +304,7 @@ build_sections:
         beq @e0
         ldx #48
 @e0:    lda SECTAB+6,x
-        adc #BARLEAD+STEPLATE       ; C = 0: the last carry-writer was @sq2's adc #8
+        adc #BARLEAD+STEPLATE       ; C = 0 (@q1's clc)
         sta SECTAB+6,x
         bcc @e1
         inc SECTAB+7,x
@@ -546,7 +585,17 @@ calc_ring:
 isr_body:
   .else
 irq_handler:
-        stx irq_x
+        ; Q's step puts D back to 0 before Q's first scanline (the 6845 shows it
+        ; whatever R6 says, from QBLANK, main RAM), first thing: behind a two-line P2's
+        ; own step there is no time for more.  The chain rests on Q till the vsync, so
+        ; any interrupt with SECIDX at QSECT is Q's step, or a vsync that wants D = 0.
+        lda SECIDX
+        cmp QSECT
+        bne @nq
+        lda ACCCON
+        and #$FE
+        sta ACCCON
+@nq:    stx irq_x
         sty irq_y
   .endif
         bit VIA_IFR
@@ -574,6 +623,14 @@ irq_handler:
 @hold:  dey
         bne @hold
 @noD:
+        ; Q's step (QSECT): D is 0 already (irq_handler's first act); it holds as the D
+        ; step does, so its CRTC writes follow Q's restart
+        cpx QSECT
+        bne @noQ
+        ldy #5
+@qhold: dey
+        bne @qhold
+@noQ:
   .endif
         ; ---- the shape: R9, R4, R6, R7, in that order (the header)
         lda #9
@@ -756,6 +813,8 @@ irq_handler:
         clc                         ;  D step)
         adc #8
         sta DSECT
+        lda BUF_QS,x                ; and Q's, the step that puts D back to 0
+        sta QSECT
         lda #1                      ; the bar is below $3000: it is only main
         trb ACCCON                  ;  RAM to the CRTC while D = 0
   .endif
@@ -1017,7 +1076,7 @@ blank_palette:
 ;   Out:  sp = the character's screen address (the Model B: in the back buffer,
 ;         by ringbhi);  A = sp+1;
 ;         X = the ring slot
-; For the sprite prologue, copy_partial, blank_below and the menus.  The ring modulus
+; For the sprite prologue, copy_partial and the menus.  The ring modulus
 ; is by subtraction (no table this side), the row multiple from the kernel's
 ; mulrowlo/hi, and on the Model B the buffer's base from select_backbuf (both bases
 ; are xx80: ringbhi is the page).  C = 0 in: the Master's modulus (and #31) leaves the

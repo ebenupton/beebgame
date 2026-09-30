@@ -68,6 +68,15 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
 :       dex
         sta __TABLES_RUN__,x
         bne :-
+        ldx #0                      ; Q's black row (defs.s QBLANK): 640 zeros (A = 0)
+@qz:    sta QBLANK,x
+        sta QBLANK+256,x
+        inx
+        bne @qz
+        ldx #ROWBYTES-512-1
+@qz2:   sta QBLANK+512,x
+        dex
+        bpl @qz2
   .endif
         jsr crtc_init
         ; both buffers' chains, for a blank window at the origin (ringS, barq, wfine

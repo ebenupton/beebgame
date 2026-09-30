@@ -106,7 +106,7 @@ through, are in its own segment, ZPHW.
 | Range | Model B | Master | Use |
 |---|---|---|---|
 | $0100-$013F | | | the stack, 64 bytes |
-| LOWBSS | $0140-$01F8 | $0140-$01F0 | what more than one bank reads: the sprite list (SPRLIST), the buffers' state (BUF_CX, BUF_BOTOK, DIRTYCNT), PBANK/PBOARD, DISPSECT/NEXTSECT, GATHERH, the mirror's notes (Model B), sprc_ok, sprx_ok; and the game's few bytes |
+| LOWBSS | $0140-$01F8 | $0140-$01F0 | what more than one bank reads: the sprite list (SPRLIST), the buffers' state (BUF_CX, DIRTYCNT), PBANK/PBOARD, DISPSECT/NEXTSECT, GATHERH, the mirror's notes (Model B), sprc_ok, sprx_ok; and the game's few bytes |
 | $0204-$0205 | | | IRQ1V, which the game points at its handler |
 | LOWCODE | $0206-$02E4 | $0206-$02A4 | the crossings, the map helpers, pagelogic; the Model B's interrupt stub |
 | LOWBSS2 | $02E5-$02F9 | $02A5-$02B9 | GATHERL |
@@ -150,8 +150,9 @@ is staged below the objects because they are copied out while it is still being 
 |---|---|
 | $0400-$05FF | LV_PAGE0: the level's tile gather table, 256 low bytes and 256 high |
 | $0600-$08CA | CODE: the interrupt handler and chain step, the keyboard, the sound effects |
-| $0C00-$0C6D | TABLES: the handler's state (BUF_SEC0, BUF_SEC0T1, SECTAB, SFXDUR, LOADREQ, dispD, OLDIRQ, NEXTBUF); `boot` zeroes it |
+| $0C00-$0C6D | TABLES: the handler's state (BUF_SEC0, BUF_SEC0T1, SECTAB, BUF_QS, OLDIRQ); `boot` zeroes it |
 | $1C00- | LV_OBJS, the level's objects (below the display; LDPROG ends by $1BFF) |
+| $2880-$2AFF | QBLANK: 640 zeros (`boot`'s), Q's start -- the line a 6845 shows under the picture |
 | $2B00-$2FFF | the status bar, 2 rows, main RAM, single-buffered |
 | $3000-$7FFF | the ring: buffer 0 in main RAM, buffer 1 in shadow RAM at the same addresses |
 
@@ -264,7 +265,7 @@ segment sizes (`od65`, before any link), so the engine's code sits where its own
 size puts it, whatever the game's is (the Master's, pinned to the Model B's start,
 runs on from there and falls short).  ENGCODE is `render_frame`
 and `render_core`, the sprite prologue (`drawsprite`), `draw_sprites`,
-`match_sprites`, `erase_old`, `copy_partial`, `blank_below`, `mark_dirty`,
+`match_sprites`, `erase_old`, `copy_partial`, `mark_dirty`,
 `draw_dirty`, `lvreset`, and on the Model B `mirror_copy` -- in whatever order keeps
 their hot loops in a page (below: the pads).  ENGBSS is SPR_TABLE (the level's
 part of the sprite directory: 2 bytes for each of the game's BOXID0 + BOXN sprite ids), the sprite records (SPRREC, RECCNT, KEEP) and the dirty
@@ -443,14 +444,13 @@ and `copy_partial`), and `mirror_copy`, the last step of `render_core`, copies o
 those; a move left uncovers characters the last copy never reached, so it redoes the
 whole row.
 
-`blank_below`: a 6845 always displays the first scanline of a frame whatever R6 says,
-so Q's row 0 line 0 -- the ring slot below the playfield -- is one more line under the
-picture.  Everywhere it is the next map line; parked on the map's bottom row it is
-whatever that never-drawn slot last held, so there the slot is blanked once per buffer
-per arrival.  "Arrival" is any move: `scroll_validate` clears BUF_BOTOK whenever the
-window moves, sideways too, so a window walking along the map's bottom row blanks
-the slot every frame (about 7K cycles: seen in Commando's level 0, which starts
-there).
+**Q's first scanline.**  A 6845 always displays the first scanline of a frame whatever
+R6 says, so Q's row 0 line 0 is one more line under the picture.  As the ring row
+after the playfield it would be the next map line, a repeat of P2's first line under
+a fine scroll, or junk at the map's bottom; so Q always starts at QBLANK (defs.s), a
+line that is always the same.  The Master's is 640 zeros below the bar, in main RAM,
+which Q's step reads with D = 0 (below).  The Model B has no spare 640 bytes, so its
+QBLANK is the bar's own first line, until its palette can blank that scanline.
 
 ### The chain
 
@@ -503,11 +503,17 @@ LOADREQ test.  +2 ticks on both: the vsync loads it as an immediate.
 
 **The Master's ACCCON D.**  D is the memory map the CRTC fetches from, sampled on every
 fetch, so it must change before a section's boundary, not after.  The bar's T1 fires
-BARLEAD = 10 us earlier than every other step's lead, so D can be switched in the
+BARLEAD = 23 us earlier than every other step's lead, so D can be switched in the
 horizontal blanking of the bar's last line; the section after the bar runs BARLEAD
 longer to end where it should.  The handler sets D from `dispD` for every section but
 the bar (which starts with D = 0, cleared at the vsync); the flip moves `dispD` to the
-new buffer with the section chain.  `select_backbuf`'s read-modify-write of ACCCON's X
+new buffer with the section chain.  Q's step (QSECT, the vsync's copy of the buffer's
+BUF_QS) puts D back to 0 before Q's first scanline, so QBLANK is main RAM for both
+buffers: it fires QLEAD early (the section before Q runs STEPLATE + QLEAD shorter), and
+its D write is the handler's first act -- behind a two-line P2's own step there is no
+time for more -- keyed on SECIDX = QSECT (the chain rests on Q till the vsync).  A
+bottom partial's step fires P2EARLY early too, so it is done in time.  crtctime.mjs
+logs every ACCCON write: D lands at characters 98-114 of the line before its boundary.  `select_backbuf`'s read-modify-write of ACCCON's X
 bit runs with interrupts off, since the handler writes D.
 
 ### Load mode
@@ -534,7 +540,7 @@ the HUD digits if BARDIRTY (the bar is single-buffered and drawn where it is sho
 this comes first, before the CRTC reaches it), derives the character window, runs
 `render_core`, builds the chain for this buffer and requests the flip.  `render_core`:
 `selbb`, `calc_ring`, `match_sprites`, `erase_old`, `validate`, `draw_dirty`,
-`blank_below`, `draw_sprites`, `copy_partial`, and on the Model B `mirror_copy`.
+`draw_sprites`, `copy_partial`, and on the Model B `mirror_copy`.
 
 The bar's template (the BAR file, 1,280 bytes) is read into place with the game's
 image and never redrawn by the engine; the game draws what changes, in `hook_hud`,

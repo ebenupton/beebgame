@@ -125,6 +125,10 @@ RINGEND_B = RING_B + RINGBYTES
 .assert (<RING_A) = $80 && (<RING_B) = $80, error, "ringup's low-byte fold assumes bases at xx80"
 BARADDR   = $0300
 .assert MIRR_A = BARADDR + BARROWS*ROWBYTES, error, "mirror A must follow the bar"
+; Q's start (kernel.s build_sections): the 6845 shows a frame's first scanline whatever
+; R6 says, so Q's line 0 shows under the picture.  The Model B has no spare line of
+; black, so for now it is the bar's first (its palette to blank it, later).
+QBLANK    = BARADDR
   .else
 ; ---- Master: the ring, the composed row, the bar
 ; The bar at $2B00 (below the screen, main RAM, single-buffered), then each buffer's
@@ -157,6 +161,11 @@ RINGEND   = RINGBASE + RINGBYTES
 ; playfield's with D = the buffer being shown.  Single-buffered: it is drawn where it
 ; is displayed, inside the 40 lines between vsync and the first scanned bar line.
 BARADDR   = $2B00
+; Q's start (kernel.s build_sections): the 6845 shows a frame's first scanline whatever
+; R6 says, so Q's line 0 shows under the picture -- from here, a row of zeros just below
+; the bar (boot's), in main RAM: Q's step puts D back to 0 before that scanline.
+QBLANK    = BARADDR - ROWBYTES
+.assert LV_OBJS + 6*149 <= QBLANK, error, "QBLANK: the level's objects run into it"
 CRTCBASE  = RINGBASE / 8          ; the CRTC counts characters, so the ring starts here
 CRTCB_A   = CRTCBASE              ; each buffer's ring base, as the CRTC counts: one
 CRTCB_B   = CRTCBASE              ;  ring, main and shadow (ACCCON D picks)

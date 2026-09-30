@@ -33,7 +33,6 @@
 ;   erase_old        redraw the tiles under the ones that moved (frame.s, tiles.s)
 ;   validate         scroll: draw the strips the window has moved onto (tiles.s)
 ;   draw_dirty       redraw the map tiles the logic changed (frame.s, tiles.s)
-;   blank_below      black the slot under the playfield when it can show (frame.s)
 ;   draw_sprites     the sprites, through the row loops in banks 4/5 (frame.s,
 ;                    sprloops.s)
 ;   copy_partial     the composed row for the fine scroll (frame.s)

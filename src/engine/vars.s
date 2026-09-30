@@ -38,6 +38,7 @@ crtcbm:   .res 2                  ; the buffer being built: its mirror redirect 
 dispD:    .res 1                  ; ACCCON D for the displayed buffer's playfield
 DSECT:    .res 1                  ; the step after the bar's: the one that switches D
 NEXTBUF:  .res 1                  ; the buffer the next flip shows (-> dispD)
+QSECT:    .res 1                  ; Q's step: the one that puts D back to 0
   .endif
 
 ; ---------------------------------------------------------------- scratch
@@ -232,9 +233,6 @@ DIRTY_    = DIRTYLIST+2*DIRTYMAX
 BUF_CY:    .res 2                   ; each buffer's window char row, by curbuf
 BUF_CX:    .res 2                   ; each buffer's window x, by curbuf: low bytes
 BUF_CXH:   .res 2                   ; high bytes (bank 7 invalidates a buffer: $80)
-; BUF_BOTOK: the slot below the playfield is black.  scroll_validate (bank 6) clears
-; it, blank_below (bank 7) sets it.
-BUF_BOTOK: .res 2
 DIRTYCNT:  .res 2                   ; each buffer's dirty tiles queued (the game loop)
 ; PBANK: the physical bank of each of banks 4..7 (the loader's: cpu.inc -- read by
 ; what the loader cannot patch).  PBOARD: the board, BOARD_STD / WATFORD / SOLIDISK
@@ -265,6 +263,7 @@ SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sectio
 BUF_SEC0:  .res 4                   ; each buffer's section 0 (the bar): CRTC address
 BUF_SEC0T1: .res 4                  ; and its T1 count
 SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sections)
+BUF_QS:    .res 3                   ; each buffer's Q entry (-> QSECT), by 2 x the buffer
     .endif
 
 ; ---------------------------------------------------------------- LOWBSS: the sprite list

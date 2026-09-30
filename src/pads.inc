@@ -12,16 +12,16 @@ PADM_FM = 1
 ; kernel's start (disc.s: the driver slot's size sets it), so re-find them when it moves.
 ; So is the order of ENGCODE's blocks in engine/frame.s (Cleo's test/blockopt.py, first).
 PADB_MS = 0                         ; before match_sprites
-PADM_MS = 4
-PADB_SP = 0                         ; before draw_sprites
-PADM_SP = 0
-PADB_EO = 21                        ; before erase_old
+PADM_MS = 15
+PADB_SP = 26                         ; before draw_sprites
+PADM_SP = 26
+PADB_EO = 15                        ; before erase_old
 PADM_EO = 0
 PADB_DS = 0                         ; before drawsprite
-PADM_DS = 0
+PADM_DS = 64
 PADB_CP = 0                         ; before copy_partial
-PADM_CP = 9
+PADM_CP = 61
 PADB_T6 = 14                        ; bank 6, the Model B: after ringmodtab, before drawrect
 PADM_T6 = 228                       ; bank 6, the Master: before drawrect (puts @run's bmi @tile in a page)
                                     ; (tiles.s: its hot stretches each in a page)
-PADB_BB = 0                         ; the Model B: after blank_below
+PADB_BB = 2                         ; the Model B: before render_frame

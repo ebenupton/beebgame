@@ -19,14 +19,13 @@
 ;   render_core    the frame's steps, in order
 ;   mark_dirty     queue a changed map tile for both buffers (the game's call)
 ;   draw_dirty     redraw the back buffer's queued dirty tiles
-;   blank_below    black the ring slot below the playfield on the map's bottom row
 ;   render_frame   the game's call: render the back buffer and request the flip
 ;   wait_flip      spin until the pending flip has been taken
 ;
 ; Segment: ENGCODE (bank 7; on the Model B it ends at the kernel).  Each routine is
 ; its own `.segment "ENGCODE"` block, and THE ORDER OF THE BLOCKS IS THE LAYOUT'S:
 ; chosen over a profile to keep the hot loops' branches and reads off page crossings,
-; with the PAD lines (pads.inc) before some blocks and after blank_below.  Keep the
+; with the PAD lines (pads.inc) before some blocks and before render_frame.  Keep the
 ; blocks where they are; the order and the pads are found by Cleo's test/blockopt.py
 ; and then test/padopt.py (in /Users/ebenupton/cleo/beeb/test), and re-found whenever
 ; the kernel's start moves.
@@ -1054,7 +1053,6 @@ render_core:
         jsr erase_old
         jsr validate                ; scroll_validate (bank 6: it draws the new strips)
         jsr draw_dirty              ; (bank 7 from here: the rects through callbank)
-        jsr blank_below
         jsr draw_sprites
         jsr copy_partial
     .if BHW
@@ -1173,57 +1171,6 @@ draw_dirty:
         stz DIRTYCNT,x              ; A is dead: render_core's next call reloads it
 @done:  rts
 
-; ============================================================================
-; blank_below: black the ring slot below the playfield, on the map's bottom row
-;   In:   wfine, wy, maxwy, wcx, wcy, curbuf, BUF_BOTOK[curbuf]
-;   Out:  A, X, Y, sp, w16 clobbered
-; The 6845 always displays the first scanline of a frame, whatever R6 says, so the
-; blanking section's row 0 line 0 -- the ring slot below the playfield -- is one line
-; more under the picture.  Elsewhere it is the next map line; parked on the map's
-; bottom row it is whatever that never-drawn slot last held.  So when the window sits
-; on the bottom row, blank the slot, once per buffer per arrival (BUF_BOTOK: set here,
-; cleared by scroll_validate when the window moves).
-; ============================================================================
-        .segment "ENGCODE"          ; bank 7, beside render_core
-blank_below:
-        ; ---- only on the bottom row (fine scroll 0, wy = maxwy), once
-        lda wfine
-        bne @no
-        lda wy
-        cmp maxwy
-        bne @no
-        lda wy+1
-        cmp maxwy+1
-        bne @no
-        ldx curbuf
-        lda BUF_BOTOK,x
-        bne @no                     ; already black
-        inc BUF_BOTOK,x
-        ; ---- the row below the playfield: map char row wcy + VISROWS at the
-        ; window's column.  Rows are not slot aligned, so this is a run of 80 chars
-        ; that may straddle the ring end.
-        lda wcx
-        sta w16
-        lda wcx+1
-        sta w16+1
-        lda wcy
-        adc #VISROWS-1              ; C = 1 from cmp maxwy+1 (equal)
-        jsr ringaddr7               ; sp = its ring address
-        ; ---- zero its 80 chars
-        ldx #ROWCHARS
-@char:  lda #0
-        ldy #7
-        .repeat 7
-        sta (sp),y
-        dey
-        .endrepeat
-        sta (sp),y
-        spnext @fold                ; 8 on, folding at the ring end (out of line)
-@fback: dex
-        bne @char
-        SAMEPAGE *, @char
-@no:    rts
-@fold:  spcold @fback
         ; the Model B's bank 7 code ends at the kernel: this pad places what is above
         ; it (pads.inc)
         PAD ::PADB_BB, 0

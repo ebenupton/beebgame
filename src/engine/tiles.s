@@ -632,7 +632,7 @@ HPAIR1  := HPAIR0 + 5
 ; scroll_validate: make the current buffer hold the window (wcx, wcy), ROWCHARS x
 ; BUFROWS, drawing only the strips it lacks
 ;   In:   curbuf;  wcx (16 bit), wcy;  the buffer's BUF_CX/BUF_CXH/BUF_CY
-;   Out:  the buffer's BUF_CX/BUF_CXH/BUF_CY = the window, BUF_BOTOK = 0.
+;   Out:  the buffer's BUF_CX/BUF_CXH/BUF_CY = the window.
 ;         A, X, Y, w16, w16b and drawrect's work clobbered.
 ; dx = wcx - BUF_CX: |dx| < 80 draws the new columns (a strip of dx columns, all
 ; BUFROWS high); dy = wcy - BUF_CY: a small one draws the new rows (full width).
@@ -732,7 +732,6 @@ scroll_validate:
         ; ---- the buffer now holds the window
 @done:
         ldx curbuf
-        stz BUF_BOTOK,x             ; the window moved: the slot below is stale again
         lda wcy
         sta BUF_CY,x
         lda wcx
