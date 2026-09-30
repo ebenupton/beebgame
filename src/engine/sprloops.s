@@ -13,19 +13,20 @@
 ; and boxes, screen bytes copied straight (the copy blitter).
 ;
 ; The shape:
-;   ds_entry     patches ds_dispatch's jmp with the sprite's blitter: sprdisp_tab
-;                indexed by sp_disp (the prologue's, from the directory's flags).  The
-;                jmp is in this bank, so the store is a write window (cpu.inc: wrsel
-;                ... wrback; empty on the Master).
+;   ds_entry     opens a write window into this bank, to ds_done (cpu.inc: wrsel ...
+;                wrback; empty on the Master): the row loop patches its column jump.
 ;   ds_rowloop   a character row, sp_r0..sp_r1: sp = the row's first char (sp_rb),
 ;                ptr = its source (sp_rp); tmp..tmp2 = the lines of the cell to draw,
-;                0..7 but sp_ra0 on the first row and sp_ra1 on the last.
-;   ds_colloop   a column, sp_ncol+1 of them: jmp to the blitter (ds_dispatch), which
-;                draws lines tmp..tmp2 of the char at sp and jumps back to a column
-;                step -- sprretP (ptr + sp_lines) or sprretM (mirrored: ptr - sp_lines)
-;                -- then sp to the next char (spnext, its page step out of line).
+;                0..7 but sp_ra0 on the first row and sp_ra1 on the last; and, once a
+;                row, the blitter's entry for them into ds_colloop's jmp (sprrow_tab,
+;                from sp_disp, the prologue's).
+;   ds_colloop   a column, sp_ncol+1 of them: jmp to the entry, which draws the
+;                cell's lines and goes on to a column step -- sprretP (ptr +
+;                sp_lines; sprFN falls into it) or sprretM (mirrored: ptr - sp_lines)
+;                -- then sp to the next char (spnext, its page step out of line), and
+;                the countdown, which ends in ds_colloop's jmp itself.
 ;   ds_rowdone   the next row: sp_rp + sp_rinc, sp_rb + ROWBYTES folded at the ring's
-;                end; rts at ds_done.
+;                end, falling into ds_rowloop; rts at ds_done.
 ;
 ; Macros:
 ;   NPAIR, NIBBLIT   the 4-bit blitter (sprFN, sprFM mirrored)
@@ -129,20 +130,24 @@ done:
 .endmacro
 
 ; ----------------------------------------------------------------------------
-; NIBBLIT name, mirror, ret: the 4-bit blitter for one column of a char row
-;   name    the entry label (sprFN, sprFM);  mirror  1 = through SWAPTAB
-;   ret     where it returns (sprretP, sprretM)
-;   In:     ptr = the column's source, sp = the char, lines tmp..tmp2 of the cell
-;           (tmp even, tmp2 odd)
+; NIBBLIT name, mirror, ret, fall: the 4-bit blitter for one column of a char row
+;   name    the entries' prefix (sprFN, sprFM);  mirror  1 = through SWAPTAB
+;   ret     where it returns (sprretP, sprretM);  fall  given: the last pair falls
+;           into ret, which must follow (the commonest blitter's saving of a jmp)
+;   In:     ptr = the column's source, sp = the char
 ;   Out:    A, X, Y clobbered;  sp_msk, sp_lim written
-; A whole cell (tmp2 = 7) goes into the unrolled pairs p0..p3 at the pair tmp names;
-; anything else runs the partial loop, a pair at a time, with sp_lim the pair's line.
+; The entries, chosen once a row by the row loop (sprrow_tab), not a column:
+;   name_0 .. name_3   a cell to its line 7 from pair 0..3 (lines 0, 2, 4, 6 on):
+;                      the unrolled pairs, entered part way down
+;   name_pt            anything else -- the last row, to line tmp2 < 7 -- lines
+;                      tmp..tmp2 (tmp even, tmp2 odd), a pair at a time, sp_lim the
+;                      pair's line
 ; ----------------------------------------------------------------------------
-.macro NIBBLIT name, mirror, ret
-        .local partial, et, p0, p1, p2, p3, pl, pop, pnext
+.macro NIBBLIT name, mirror, ret, fall
+        .local pl, pop, pnext
 
-; ---- part of a cell: lines tmp..tmp2 (above name, so name's bne reaches it)
-partial:
+; ---- part of a cell: lines tmp..tmp2
+.ident(.concat(.string(name), "_pt")):
         lda tmp
         sta sp_lim
 pl:     lsr                         ; A = sp_lim on both ways in: the pair's source byte
@@ -208,49 +213,53 @@ pnext:  lda sp_lim                  ; the next pair, until past tmp2
         bcc pl
         jmp ret
 
-; ---- the entry: a whole cell, or part of one
-name:
-        lda tmp2
-        cmp #7
-        bne partial
-        lda tmp                     ; even: 0, 2, 4, 6 -> p0..p3
-        beq p0
-        tax
-        jmpx et
-et:     .word p0, p1, p2, p3
-p0:     NPAIR 0, mirror
-p1:     NPAIR 2, mirror
-p2:     NPAIR 4, mirror
-p3:     NPAIR 6, mirror
+; ---- a cell to line 7, from the pair the row loop chose
+.ident(.concat(.string(name), "_0")):
+        NPAIR 0, mirror
+.ident(.concat(.string(name), "_1")):
+        NPAIR 2, mirror
+.ident(.concat(.string(name), "_2")):
+        NPAIR 4, mirror
+.ident(.concat(.string(name), "_3")):
+        NPAIR 6, mirror
+  .ifblank fall
         jmp ret
+  .endif
 .endmacro
 ; ----------------------------------------------------------------------------
 ; NIBCOPY name, ret: the copy blitter for a box (flag bit 3)
-;   name  the entry label (sprFC);  ret  where it returns (sprretP)
-;   In:   ptr = the column's source, sp = the char, lines tmp..tmp2 of the cell
+;   name  the entries' prefix (sprFC);  ret  where it returns (sprretP)
+;   In:   ptr = the column's source, sp = the char
 ;   Out:  A, Y clobbered;  X kept
-; A box is its screen bytes, every scanline stored, opaque: a straight copy.  Any
-; first line will do (a box's rows need not pair).  A whole cell is unrolled: 13
-; cycles a byte against the 4-bit blitter's 21.
+; A box is its screen bytes, every scanline stored, opaque: a straight copy, and any
+; first line will do (a box's rows need not pair).  The entries, chosen once a row:
+;   name_0 .. name_7   a cell to its line 7 from line 0..7: unrolled, each line
+;                      setting its own Y, so entered at any (13 cycles a byte; the
+;                      Master's line 0 non-indexed, 10)
+;   name_pt            lines tmp..tmp2, tmp2 < 7 (the last row), a line at a time
 ; ----------------------------------------------------------------------------
 .macro NIBCOPY name, ret
-        .local part, pl
-name:   lda tmp2
-        cmp #7
-        bne part
-        lda tmp
-        bne part
-
-; ---- a whole cell, lines 0-7
-  .repeat 8, k
-        ldy #k
+        .local pl
+.ident(.concat(.string(name), "_0")):
+  .if ::BHW
+        ldy #0                      ; (staz would reload the same 0 into Y)
+        lda (ptr),y
+        sta (sp),y
+  .else
+        ldaz ptr                    ; line 0 non-indexed
+        staz sp
+  .endif
+  .repeat 7, j
+.ident(.sprintf("%s_%d", .string(name), j+1)):
+        ldy #j+1
         lda (ptr),y
         sta (sp),y
   .endrepeat
         jmp ret
 
 ; ---- part of a cell, lines tmp..tmp2
-part:   ldy tmp
+.ident(.concat(.string(name), "_pt")):
+        ldy tmp
 pl:     lda (ptr),y
         sta (sp),y
         cpy tmp2                    ; C = 1 at the last line (iny keeps C)
@@ -261,63 +270,22 @@ pl:     lda (ptr),y
 ; ============================================================================
 ; NIB_LOOPS bank: the row loop and all three blitters, for one bank
 ;   bank  this copy's bank (BANK_SPR or BANK_TIL1): the write window's
-; Emits ds_entry (which must be BANKENTRY), the row and column loops, the column
-; steps sprretP / sprretM, and the blitters sprFN (NIBBLIT), sprFM (NIBBLIT,
-; mirrored) and sprFC (NIBCOPY), then sprdisp_tab: see the file header.
+; Emits ds_entry (which must be BANKENTRY), the blitter sprFN with the column step
+; it falls into (sprretP), the column and row loops, the mirrored step sprretM, the
+; blitters sprFM and sprFC, then sprrow_tab: see the file header.
 ; ============================================================================
 .macro NIB_LOOPS bank
 
-; ---- ds_entry: patch the dispatch jump for this sprite (X = sp_disp)
-; The jump is in this bank, so the store is a write window (cpu.inc): wrsel opens it
-; (A = the bank, from callbank), wrback closes it, the write bank back to 7's.
-; Master: both empty.
+; ---- ds_entry: open the write window, to ds_done -- each row patches the column
+; loop's jump in this bank (cpu.inc; A = the bank, from callbank).  Master: empty.
 ds_entry:                           ; BANKENTRY
         wrsel bank, bank
-        ldx sp_disp
-        lda sprdisp_tab,x
-        sta ds_dispatch+1
-        lda sprdisp_tab+1,x
-        sta ds_dispatch+2
-        wrback bank
+        jmp ds_rowloop
 
-; ---- a character row: sp = its first char, ptr = its source bytes, tmp..tmp2 its lines
-ds_rowloop:
-        lda sp_rb
-        sta sp
-        lda sp_rb+1
-        sta sp+1
-        lda sp_rp
-        sta ptr
-        lda sp_rp+1
-        sta ptr+1
-        stz tmp                     ; ra0' = 0 unless this is the first row
-        lda sp_row
-        cmp sp_r0
-        bne :+
-        ldx sp_ra0
-        stx tmp
-:       ldx #7                      ; ra1' = 7 unless this is the last row
-        cmp sp_r1
-        bne :+
-        ldx sp_ra1
-:       stx tmp2                    ; ra1'
-        lda sp_ncol
-        sta sp_cnt                  ; columns-1 (countdown)
-
-; ---- a column: the blitter, which returns to sprretP or sprretM
-ds_colloop:
-ds_dispatch:
-        jmp sprFN                   ; operand patched per sprite (ds_entry)
+; ---- the commonest blitter, falling into its column step
+        NIBBLIT sprFN, 0, sprretP, fall
 
 ; ---- the column steps: ptr to the next image column, then sp to the next char
-sprretM:                            ; next column, mirrored: source pointer - rows
-        lda ptr
-        sec
-        sbc sp_lines
-        sta ptr
-        bcs sprnext
-        dec ptr+1
-        bcc sprnext                 ; C = 0: the bcs was not taken
 sprretP:                            ; next column: source pointer + rows
         lda ptr
         clc
@@ -328,7 +296,23 @@ sprnext:
         spnext sprscold
 sprsback:
         dec sp_cnt
-        bpl ds_colloop
+        bmi ds_rowdone
+ds_colloop:
+        jmp sprFN_0                 ; operand patched per row (ds_rowloop)
+
+; ---- out of line, in its branches' reach: the source pointer's carry, the screen's
+; page step, and the mirrored column step
+sprpinc: inc ptr+1
+        jmp sprnext
+sprscold: jmp sprscold2
+sprretM:                            ; next column, mirrored: source pointer - rows
+        lda ptr
+        sec
+        sbc sp_lines
+        sta ptr
+        bcs sprnext
+        dec ptr+1
+        jmp sprnext
 
 ; ---- the row's end: the next row's source (+ sp_rinc) and screen (+ ROWBYTES)
 ds_rowdone:
@@ -349,25 +333,65 @@ ds_rowdone:
         adc #>ROWBYTES
         ringup sp_rb                ; folded at the ring's end
         sta sp_rb+1
-        jmp ds_rowloop
-ds_done: rts
 
-; ---- out of line: the source pointer's carry and the screen's page step
-sprpinc: inc ptr+1
-        jmp sprnext
-sprscold: jmp sprscold2
+; ---- a character row: sp = its first char, ptr = its source bytes, and the entry
+; its columns take: lines tmp..tmp2 of each cell -- tmp 0 unless the first row
+; (sp_ra0), tmp2 7 unless the last (sp_ra1).  To line 7 a cell is the blitter's
+; unrolled entry for line tmp, otherwise its partial loop (sprrow_tab, from
+; sp_disp: the prologue's, the blitter's first entry).
+ds_rowloop:
+        lda sp_rb
+        sta sp
+        lda sp_rb+1
+        sta sp+1
+        lda sp_rp
+        sta ptr
+        lda sp_rp+1
+        sta ptr+1
+        ldx #0
+        lda sp_row
+        cmp sp_r0
+        bne :+
+        ldx sp_ra0
+:       stx tmp                     ; the first line
+        ldy #7
+        cmp sp_r1
+        bne :+
+        ldy sp_ra1
+:       sty tmp2                    ; the last line
+        txa
+        cpy #7
+        bcs :+                      ; to line 7: the unrolled entry for line tmp
+        lda #8                      ; else the partial loop
+:       asl                         ; C = 0 (A <= 8)
+        adc sp_disp
+        tax
+        lda sprrow_tab,x
+        sta ds_colloop+1
+        lda sprrow_tab+1,x
+        sta ds_colloop+2
+        lda sp_ncol
+        sta sp_cnt                  ; columns-1 (countdown)
+        jmp ds_colloop
+ds_done:
+        wrback bank                 ; the write window's end
+        rts
 
-; ---- the blitters
-        NIBBLIT sprFN, 0, sprretP
+; ---- the other blitters
         NIBBLIT sprFM, 1, sprretM
         NIBCOPY sprFC, sprretP
 sprscold2:
         spcold sprsback
 
-; ---- the dispatch table, by sp_disp (the prologue's): (flags & 3) * 2, or 8 for a box
-; Flag bit 0 is the mirror; bit 1 only sets the prologue's row arithmetic, so entries
-; 2/3 alias 0/1.
-sprdisp_tab: .word sprFN, sprFM, sprFN, sprFM, sprFC
+; ---- the entries a row takes, by sp_disp + 2 x (its first line, or 8 for the partial
+; loop): the prologue's sp_disp is 0 (sprFN), 18 (sprFM, mirrored: flag bit 0) or 36
+; (sprFC, a box: flag bit 3).  A 4-bit cell's first line is even, so its odd entries
+; are never taken (they repeat the even ones).
+sprrow_tab:
+        .word sprFN_0, sprFN_0, sprFN_1, sprFN_1, sprFN_2, sprFN_2, sprFN_3, sprFN_3, sprFN_pt
+        .word sprFM_0, sprFM_0, sprFM_1, sprFM_1, sprFM_2, sprFM_2, sprFM_3, sprFM_3, sprFM_pt
+        .word sprFC_0, sprFC_1, sprFC_2, sprFC_3, sprFC_4, sprFC_5, sprFC_6, sprFC_7, sprFC_pt
+        .assert >sprrow_tab = >(sprrow_tab+53), warning, "sprrow_tab straddles a page (+1 cycle a row)"
 .endmacro
 ; ============================================================================
 ; The two copies: bank 4 (SPR4CODE) and bank 5 (SPR5CODE)

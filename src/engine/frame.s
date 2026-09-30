@@ -954,18 +954,18 @@ drawsprite:
         sta sp_c
         lda sp_flags                ; only the mirror arm clobbers A
 @nomirror:
-        ; ---- select the inner blitter once per sprite: sp_disp = 8 for the copy
-        ; blitter (flags bit 3), else (flags & 3) * 2 -- mirrored, every scanline
-        ; stored.  The row loop's copy in the data's bank patches its own jump.
-        bitimm 8                    ; bit3: copy blitter
-        beq :+
-        ldx #8
+        ; ---- select the blitter once per sprite: sp_disp = its first entry in the
+        ; row loop's sprrow_tab (sprloops.s) -- 36 the copy blitter (flags bit 3), 18
+        ; the mirrored 4-bit (bit 0), 0 the 4-bit.  Each row patches its column jump.
+        ldx #36
+        bitimm 8                    ; bit 3: the copy blitter
         bne :++
-:       and #3                      ; A is still sp_flags: bit #imm does not alter A
-        asl
-        tax
+        ldx #0
+        lsr                         ; A is still sp_flags (bit #imm keeps A): bit 0
+        bcc :+
+        ldx #18
 :
-        stx sp_disp                 ; (a patched jmp in the column loop)
+:       stx sp_disp
 
         ; ---- screen base sp_rb for (wcx + c0, wcy + r0): one ringaddr7, then +80
         ; chars per row (w16 = wcx + sp_c0 was already built when the record rect
