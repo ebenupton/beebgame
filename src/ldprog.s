@@ -527,6 +527,7 @@ lv_load:
         lda sv_half2
         sta half2
         lda sv_halfhi
+        and #$7F                    ; (a half's mark: its page less $80, gather5)
         sta halfhi5
         lda sv_halfsub
         sta halfsub

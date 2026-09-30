@@ -84,6 +84,18 @@ RINGHI_B:
         .byte >(RING_B + r*ROWBYTES)
   .endrepeat
   .endif
+  .if BHW
+; The ring slot of a map char row, row mod RINGROWS, for ringmod (macros.s): five rings
+; long, as the macro brings a row under RINGROWS*5 (the Master's ring is 32 rows: its
+; ringmod is an and).  It sits here, before drawrect, with a pad after it: together
+; they put drawrect's two hot stretches -- @run's bmi to @tile, over the solid chain,
+; and @b31..@b7 -- each in a page, with the page boundary on the tile path between.
+ringmodtab:
+.repeat RINGROWS*5, i
+        .byte i .mod RINGROWS
+.endrepeat
+        PAD ::PADB_T6, 0
+  .endif
 
 ; ============================================================================
 ; drawrect: draw map tiles into the current back buffer
@@ -96,10 +108,11 @@ RINGHI_B:
 ; offset), one ringaddr for the first row, the map row pointer.  Per tile row: one
 ; mapstrip (the gather) and one or two char rows (@drawrow).  Per char row: runs --
 ; a run is the chars of one tile in this row, at most four -- dispatched by kind:
-;   GATHERH bit 7 set   a stored tile (its page; GATHERL's low 3 bits the kind:
-;                       0 full, 4..6 a half, 3 a mirror under TILEMIRROR)
+;   GATHERH bit 7 set   a full tile (its page; GATHERL its offset -- or, under
+;                       TILEMIRROR, kind 3 in GATHERL's low bits: a mirror)
 ;   GATHERH = 0         the level's solid (id 0): one byte, SOLIDF, down every line
 ;   GATHERH = $40       a flat tile or the other solid: a pair from FLATTAB
+;   GATHERH $06-$3F     a half tile: its page less $80 (GATHERL: its row and kind)
 ; and entered into an unrolled block by the run's length (1..4 chars).  The gather's
 ; encoding is described in docs/DESIGN.md (The tiles) and gather.s.
 ;
@@ -116,9 +129,10 @@ RINGHI_B:
 ;   (rc_sc0, set per rect), 4 for the later ones (@runnext).
 ; - @s0f's operand is SOLIDF and @hp0/@hp1's are HPAIR0/HPAIR1: the loader patches
 ;   them.  Their labels must stay (build.sh finds @s0f in game.dbg).
-; - Model B: the dispatch patches a jmp's low byte, so the whole of drawrect, to
-;   @done, is a write window into bank 6; each block group (@b, @m, @f) must sit in
-;   one page (asserted after the blocks).
+; - Model B: the dispatch patches a branch's offset, so the whole of drawrect, to
+;   @done, is a write window into bank 6.  Each branch sits right before its blocks,
+;   which share its page (asserted after the blocks; ringmodtab and PADB_T6 place
+;   them), so it costs a jmp's 3 cycles.
 ; ============================================================================
         .segment "TILCODE"
 drawrect:
@@ -261,12 +275,15 @@ drawrect:
 @done:  wrback BANK_TILES, 4        ; the write window's end
         rts
 
-        ; ---- @run's rarer ways, here behind @drawrow in its branches' reach: a fill
-        ; other than the solid (to @solid), a half tile
-@fx:    jmp @solid                  ; (C is clear: clear at every entry to @run)
-        ; a half tile, A = its kind: is this row its fill?  A mirror's 3 also says
-        ; yes: @hfill tells them apart
-@half:  and rowbit
+        ; ---- @run's rarer ways, here behind @drawrow in its branches' reach, A =
+        ; GATHERH: a flat ($40, to @solid) or a half tile (its page less $80: $06-$3F)
+@fx:    cmp #$40
+        bcc @half                   ; below $40: a half (C = 0, which @hfill's sbc needs)
+        jmp @solid                  ; a flat, or the other solid
+@half:  ora #$80                    ; the half's page
+        sta tp+1
+        lda GATHERL,x               ; its kind (bits 0-2): is this row its fill?
+        and rowbit
         beq @hcopy
         jmp @hfill
         ; no: the stored row -- GATHERL's bits $E0, (k&7)<<5, with rowoff's others,
@@ -279,18 +296,15 @@ drawrect:
 
 ; ----------------------------------------------------------------------------
 ; @drawrow: one char row of the rect, run by run
-;   In:   rc_sp = the row's screen address; rc_sub, rowoff, rowbit set for the row;
+;   In:   sp = rc_sp = the row's screen address; rc_sub, rowoff, rowbit set for it;
 ;         GATHERL/GATHERH = the tile row's gather
-;   Out:  rc_sp stepped one char row on (+640, folded at the ring end);  C undefined
+;   Out:  rc_sp and sp stepped one char row on (+640, folded at the ring end); C undefined
 ; rc_y is the rect's first row still: only drawrect's entry reads it, and every
 ; caller sets it.
 ; ----------------------------------------------------------------------------
 @drawrow:
-        ; ---- screen base (per-rect ringaddr, +640 per row)
-        lda rc_sp
-        sta sp
-        lda rc_sp+1
-        sta sp+1
+        ; (sp is the row's start already: ringaddr's for the rect's first, @rowdone's
+        ;  for each after -- nothing between touches it)
         ; ---- the run state: first tile, first run's limit, all the row's chars left
         lda #0
         sta rc_gi                   ; the run's index into GATHERL/H
@@ -319,11 +333,22 @@ drawrect:
         RUNX                        ; X, tmp = 8*rc_n
 @sdisp:
   .if BHW
-        ; the entry's low byte into the jmp below (the blocks share a page: asserted)
-        lda @mtl-1,x
+        ; ---- the Model B: a patched branch into the chain that follows, taken (C = 0,
+        ; RUNX's asl).  The chain is 32 of dey / sta (sp),y and Y = 8n, so the first
+        ; dey stores line 8n-1: the branch skips 32 - 8n of them (MTO, zero page).
+        ; 8 cycles a byte and tay for the entry's ldy: what the unrolled blocks cost.
+        tay
+        lda MTO-1,x
         sta @sj+1
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
-@sj:    jmp @m31
+@sj:    bcc @mch
+@mch:
+    .repeat 32
+        dey
+        sta (sp),y
+    .endrepeat
+        jmp @advsp
+        .assert @sj+2 = @mch && >@mch = >(@mch+72), error, "the solid chain must follow its branch, its entries in one page"
   .else
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
         jmpx @mt-2
@@ -331,9 +356,12 @@ drawrect:
 
         ; ---- a stored tile.  Every tile is in bank 6, selected once per tile row.
 @tile:  sta tp+1                    ; the tile pointer's high byte
+  .if TILEMIRROR
         lda GATHERL,x
-        and #7                      ; the kind: 0 a full tile, 4..6 a half, 3 a mirror
-        bne @half
+        and #7                      ; the kind: 0 a full tile, 3 a mirror
+        beq @full
+        jmp @mir
+  .endif
 @full:  lda GATHERL,x
         ora rowoff                  ; a full tile's lo byte is (id&3)<<6: bits 0-5 clear
 @tpsta: sta tp
@@ -429,13 +457,18 @@ drawrect:
         lda rc_sp
         adc #<ROWBYTES              ; C = 0: @advsp's sbc borrowed
         sta rc_sp
+        sta sp                      ; (sp too: the next row starts there)
         lda rc_sp+1
         adc #>ROWBYTES
         ringtest @rfold             ; the fold out of line
         sta rc_sp+1
+        sta sp+1
         rts
 @rfold: ringfold rc_sp
         sta rc_sp+1
+        sta sp+1
+        lda rc_sp                   ; (the Model B's fold moves the low byte too)
+        sta sp
         rts
         ; ---- sp's carry into a new page: the ring's end only if the run ended exactly
         ; there (never inside one: drawrect).  C = 0 out.  (Model B: pagestep's common
@@ -513,13 +546,9 @@ drawrect:
 ; on this path.)
 ; ----------------------------------------------------------------------------
 @hfill:
-  .if TILEMIRROR
-        lda GATHERL,x               ; the kind: bit 2 clear is a mirror (3), set a half
-        and #4
-        beq @mir
-  .endif
         ; ---- a half's pair: k back out of its address.  The sbc borrows one (C is
-        ; clear at every entry to @run), and halfhi is the halves' page less 1.
+        ; clear from @fx's cmp), and halfhi is the halves' page less 1.  GATHERH is the
+        ; page less $80 (a half's mark): the $80 goes out with the asl's.
         lda GATHERH,x
         sbc halfhi
         asl
@@ -599,9 +628,8 @@ drawrect:
 ; ----------------------------------------------------------------------------
 ; The solid's blocks: A (SOLIDF) stored down all 8 lines of each char, from @s0f.
 ; ----------------------------------------------------------------------------
-  .if .not BHW
+  .if .not BHW                      ; (the Master's: the Model B's is the chain at @sdisp)
 @mt:    .word @m7, @m15, @m23, @m31
-  .endif
 ; MFIL k: A stored at lines k down to k-7 (one char, k = 8c+7).  Y clobbered; A, C kept.
 .macro MFIL k
         ldy #k
@@ -611,7 +639,6 @@ drawrect:
         sta (sp),y
         .endrepeat
 .endmacro
-        PAD ::PADB_M6, 0            ; @m31..@m7 in one page (pads.inc)
 @m31:   MFIL 31
 @m23:   MFIL 23
 @m15:   MFIL 15
@@ -623,20 +650,18 @@ drawrect:
         sta (sp),y
         staz sp                     ; line 0 non-indexed
         jmp @advsp
+  .endif
 
   .if BHW
-; The Model B's dispatch, each group's entries by chars (1..4).  The copies and the pair
-; fills follow their dispatch, so it is a patched branch: the entry's offset from the
-; branch.  The solid fills are too far from theirs (@sol0: placing them in reach would
-; put @run's bmi @tile out of its), so theirs is a patched jmp: the entry's low byte,
-; its high byte the group's page.  Either way each group's entries share a page with
-; what the dispatch lands on, so it costs a jmp's 3 cycles.
+; The Model B's dispatch, each group's entries by chars (1..4): a patched branch, the
+; entry's offset from it, right before its blocks (the solid's chain: MTO, zero page).
+; Each group's entries share a page with the branch's next byte, so a taken branch
+; costs a jmp's 3 cycles.
 @jto:   .byte @b7-(@tj+2), @b15-(@tj+2), @b23-(@tj+2), @b31-(@tj+2)
 @fto:   .byte @f7-(@fj+2), @f15-(@fj+2), @f23-(@fj+2), @f31-(@fj+2)
-@mtl:   .byte <@m7, <@m15, <@m23, <@m31
         .assert @tj+2 = @b31 && @fj+2 = @f31, error, "the branch dispatches must sit right before their blocks"
         .assert @b7-(@tj+2) <= 127 && @f7-(@fj+2) <= 127, error, "a dispatch branch's blocks run past its reach"
-        .assert >@b7 = >@b31 && >@m7 = >@m31 && >@f7 = >@f31, error, "a dispatch group straddles a page: pads.inc PADB_M6 (or move it)"
+        .assert >@b7 = >@b31 && >@f7 = >@f31, error, "a dispatch group straddles a page"
   .endif
 
 ; ---- the loader's patch points in the row loop

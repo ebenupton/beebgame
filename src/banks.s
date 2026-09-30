@@ -18,13 +18,6 @@ mulrowhi:
 .repeat 32, i
         .byte >(i*ROWCHARS)
 .endrepeat
-  .if BHW                           ; (the Master's ring is 32 rows: ringmod is and #31)
-        .segment "TILCODE"
-ringmodtab:                         ; A = a map char row (brought under RINGROWS*5 by
-.repeat RINGROWS*5, i               ; the ringmod macro) -> its ring slot
-        .byte i .mod RINGROWS
-.endrepeat
-  .endif
 
 ; ---------------------------------------------------------------- the sprite banks
 ; The expansion tables and SWAPTAB (the dot reversal) end both sprite banks, at the

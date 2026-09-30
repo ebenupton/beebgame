@@ -23,6 +23,6 @@ PADB_DS = 0                         ; before drawsprite
 PADM_DS = 8
 PADB_CP = 0                         ; before copy_partial
 PADM_CP = 9
-PADB_M6 = 29                        ; bank 6, the Model B: before drawrect's solid fills,
-                                    ; @m31..@m7, so the four share a page (tiles.s asserts)
+PADB_T6 = 40                        ; bank 6, the Model B: after ringmodtab, before drawrect
+                                    ; (tiles.s: its hot stretches each in a page)
 PADB_BB = 0                         ; the Model B: after blank_below

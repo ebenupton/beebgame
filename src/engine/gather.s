@@ -29,9 +29,11 @@
 ; What a pair means to the row loop (the Model B's; the Master's table holds the same):
 ;   GATHERH = 0             id 0, the level's solid (GATHERL unread)
 ;   GATHERH = $40           a flat tile: GATHERL indexes its pair in FLATTAB
-;   GATHERH bit 7 set       a stored tile: GATHERH:GATHERL is its address in bank 6;
-;                           a full tile's GATHERL has its low bits clear, a half's the
-;                           flags (bit 2 = a half), a mirror's is kind 3
+;   GATHERH bit 7 set       a full tile: GATHERH:GATHERL its address in bank 6 (low
+;                           bits clear); with TILEMIRROR a mirror too, kind 3
+;   GATHERH $06-$3F         a half: its row's page less $80 (bit 7 clear marks it, so
+;                           drawrect sends it the rare way, at @run), GATHERL the row's
+;                           offset and its flags (bit 2 = a half)
 ; A fill is flagged by bit 7 of the high byte clear -- the row loop's bpl.
 ;
 ; Model B, the tile kinds by id range:
@@ -122,7 +124,8 @@ gather5:
         lsr
         lsr
         clc
-        adc halfhi5                 ; + (k >> 3): 8 half rows a page
+        adc halfhi5                 ; + (k >> 3): 8 half rows a page (halfhi5 less $80:
+                                    ;  the loader's -- a half's mark)
         sta GATHERH,y
         lda tmp
         asl

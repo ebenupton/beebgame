@@ -31,6 +31,9 @@
   .if BHW
         .segment "ZPHW": zeropage
 jv:       .res 2                  ; jmpx's vector: jmp (abs,x) has no 6502 form (cpu.inc)
+MTO:      .res 4                  ; drawrect's solid-chain offsets, by chars (1..4): 72, 48,
+                                  ;  24, 0 (boot's) -- in zero page, a byte shorter to read
+                                  ;  than a table, which keeps @run's bmi @tile in reach
   .endif
 
 ; ---------------------------------------------------------------- scratch

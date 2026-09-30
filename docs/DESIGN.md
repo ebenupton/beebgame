@@ -588,17 +588,24 @@ asserts the code ends below slot TOFF+1).
 `gather5` turns a tile row's ids into (GATHERL, GATHERH) pairs, which `drawrect`'s row
 loop reads:
 
-- a full tile: GATHERH = its page, GATHERL = (id & 3) << 6 (bits 0-5 clear);
-- a half tile: GATHERH = its stored row's page, GATHERL = its offset | bit 2 | which
-  row fills (bit 0 the top, bit 1 the bottom, neither: both rows are the stored one);
-  the row loop tests against `rowbit` (1 for the top character row, 2 for the bottom);
-- a fill: GATHERH bit 7 clear, so the row loop's one `bpl` after the load finds every
-  fill and a tile run pays nothing more.  GATHERH = 0 is the level's solid (id 0): the
-  patched byte as a pair; otherwise GATHERH = $40 and GATHERL indexes the pair in
-  FLATTAB.  Every fill goes down the one pair cascade (PCHAR), on both machines.
+- a full tile: GATHERH = its page (bit 7 set), GATHERL = (id & 3) << 6 (bits 0-5
+  clear), so the full-tile path is the load, one `bmi` and the address -- no kind test;
+- the level's solid (id 0): GATHERH = 0, the row loop's fall-through: the patched byte
+  (SOLIDF) stored down every line;
+- a flat tile or the other solid: GATHERH = $40, GATHERL indexing its pair in FLATTAB;
+- a half tile: GATHERH = its stored row's page less $80 ($06-$3F: bit 7 clear marks
+  it), GATHERL = its offset | bit 2 | which row fills (bit 0 the top, bit 1 the bottom,
+  neither: both rows are the stored one); the row loop tests against `rowbit` (1 for
+  the top character row, 2 for the bottom).
+
+The row loop's load of GATHERH then sorts a run with two branches: `bmi` to the full
+tiles, `bne` to the rarer ways (flats at $40, halves below it: one `cmp`), and on
+through to the solid.  The flats and the halves' fill rows go down the one pair
+cascade (PCHAR).
 
 On the Model B `gather5` computes the pair from the id with the level's shape (half0,
-half1, half2, halfhi5, halfsub, in zero page), since main RAM has no room for a table.
+half1, half2, halfhi5 -- the halves' page less $80, the loader's --, halfsub, in zero
+page), since main RAM has no room for a table.
 On the Master it is two indexed loads from LV_PAGE0 in main RAM, a table the packer
 builds per level; unused ids in it are a black fill ($40, 0), because the rows past a
 map's end are read too.  The Model B's gather tests for id 0 first (`beq`, 2 cycles a
@@ -607,12 +614,18 @@ tile): a solid costs it one store.
 `drawrect` (bank 6) draws a rectangle of map characters into the back buffer: per-rect
 invariants once, one `ringaddr` for the first row, then per tile row one `mapstrip` and
 one or two character rows.  A row may straddle the ring's end but a run -- the
-characters of one tile, at most four -- never does (below), so every run is copied by
-an unrolled block entered by its length: on the Model B through a `jmp` whose low
-byte is patched (each group of four entries shares a page, asserted; `drawrect` is a
-write window for it), on the Master through `jmp (abs,x)`.  A fill of a pair stores
-each byte four times a character, every store setting its own Y (70 cycles a character;
-alternating loads down a `dey` chain was 88).
+characters of one tile, at most four -- never does (below), so every run is drawn by
+an unrolled block entered by its length: on the Model B through a branch right before
+the blocks whose offset the run patches (each group's entries in the branch's page,
+asserted, so it costs a jmp's 3 cycles; `drawrect` is a write window for it), on the
+Master through `jmp (abs,x)`.  A fill of a pair stores each byte four times a
+character, every store setting its own Y (70 cycles a character; alternating loads
+down a `dey` chain was 88).  The Model B's solid is one chain of 32 `dey` / `sta
+(sp),y` after its branch, entered with Y = 8n (a `tay`), the offsets in zero page
+(MTO, boot's: a byte shorter than a table, which keeps the row loop's `bmi` over the
+chain in reach); ringmodtab and PADB_T6 before `drawrect` put its two hot stretches
+each in a page.  Each character row starts with `sp` already set, by `ringaddr` for
+the first and `@rowdone` for the rest.
 
 **Mirrored tiles** (TILEMIRROR=1): another stored tile reversed left to right, drawn a
 character at a time right to left with `((b & $33) << 2) | ((b & $CC) >> 2)`.  The
