@@ -45,8 +45,8 @@ Three facts about the machines shape everything you write:
 ## The concepts
 
 The engine works in several units at once, and most mistakes in a new game are
-mixing two of them.  This section defines them and then shows how the tiles, the
-sprites and their masks are laid out in memory.  Throughout this guide, and the
+mixing two of them.  This section defines them and then shows how the tiles and the
+sprites are laid out in memory.  Throughout this guide, and the
 engine's other documents, the word "pixel" never stands alone: it is always a
 **screen pixel** or a **game pixel**.
 
@@ -124,59 +124,41 @@ pixels completely, and the level's tile ids say which tile goes where.
 
 ### A sprite's image
 
-A sprite is a rectangle `W` bytes wide -- 2W game pixels, 4W screen pixels -- and
-`lines` scanlines tall (2 for each game-pixel row: `lines` = 2 x h).  Its image is
-stored **column by column**: all `lines` bytes of column 0, top to bottom, then
-column 1, and so on.  A 6 x 4 game-pixel sprite is 3 bytes wide and 8 scanlines tall:
+A sprite is a rectangle `W` bytes wide on the screen -- 2W game pixels, 4W screen
+pixels -- and h game pixels tall.  Its image is stored as **4-bit game pixels**: one
+byte for each game-pixel row of each column, holding that column's two game pixels, 4
+bits each (the left in the high nibble).  Each is an index into one palette of 15
+colours, the game's, and 0 is transparent, so a sprite is half a byte a game pixel and
+needs no mask.  The image is stored **column by column**: all h bytes of column 0, top
+to bottom, then column 1, and so on.  A 6 x 4 game-pixel sprite is 3 bytes wide and 4
+rows tall:
 
 ```text
-image bytes, column-major (W = 3, lines = 8, 24 bytes):
-  column 0: bytes  0-7    game pixels 0-1 across, scanlines 0-7
-  column 1: bytes  8-15   game pixels 2-3 across
-  column 2: bytes 16-23   game pixels 4-5 across
+image bytes, column-major (W = 3, lines = 4, 12 bytes):
+  column 0: bytes 0-3    game pixels 0-1 across, game-pixel rows 0-3
+  column 1: bytes 4-7    game pixels 2-3 across
+  column 2: bytes 8-11   game pixels 4-5 across
+each byte:  bits 7-4 the left game pixel, bits 3-0 the right (0: transparent)
 ```
 
-A transparent game pixel is stored as 0 (its four screen pixels black).  That alone
-cannot say "transparent", because black is a colour; the mask does.
-
-### A sprite's mask
-
-The mask has **one bit per game pixel**: 1 opaque, 0 transparent.  It cannot be finer
-(a single screen pixel cannot be transparent on its own) and it need not be, since a
-game pixel is the smallest thing the art changes.
-
-- Each image column (2 game pixels) has a 2-bit pair: its left game pixel in the
-  pair's high bit.
-- Four columns' pairs pack into one mask byte: column 4g+j at bits 7-2j and 6-2j.
-- There is one mask byte per game-pixel row, which both of that row's scanlines use.
-- The plane is stored by **column group**: all the rows of columns 0-3, then all the
-  rows of columns 4-7...  It is a quarter of the image's width in bytes and half its
-  height, and the blitter's mask pointer steps through it as its image pointer steps
-  through the image.
-
-For the 6 x 4 game-pixel sprite above -- one column group, 4 game-pixel rows:
-
-```text
-mask bytes (4):   bits 7 6 | 5 4 | 3 2 | 1 0
-                  col 0    | col 1 | col 2 | (col 3: none, 0)
-                  L  R     | L  R  | L  R
-row 0 (scanlines 0, 1):  one byte
-row 1 (scanlines 2, 3):  one byte   ...and so on for rows 2 and 3
-```
-
-When the sprite is drawn, each column's pair becomes the AND mask for its screen
-byte: 00 keeps the byte ($FF), 01 keeps its left half ($CC, the right game pixel
-opaque), 10 keeps its right half ($33), 11 replaces it ($00).  The screen byte becomes
-(screen AND mask) OR image.
+The palette is three tables your asset step writes as `nibtab.bin`, 768 bytes, each
+indexed by a stored byte: `L0TAB` and `L1TAB`, its first and second scanline as
+screen bytes (each game pixel's dither), and `NMASK`, the AND mask for its transparent
+game pixels ($00 for none, $CC or $33 for one).  When the sprite is drawn, a byte of 0
+draws nothing and each other byte's two screen bytes become (screen AND NMASK) OR the
+line.  The engine puts the tables, with its own table that reverses a byte's four
+screen pixels (SWAPTAB), at $BC00-$BFFF of both sprite banks, so either bank can hold
+any image and draw it mirrored or not.
 
 ### Sprite ids, and boxes
 
 A sprite id indexes the level's directory.  Your asset step chooses two numbers,
-`BOXID0` and `BOXN`: ids below `BOXID0` are ordinary sprites (masked), and the `BOXN`
-ids from `BOXID0` are **boxes**, opaque rectangles with their background baked into
-the art, no mask, drawn by a plain copy.  A box is cheaper to draw than a masked
-sprite, and suits a thing that sits still on a known background.  Two rules come with
-boxes:
+`BOXID0` and `BOXN`: ids below `BOXID0` are ordinary sprites (4-bit images), and the
+`BOXN` ids from `BOXID0` are **boxes**, opaque rectangles with their background baked
+into the art.  A box is not 4-bit: it is stored as screen bytes, every scanline (2h
+bytes a column, as a tile is), and drawn by a plain copy, so its background keeps its
+dither exactly.  A box suits a thing that sits still on a known background.  Two rules
+come with boxes:
 
 - A box drawn at the same place as the box before it must cover it completely -- the
   frames of one animation, the same size.  The engine does not erase the old one.
@@ -186,23 +168,39 @@ boxes:
   can never pass in front of.
 
 
-### A sprite's directory entry
+### A sprite's directory
 
-Each sprite id has an 8-byte entry in the level's directory: the image's address
-(filled in by the level writer), then six bytes of geometry:
+A sprite is described in two parts: its **shape**, which is the game's and the same
+in every level, and its image's **address**, which is the level's.
 
-| Byte | Field | Unit |
+The shapes are tables your asset step writes, `sprgeom.inc`, and your game assembles
+where the engine can read them with bank 7 paged (bank 7's GAMEDATA, or HAZEL):
+`SPRG_IX`, a byte by sprite id, the sprite's shape; and by shape:
+
+| Table | Field | Unit |
 |---|---|---|
-| 2 | W, the width | bytes (2 game pixels each) |
-| 3 | h, the height | game pixels |
-| 4 | refx, the reference point across (signed) | game pixels |
-| 5 | refy, the reference point down (signed) | game pixels |
-| 6 | flags: bit 0 drawn mirrored, bit 1 every scanline stored (set it: the masked blitters draw every image as stored scanlines, and the "one a row, drawn twice" form it once meant survives only as the prologue's arithmetic, which NIBSPR's 4-bit images use with the bit clear), bit 3 a box (copied, no mask), bit 4 in bank 5 | |
-| 7 | lines, the scanlines stored | scanlines |
+| `SPRG_W` | W, the width | bytes (2 game pixels each) |
+| `SPRG_RX` | refx, the reference point across (signed) | game pixels |
+| `SPRG_RY` | refy, the reference point down (signed) | game pixels |
+| `SPRG_LN` | lines, the rows stored: h for an image, 2h (its scanlines) for a box | rows |
+| `SPRG_FL` | flags (with `SPRGFL = 1` in assets.inc): bit 0 drawn mirrored, bit 1 every scanline stored (set for a box, clear for an image: two scanlines a stored byte), bit 3 a box (copied) | |
+
+Sprites that share a shape share its entry.  Without SPRGFL the flags are 0, or the
+sprite list's mirror with DRAWFLAGS (Step 11), so a game that mirrors by sprite id,
+or has boxes, sets SPRGFL and writes `SPRG_FL`; Cleo does.
+
+The level's part is the directory proper, `SPR_TABLE` in bank 7, written by
+`levelfile.directory()`: two arrays by id, `DIR_LO` then `DIR_HI`, BOXID0 + BOXN
+bytes each, the image's address, its high byte 0 when the image is not in this level
+(not drawn) and with bit 7 clear when it is in bank 5 (the images are all at
+$8000-$BFFF, so bit 7 is otherwise always set).  It covers the boxes, and the
+prologue folds a "still" alias onto its box.  Commando's 180 ids have 106 shapes:
+180 + 4 x 106 bytes once, and 360 in each level, where the 8-byte entries the engine
+once kept took 1,440 in both.
 
 The sprite's top left lands at (`spx` - refx, `spy` - refy) in map coordinates, so the
 reference point is where the game says the sprite is: a character's feet, say, so
-that its frames of different sizes all stand on the same ground.  Its mask's address is in SPRMASK, by id.
+that its frames of different sizes all stand on the same ground.
 
 ## Step 1: make the project
 
@@ -558,8 +556,10 @@ Your `GAME_ASSETS` step writes, for each machine, into `$BD`:
 | `assets.inc` | the constants the engine is built with (below) |
 | `L0` .. `L15` | the levels: sixteen files, written with `tools/levelfile.py` |
 | `SPRC` | the sprites every level draws, loaded once, to fixed places in banks 4 and 5 |
-| `SPRX` | every other sprite image and mask, from which each level takes its own |
-| `imgtab.bin` | where each item is in SPRX: 10 bytes each (file, offset, length; the mask's the same) |
+| `SPRX` | every other sprite image, from which each level takes its own |
+| `imgtab.bin` | where each item is in SPRX: 5 bytes each (file, offset, length) |
+| `nibtab.bin` | the sprites' palette: `L0TAB`, `L1TAB`, `NMASK`, 768 bytes (*A sprite's image*) |
+| `sprgeom.inc` | the sprites' shapes, `SPRG_IX` and `SPRG_W` .. `SPRG_FL`, for your GAMEDATA or HAZEL to include (*A sprite's directory*) |
 | `BAR` | the status bar's template, 1,280 bytes |
 | anything your own sources `.incbin` (Cleo: the tune, the font, the title pictures) |
 
@@ -575,9 +575,9 @@ checks): build them from the Model B's layout.
 | `FLAT0`, `NFLAT` | the fill ids: NFLAT flat tiles from FLAT0, then the two solids at 254 and 255, so FLAT0 = 254 - NFLAT (asserted) |
 | `MAXMIR` | mirrored tiles at most (TILEMIRROR only; else 0) |
 | `BOXID0`, `BOXN` | the first box id, and how many boxes (*Sprite ids, and boxes*) |
+| `SPRGFL` | 1 when the shapes carry flags, `SPRG_FL` (*A sprite's directory*); leave it out otherwise |
 | `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once (optional: 28 if left out; or set `MAXSPR` in your build.sh instead, Step 11) |
 | `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | the resident and staged sprites (below) |
-| `SPR5_MIRROR`, `SPR4_COPY` | 0: nothing mirrored in bank 5, nothing opaque in bank 4 (keep them 0: bank 5 has no SWAPTAB to mirror with, and bank 4's copy blitter is untested.  With NIBSPR both banks mirror whatever these say) |
 | `MAP5` | the map's place in bank 5 ($9C00) |
 | `B4_CODE_END`, `B5_CODE_END` | where the engine's sprite-bank code ends: your sprites start there |
 
@@ -599,14 +599,14 @@ import levelfile as lf       # (beebgame/tools on sys.path)
 
 ghdr = {HDR_STARTX: L['start'][0], HDR_STARTY: L['start'][1],
         HDR_EXITX: L['exit'][0], HDR_EXITY: L['exit'][1]}          # Cleo's own fields
-placement = lf.placement([(item, bank, img_addr, mask_addr), ...])  # images this level loads
-directory, smask = lf.directory(entries, masks)                     # BOXID0 + BOXN entries, BOXID0 masks
+placement = lf.placement([(item, bank, img_addr, 0), ...])  # images this level loads
+directory = lf.directory(entries)                           # BOXID0 + BOXN: None or (addr, bank)
 data = lf.encode(lf.Level(lw=L['lw'], lh=L['lh'], game_header=ghdr,
                           shape=lf.Shape(**T['B']['shape']),
                           objects=bytes(objs), tile_tables=(bytes(attr), bytes(acls)),
                           tiles=T['B']['tiles'], placement=placement, map=mapb,
                           flat=T['flat'], halves=T['halves'], hpair=T['hpair'],
-                          mir=T['B']['mir'], directory=directory, masks=smask,
+                          mir=T['B']['mir'], directory=directory,
                           page0=T['B']['page0'], boxid0=BOXID0, boxn=BOXN))
 open(os.path.join(OUT, 'L%d' % n), 'wb').write(data)
 ```
@@ -618,7 +618,7 @@ in `DESIGN.md`, *The level files*.
 **The tiles and the sprites** are the part to be most careful with: their layouts are
 the blitters' (`DESIGN.md`, *The tiles* and *The sprites*).  In short:
 
-- A tile's 64 bytes and a sprite's image, mask and directory entry are laid out as
+- A tile's 64 bytes and a sprite's image, shape and directory are laid out as
   *The concepts* shows.
 - Tile id 0 is the level's solid colour, and it must be a one-byte fill: the same
   byte on every scanline (black, or a pure ink), because the row loop stores a single
@@ -638,16 +638,13 @@ the blitters' (`DESIGN.md`, *The tiles* and *The sprites*).  In short:
   bytes in bank 6 rather than 64: choose NFLAT for the most flat tiles a level uses
   (Cleo's packer takes it from the environment, `NFLAT=n sh build.sh`, and stores a
   level's surplus flat tiles as full ones).
-- Mirrored images go in bank 4 (it has the table that reverses a byte's four screen
-  pixels), boxes in bank 5 (it has the copy blitter), and an image and its mask in the
-  same bank.
+- Any image, mirrored or not, and any box may go in either sprite bank: both have
+  every blitter and the palette's tables.
 
-**What the art costs.**  A sprite image is a byte for every game pixel (each byte is
-two game pixels across and one of their two scanlines), plus the mask, one bit a
-game pixel: nine eighths of a byte a game pixel.  The two sprite banks have about
-14K (bank 4) and 6.5K (bank 5) for the resident sprites and one level's own.
-Measure your art against that early: a game whose sprites do not fit can store them
-as 4-bit pixels of one palette instead (NIBSPR, Step 11), half a byte a game pixel.
+**What the art costs.**  A sprite image is half a byte a game pixel; a box, two bytes
+a game pixel (its screen bytes).  The two sprite banks have about 14K (bank 4) and 6K
+(bank 5) for the resident sprites and one level's own.  Measure your art against that
+early.
 
 **Resident and staged sprites.**  Every sprite image is in one of two files, and which
 is your choice:
@@ -657,11 +654,11 @@ is your choice:
   bank 5 from SPRC5_BASE (= B5_CODE_END).  They stay for the whole session, so every
   level's directory names them at those addresses and no level loads them again.
 - **SPRX, the staged sprites**, SPRX_LEN bytes: everything else.  Each level load
-  stages SPRX whole and copies out just the images and masks that level's placement
-  list names, to the addresses the list gives.  `imgtab.bin` has an entry per item
-  saying where in SPRX its image and mask are (zeros for a resident item).
+  stages SPRX whole and copies out just the images that level's placement list names,
+  to the addresses the list gives.  `imgtab.bin` has an entry per item saying where in
+  SPRX its image is (zeros for a resident item).
 - The rest of each sprite bank is the level's: bank 4 from the end of SPRC's part to
-  $BAFF, bank 5 from the end of its part to $9BFF.
+  $BBFF, bank 5 from the end of its part to $9BFF.
 
 Make resident what (nearly) every level draws -- the player, what the player throws,
 the pickups -- and stage the rest.  A bigger resident set means shorter loads and less
@@ -735,58 +732,30 @@ the engine's level file writer.
 
 ## Step 11: a game for the Master alone, and the other build options
 
-A game that cannot fit the Model B -- its code bigger than bank 7's game image, its
-sprites bigger than banks 4 and 5 hold as screen bytes -- can be built for the
-Master alone and take options the Model B cannot have.  They are environment
-variables your `build.sh` exports before it runs the driver, each 0 unless set, and
-each one the assembler sees too (`cpu.inc`).  With none set a game's disc is
-exactly what it was.  Cleo sets NIBSPR and SPRGEOM; Commando sets them all:
+A game that cannot fit the Model B -- its code bigger than bank 7's game image, say --
+can be built for the Master alone and take options the Model B cannot have.  They
+are environment variables your `build.sh` exports before it runs the driver, each 0
+unless set, and each one the assembler sees too (`cpu.inc`).  With none set a game's disc is
+exactly what it was.  Cleo sets none; Commando sets them all:
 
 ```sh
-export MASTERONLY=1 NIBSPR=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1 SPRGEOM=1 TIGHTBSS=1 MAXSPR=24
+export MASTERONLY=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1 TIGHTBSS=1 MAXSPR=24
 ```
 
 | Option | What it does | What the game does for it |
 |---|---|---|
 | `MASTERONLY` | builds the Master alone: no Model B assembly, link or files on the disc, the Master linked at its own addresses (not pinned to the Model B's), its layout the level files'; the boot loader tells a Model B the game needs a Master 128 | writes its assets once, to `build/master`; its code may be 65C02 throughout |
-| `NIBSPR` | sprites stored as 4-bit pixels of one palette (below) | writes `nibtab.bin`, its palette's expansion tables, and 4-bit images; its boxes, if any, as opaque 4-bit images |
 | `GAMEHAZEL` | the segments HAZCODE, HAZDATA, HAZBSS in HAZEL ($C000-$DFFF, 8K), copied there once at boot and seen by both images; ACCCON Y stays set; SPRX is read from the disc at every level load (HAZEL no longer keeps it).  Needs MASTERONLY | puts code and variables there (they are visible whatever bank is paged); zeroes its HAZBSS itself; uses no `bankimm` there (read PBANK, as the menus do) |
 | `GAMESOUND` | the vsync calls the game's `hook_sound` instead of the engine's sound effects; the tune is still the engine's | defines `hook_sound`, resident (HAZEL, say): it runs in the interrupt, X and Y saved, and may use only its own zero page |
 | `DRAWFLAGS` | bit 7 of a sprite's x high byte (`spx+1` at `addsprite`) mirrors it, so one image is drawn either way round | sets the bit; map x stays below 32768 |
 | `TALLMAP` | maps up to 256 tiles tall (the window's character row keeps its high bits for the tile blitter's map row).  The Master alone: its ring is 32 rows | nothing |
 | `TIGHTBSS` | the engine's bank 7 variables packed: a sprite record is 9 bytes (the rectangle's column high bits share the height's byte: a map is at most 1,024 characters wide), kept as arrays a byte of each by record (as the dirty list is), and ENGBSS follows GAMEBSS where it ends instead of at the next page | nothing |
 | `MAXSPR=n` | the sprite slots, the most sprites on screen at once (the list, and a record each a buffer): n in place of assets.inc's `MAXSPRDEF` (set one or the other); 28 when neither is set | adds at most n sprites a frame (Commando: its sort list's 24) |
-| `SPRGEOM` | the sprite directory split (NIBSPR only): the level file carries each id's image address alone, 2 bytes an id, and the geometry, the same in every level, is the game's (below) | writes the level's directory with `levelfile.directory_split`, and assembles the geometry tables `SPRG_IX`, `SPRG_W`, `SPRG_RX`, `SPRG_RY`, `SPRG_LN` in bank 7 (its GAMEDATA) or HAZEL |
-
-**4-bit sprites (NIBSPR).**  An image is stored as a byte a game-pixel row for each
-column: its two game pixels, 4 bits each (the left in the high nibble), indices into
-one palette of 15 colours, 0 transparent.  So a sprite is half a byte a game pixel,
-with no mask.  Your asset step writes `nibtab.bin`, 768 bytes: `L0TAB` and `L1TAB`
-(a stored byte's first and second scanline, as screen bytes) and `NMASK` (the AND
-mask for its transparent game pixels: $CC or $33 for one, $00 for none).  The engine
-puts them with its dot-reversal table at $BC00-$BFFF of both sprite banks, so either
-bank can hold any image, mirrored or not (and bank 4's sprites run to $BBFF).  A
-directory entry is as *A sprite's directory entry* says with flag bit 1 clear and
-`lines` = h, the rows stored.  There is no SPRMASK and no box.  By instruction count
-the blitter is about a fifth faster than the masked one per game pixel (a
-transparent pair is one load and a branch); not yet timed side by side.
-
-**The split directory (SPRGEOM).**  With 4-bit sprites a directory entry's flags
-are only its bank (the mirror is DRAWFLAGS's), `lines` is h and h is not read; and
-a sprite's W, refx and refy do not change from level to level.  So with SPRGEOM the
-level's directory is two arrays by id, `DIR_LO` then `DIR_HI` (SPR_TABLE, BOXID0 bytes
-each): the image's address, its high byte 0 when the image is not in this level (not
-drawn) and with bit 7 clear when it is in bank 5 (the images are all at $8000-$BFFF,
-so bit 7 is otherwise always set).  The geometry is the game's, assembled where
-`drawsprite` can read it with bank 7 paged (bank 7's GAMEDATA, or HAZEL): `SPRG_IX`, a
-byte by id, the sprite's shape; and by shape `SPRG_W` (W), `SPRG_RX` and `SPRG_RY`
-(refx, refy, signed) and `SPRG_LN` (the rows stored).  Sprites that share a shape
-share its entry.  Commando's 180 ids have 106 shapes: 180 + 4 x 106 bytes once, and
-360 in each level, where 8 bytes an id took 1,440 in both.  The boxes and their "still" aliases work as without it: DIR_LO/DIR_HI cover BOXID0 + BOXN ids and the prologue folds an alias onto its box.  A game that mirrors by sprite id rather than with DRAWFLAGS sets `SPRGFL = 1` in its assets.inc and adds `SPRG_FL` by shape, the directory's flags byte (bit 0 mirrored); Cleo does.
 
 **What else a Master-only game may use.**  Beyond bank 7 and (GAMEHAZEL) HAZEL: the
 objects' area LV_OBJS at $1C00 keeps what the loader put there all through the level
-(Step 6), and zero page from $7A (no Model B segment ZPHW; $7B with DRAWFLAGS) to $EF.
+(Step 6), and zero page from $73 (no Model B segment ZPHW, and the Master linked unpinned;
+$74 with DRAWFLAGS) to $EF.
 Nothing else in main RAM is the game's.
 
 ## Limits to design within
@@ -795,12 +764,12 @@ Nothing else in main RAM is the game's.
   all sixteen (and all three) must exist and be valid whatever the game uses (a game
   with fewer writes small stubs: Commando's are a 32 x 32 map of one tile).
 - **Sprites:** BOXID0 + BOXN sprite ids, and the still aliases after them (BOXID0 +
-  2 x BOXN in all), at most 256; the masked ids, below BOXID0, at most 128 (SPRMASK
-  is indexed by id x 2 in a byte); at most MAXSPR on screen at once.  The directory,
-  8 bytes an id (2 with SPRGEOM), is in bank 7 (ENGBSS) and in every level file.
-- **Staged items:** imgtab.bin (10 bytes an item) is part of LDPROG, which must fit
-  $0E00-$1BFF with its code: about 100 items with Cleo's.  Number only the staged
-  images and masks, not every sprite id.
+  2 x BOXN in all), at most 256; at most MAXSPR on screen at once.  The directory,
+  2 bytes an id, is in bank 7 (ENGBSS) and in every level file.
+- **Staged items:** imgtab.bin (5 bytes an item) is part of LDPROG, which must fit
+  $0E00-$1BFF with its code: about 210 items with Cleo's (the Master's loader, the
+  larger; the Model B's leaves room for about 250).  Number only the staged
+  images, not every sprite id.
 - **Tiles:** FLAT0 - 1 ids for the tiles that are not flat, and bank 6's slots for
   the stored ones (Step 8).
 - **The map:** 1 << lw by 1 << lh tiles, 8K at most, and at most 128 tiles tall (the
@@ -821,11 +790,9 @@ Nothing else in main RAM is the game's.
   Cleo's: 14,343 bytes).  Take off the level's
   tables and the page alignment after them (768: GAMEBSS starts at $8300), the
   engine's code (ENGCODE: about 1.8K on the Model B, 1.5K on the Master) and its
-  variables (ENGBSS: 82 + 21 x MAXSPR (19 with TIGHTBSS) + 8 x (BOXID0 + BOXN) + 2 x BOXID0 bytes, the
-  last term none with NIBSPR, and the directory's 2 x BOXID0 in place of the 8 x with
-  SPRGEOM (2 x (BOXID0 + BOXN)) -- 822 for Cleo, 2,646 for Commando): what is left,
-  about 11K for Cleo, is yours for code, data and variables.  The link says when it
-  is full.  The menus' image is the same less the music player's 157: about 13.9K
+  variables (ENGBSS: 82 + 21 x MAXSPR (19 with TIGHTBSS) + 2 x (BOXID0 + BOXN) bytes --
+  822 for Cleo, 2,646 for Commando): what is left, about 11K for Cleo, is yours for
+  code, data and variables.  The link says when it is full.  The menus' image is the same less the music player's 157: about 13.9K
   for Cleo.
 - **Zero page:** ZPGAME is $81-$EF with both machines (111 bytes), from $7A (or $7B
   with DRAWFLAGS) on a Master-only build.

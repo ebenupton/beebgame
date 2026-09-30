@@ -12,8 +12,9 @@ What it gives a game:
   double buffered, with a fixed status bar outside the ring -- driven by a "rupture"
   chain of CRTC sections from the VIA timer, so the sync never breaks.
 - Tile and sprite blitters in sideways RAM: 8x16 tiles gathered from the map a row at a
-  time (full, half and flat tiles), masked, mirrored and opaque sprites with per-level
-  placement tuned against page crossings, dirty-rectangle redraw and sprite records.
+  time (full, half and flat tiles), 4-bit sprites (a palette of 15 colours and
+  transparency, drawn either way round) and opaque boxes, with per-level placement
+  tuned against page crossings, dirty-rectangle redraw and sprite records.
 - Its own disc driver (8271 and 1770) and loader: each level is gathered from shared
   files into the banks by a load-time program in main RAM, with the display parked in
   a standard frame throughout.
@@ -25,10 +26,10 @@ What it gives a game:
   interrupt.
 
 Build options (`docs/GUIDE.md`, Step 11) let a game too big for the Model B build for
-the Master alone: 4-bit sprites (NIBSPR), game code in HAZEL (GAMEHAZEL), the game's
-own sound player (GAMESOUND), a draw flag that mirrors a sprite (DRAWFLAGS), maps up
-to 256 tiles tall (TALLMAP), a sprite directory split between the level and the game
-(SPRGEOM), packed engine variables (TIGHTBSS), the sprite slot count (MAXSPR).  With none set a game builds as it always did.
+the Master alone: game code in HAZEL (GAMEHAZEL), the game's own sound player
+(GAMESOUND), a draw flag that mirrors a sprite (DRAWFLAGS), maps up to 256 tiles tall
+(TALLMAP), packed engine variables (TIGHTBSS), the sprite slot count (MAXSPR).  With none set a game
+builds for both machines.
 
 **To write a game on it, start with `docs/GUIDE.md`**: the steps from an empty
 directory to a disc, with Cleo's code as the examples.  `docs/DESIGN.md` is the

@@ -20,8 +20,8 @@ every level from the disc into those banks.
 
 | Bank | Code | Data |
 |---|---|---|
-| 4 | the sprite row loop, with the mirrored blitter | most sprite images and masks; SWAPTAB; the mask tables |
-| 5 | the sprite row loop with the copy blitter; the tile row's gather | the rest of the sprites; the level's map; the mask tables |
+| 4 | the sprite row loop and its blitters | most sprite images; the expansion tables and SWAPTAB |
+| 5 | the sprite row loop and its blitters; the tile row's gather | the rest of the sprites; the level's map; the expansion tables and SWAPTAB |
 | 6 | the tile blitter and the ring work that calls it | the level's tiles |
 | 7 | at the top the kernel, resident: the display chain's builders, the palette, the disc driver, the image swap (on the Model B the interrupt's work too); below it the game's image -- the game's code, the engine's sprite prologue and records -- or the menus' image | the level's tables, the sprite directory and records, the game's variables; or the menus' code and data |
 
@@ -87,19 +87,19 @@ It is off by default: no level needs it.
 
 | Range | Use |
 |---|---|
-| $00-$79 | the engine's (ZEROPAGE): defs.inc's (NSPR, BARDIRTY, SFXREQ, mtmp -- cpu.inc's scratch --, the ring and mirror state, the sprite prologue's hand-over, curR7, SECIDX), then engine/vars.s's (`mapptr`, maprow's result, among them); LDPROG's 17 bytes (LDZP) are the sprite prologue's scratch, dead during a load |
-| $7A-$80 | the Model B's own, the engine's (ZPHW: `jv`, the gather's shape); a gap on the Master |
-| $81-$EF | the game's (ZPGAME) |
+| $00-$72 | the engine's (ZEROPAGE): defs.inc's (NSPR, BARDIRTY, SFXREQ, mtmp -- cpu.inc's scratch --, the ring and mirror state, the sprite prologue's hand-over, curR7, SECIDX), then engine/vars.s's (`mapptr`, maprow's result, among them); LDPROG's 17 bytes (LDZP) are the sprite prologue's scratch, dead during a load |
+| $73-$79 | the Model B's own, the engine's (ZPHW: `jv`, the gather's shape); a gap on the Master |
+| $7A-$EF | the game's (ZPGAME; Cleo's to $E7) |
 | $F0-$FF | the MOS's zero page, but $F4 and $FC: the engine's hottest scalars |
 
 Once the game has the machine only two of the MOS's zero-page bytes are still touched:
 $F4, the MOS's copy of ROMSEL, which the interrupt restores from, and $FC, where the
 MOS's interrupt entry keeps A (every handler returns with `lda $FC / rti`).  The rest,
 in segments ZPF0 ($F0-$F3), ZPF5 ($F5-$FB) and ZPFD ($FD-$FF), holds scalars that were
-absolute and are among the most accessed: MAPSTRIDE, mapshr, MUSTICK, rowbit, dpass, spclip, halfhi, MUSON, and on the Model B
-crtcb ($F9-$FB free).  `boot` zeroes them.  On the Model B the arithmetic gather's shape
+absolute and are among the most accessed: MAPSTRIDE, mapshr, MUSTICK, rowbit, dpass,
+spclip, halfhi, MUSON and crtcb ($F9-$FB free).  `boot` zeroes them.  On the Model B the arithmetic gather's shape
 (half0-2, halfhi5, halfsub) and `jv`, the vector the 6502's `jmp (abs,x)` goes
-through, are in the ZEROPAGE segment.
+through, are in its own segment, ZPHW.
 
 ### Low RAM (both machines)
 
@@ -196,22 +196,28 @@ $8000.
 
 | Range | Model B | Master |
 |---|---|---|
-| the row loop (SPR4CODE: `ds_entry`, the masked and mirrored-masked blitters) | $8000-$83AE | $8000-$8391 |
+| the row loop (SPR4CODE: `ds_entry`, the 4-bit blitter and its mirrored twin, the copy blitter) | $8000-$83E4 | $8000-$83A9 |
 | the resident sprites' bank-4 part (SPRC_BASE, SPRC_LEN: the game's) | from B4_CODE_END | same |
-| the level's staged sprites, images and masks | to $BAFF | same |
-| SWAPTAB (the reversal of a byte's four screen pixels) | $BB00-$BBFF | same |
-| MASKTAB0-3 | $BC00-$BFFF | same |
+| the level's staged sprites | to $BBFF | same |
+| L0TAB, L1TAB, NMASK (the expansion tables: `nibtab.bin`, the game's) | $BC00-$BEFF | same |
+| SWAPTAB (the reversal of a byte's four screen pixels) | $BF00-$BFFF | same |
 
 ### Bank 5: sprites and the map
 
 | Range | Model B | Master |
 |---|---|---|
-| the row loop (SPR5CODE: the masked and copy blitters, no mirror) | $8000-$8251 | $8000-$822A |
-| MAP5CODE: `gather5` | $825F-$82C5 | $825F-$8273 |
+| the row loop (SPR5CODE: the same as bank 4's) | $8000-$83E4 | $8000-$83A9 |
+| MAP5CODE: `gather5` | $83E5-$844B | $83E5-$83F9 |
 | the resident sprites' bank-5 part (SPRC5_BASE, SPRC5_LEN: the game's) | from B5_CODE_END | same |
 | the level's staged sprites | to $9BFF | same |
 | the map (MAP5 = LV_MAP), a fixed 8K | $9C00-$BBFF | same |
-| MASKTAB0-3 | $BC00-$BFFF | same |
+| L0TAB, L1TAB, NMASK | $BC00-$BEFF | same |
+| SWAPTAB | $BF00-$BFFF | same |
+
+Both sprite banks end with the same four pages (banks.s `NIB_TABLES`, segments SPR4TAB
+and SPR5TAB in the cfgs' B4T and B5T), so the prologue in bank 7 can name them for
+either, and either bank can draw any image, mirrored or not.  The cfgs give each
+bank's code (B4X, B5X) $600.
 
 The menus keep to bank 7, so the resident sprites stay from the first level on
 (`sprc_ok`).
@@ -260,9 +266,8 @@ runs on from there and falls short).  ENGCODE is `render_frame`
 and `render_core`, the sprite prologue (`drawsprite`), `draw_sprites`,
 `match_sprites`, `erase_old`, `copy_partial`, `blank_below`, `mark_dirty`,
 `draw_dirty`, `lvreset`, and on the Model B `mirror_copy` -- in whatever order keeps
-their hot loops in a page (below: the pads).  ENGBSS is SPRMASK and
-SPR_TABLE (the level's sprite directory: an entry of 8 bytes for each of the game's
-BOXID0 + BOXN sprite ids), the sprite records (SPRREC, RECCNT, KEEP) and the dirty
+their hot loops in a page (below: the pads).  ENGBSS is SPR_TABLE (the level's
+part of the sprite directory: 2 bytes for each of the game's BOXID0 + BOXN sprite ids), the sprite records (SPRREC, RECCNT, KEEP) and the dirty
 lists.  KRNCODE is `build_sections`, `menu_sections`, `calc_ring`, `ringaddr7`,
 `load_begin`, the palette, `music_stop`, `read_sectors` and the loads' way in (`ld_go`), and
 on the Model B the interrupt's work (`isr_body`, `scan_keys`, `sound_tick`: the
@@ -340,7 +345,7 @@ does it by hand.  On the Master the macros are empty.
 
 **Why bank 6's entry is a segment of its own (TIL6ENT) and banks 4's and 5's are
 not.**  Every bank `callbank` enters must have its entry at $8000.  In banks 4 and 5
-the code is one macro (`NIB_LOOPS`, or `SPRITE_LOOPS` for the 2-bit format),
+the code is one macro (`NIB_LOOPS`),
 assembled into SPR4CODE and SPR5CODE with `ds_entry` its first line, so the entry is
 at $8000 because nothing comes before it.
 Bank 6's code, TILCODE, is `engine/tiles.s` -- `ringaddr`, the tile blitter,
@@ -630,16 +635,15 @@ and redrawn whole: correct, but a whole window's redraw.
 
 **Where they sit.**  A row of a sprite walks the column pointer across the image a
 column (`lines` bytes) at a time, and each page it crosses costs the carry path (9
-cycles; the mirrored walk's borrow, 7); the mask pointer does the same a group of four
-columns at a time.  So where each image and mask lies in its bank matters, and the
-packer places them for it (`tools/sprpack.py`): each level's images and masks, as
-separate items, are ordered and padded within their bank's run by a local search that
+cycles; the mirrored walk's borrow, 7).  So where each image lies in its bank
+matters, and the packer places them for it (`tools/sprpack.py`): each level's images,
+as separate items, are ordered and padded within their bank's run by a local search that
 minimises the expected carries (over the eight line phases a sprite can have), plus
 the reads that cross a page, weighted by how often the level draws each sprite forward
 and mirrored (the game measures that; its packer passes the weights).  The resident
 sprites are placed the same way, weighted over all the levels, and may pad into the
-room the fullest level leaves.  The placement list tells the loader every item's image
-and mask address, so this needs nothing of the loader.  The search is deterministic
+room the fullest level leaves.  The placement list tells the loader every item's
+address, so this needs nothing of the loader.  The search is deterministic
 and cached (`build/sprpack.cache`).  An image of a few hundred bytes crosses a page
 once a row whatever the placement: that is the floor.
 
@@ -655,36 +659,55 @@ stands in front of it), and skips a "still" box that is kept identical and was n
 clipped at a window edge.
 
 **Boxes.**  Sprite ids from BOXID0 to BOXID0 + BOXN - 1 are boxes: opaque rectangles
-with their background baked into the art, no mask, drawn by the copy blitter (bank 5).
+with their background baked into the art, stored as screen bytes and drawn by the
+copy blitter (either bank).
 Two rules come with them.  A box drawn at the same place as the box before it must
 cover it completely (the engine does not erase it: frames of one animation, the same
 size).  And ids from BOXID0 + BOXN are "still" aliases, each drawing as the box BOXN
 below it: a game uses one when it knows nothing will move over the box, so that
 `draw_sprites` may skip it altogether while it is unchanged.
 
-`drawsprite` (bank 7) reads the directory entry (8 bytes: image address, width in
-bytes, height, reference x and y, flags, lines; flags: bit 0 mirrored, bit 1 every
-scanline stored, bit 3 the copy blitter, bit 4 in bank 5) and SPRMASK (the mask
-plane's address by id; the boxes have none), clips the sprite to the window, writes the record, notes the
-mirror's columns (Model B), computes the source, mask and screen pointers and the
-blitter index, and hands over through `callbank` to the row loop in the bank the image
-is in.  The row loop (`SPRITE_LOOPS`) is assembled into both sprite banks, since it
-reads the image bytes; `ds_entry` sets the write bank and patches its own dispatch.
+**The directory** is in two parts.  The level's, SPR_TABLE in bank 7 (banks.s; the
+level file's section 11, which `ldprog.s` copies whole, `DIRLEN`), is the images'
+addresses by id: `DIR_LO` then `DIR_HI`, BOXID0 + BOXN bytes each, the high byte 0
+when the id is not in this level and with bit 7 clear when the image is in bank 5 (an
+image is at $8000-$BFFF, so bit 7 is otherwise always set).  The game's, the same in
+every level, is the geometry (`sprgeom.inc` in the game's GAMEDATA, or HAZEL, where
+the prologue reads it with bank 7 paged): `SPRG_IX`, a byte by id, the sprite's shape,
+and by shape `SPRG_W` (the width in bytes), `SPRG_RX` and `SPRG_RY` (the reference
+point, signed game pixels) and `SPRG_LN` (the rows stored), and with `SPRGFL` (the
+game's assets.inc) `SPRG_FL`, the flags: bit 0 mirrored, bit 1 every scanline stored,
+bit 3 the copy blitter.  Without SPRGFL the flags are DRAWFLAGS's `sp_dfl`, or 0.  The
+directory covers the boxes (BOXID0 + BOXN ids), and the prologue folds a "still"
+alias onto its box first.
 
-The masked blitter: a byte is two game pixels and every bit belongs to a screen pixel,
-so there is no room for a transparency tag and the mask is a plane of its own, one bit
-a game pixel,
-four columns to a byte, column-group major so the mask pointer walks like the image
-pointer.  MASKTAB0-3 turn a mask byte into the AND mask for the column of that phase
-($FF, $CC, $33, $00) with no shifting; they are 1K aligned so the phase is the page's
-low two bits, and at the same address in both sprite banks.  The two scanlines of a
-game-pixel row share a mask, so lines go in pairs.  A sprite's screen position is in
-whole bytes across (`drawsprite`'s c0 = sx >> 1: 2 game pixels, 4 screen pixels) and
-game pixels down (2 scanlines); the mask's finer grain across is the sprite's
-outline, not its position.  Mirrored images use SWAPTAB (the reversal of a byte's four
-screen pixels) on both the data and the mask, and only bank 4 has it, so the packer puts
-every mirrored image there.  Boxes are drawn by the copy blitter, which only bank 5
-has, so they go there.
+`drawsprite` (bank 7) takes the id in X: the address from DIR_LO/DIR_HI (high byte 0:
+return; bit 7 clear: bank 5, the bit put back), the shape from `SPRG_IX` into `sp_g`,
+and the flags, W, lines, refx and, at `@vert`, refy by shape; `sp_ext` is the lines,
+doubled unless flag bit 1 is set.  It clips the sprite to the
+window, writes the record, notes the mirror's columns (Model B), computes the source
+and screen pointers and the blitter index, and hands over through `callbank` to the
+row loop in the bank the image is in.  The row loop (`NIB_LOOPS`, `engine/sprloops.s`)
+is assembled into both sprite banks, since it reads the image bytes; `ds_entry` sets
+the write bank and patches its own dispatch.
+
+The 4-bit blitter (`NIBBLIT`: `sprFN`, and `sprFM` mirrored): an image is stored
+column by column, a byte a game-pixel row, the byte's two game pixels 4 bits each (the
+left in the high nibble), indices into one palette the game chooses, nibble 0
+transparent.  Three tables, the game's (`nibtab.bin`), turn a stored byte into screen
+bytes: L0TAB and L1TAB the row's two scanlines, NMASK the AND mask for its transparent
+game pixels ($00 both opaque, $CC or $33 for one).  A byte of 0 draws nothing, one
+whose NMASK is 0 is two plain stores, and any other is (screen AND NMASK) OR the line.
+The mirrored blitter passes every result, the mask's too, through SWAPTAB.  The
+shape's `lines` is the rows stored, with flag bit 1 clear, so the prologue takes
+two scanlines a stored byte (`sp_rinc` 4); a sprite's first line in a character is
+always even (lb0 = 2 x sy + wfine), so a cell's lines go in pairs, a source byte a
+pair.  A sprite's screen position is in whole bytes across (`drawsprite`'s c0 = sx >>
+1: 2 game pixels, 4 screen pixels) and game pixels down (2 scanlines).  A box (flag
+bit 3) is not 4-bit: it is its screen bytes, every scanline stored (flag bit 1, lines
+= 2h), drawn by the copy blitter (`NIBCOPY`, `sprFC`: 13 cycles a byte, unrolled for
+a whole cell), so a box's backdrop keeps any dither exactly.  Every blitter is in both
+banks.
 
 **Resident and staged sprites.**  Which sprites are loaded once and which each level
 loads is the game's choice, given to the engine as parameters:
@@ -695,16 +718,16 @@ loads is the game's choice, given to the engine as parameters:
   every level's directory can name them without a placement.
 - The **staged** sprites are the other file, SPRX (SPRX_LEN bytes: at most 16K,
   STAGE's size, and at most 12K for the Master to keep it in HAZEL and ANDY).  At each
-  level load it is staged whole and the level's own subset copied out, image and mask
-  separately, to the addresses its placement list gives; `imgtab.bin` says where in
+  level load it is staged whole and the level's own subset copied out, image by
+  image, to the addresses its placement list gives; `imgtab.bin` says where in
   SPRX each item is.
-- The rest of each sprite bank -- from the resident part's end to $BAFF in bank 4, to
+- The rest of each sprite bank -- from the resident part's end to $BBFF in bank 4, to
   $9BFF (the map) in bank 5 -- is the level's.  So the split trades load time and disc
   reads (a resident sprite is never staged again) against the room every level has
   for its own.
 
-The constraints are the banks': a mirrored image must be in bank 4, a box in bank 5,
-and an image and its mask in the same bank.
+The banks add no constraint of their own: both have every blitter and the tables, so
+any image, mirrored or not, and any box may be in either.
 
 ## The disc
 
@@ -787,9 +810,9 @@ of every bank from PBANK and sets the write bank by PBOARD by hand.
    Model B the gather's shape.
 5. The sprites: SPRC to its fixed places if it is not already there; then SPRX staged (the
    Master: from the disc the first time, then kept in HAZEL and ANDY and restored from
-   there), and every image and mask the placement list names copied to its bank and
-   address.
-6. The directory to SPR_TABLE and SPRMASK, both bank 7, as the packer finished them:
+   there), and every image the placement list names copied to its bank and address
+   (or, from BAKEITEM0, baked: *The build options*).
+6. The directory's level part to SPR_TABLE, bank 7, as the packer finished it:
    no table is built at load.
 7. FLATTAB to bank 6.  On the Master, LV_PAGE0 to $0400 and both screens cleared.
 
@@ -823,7 +846,7 @@ the header's counts against the sections, the stages' sizes), and
 `test/test_levelfile.py` tests the writer against its reader
 (`python3 -m unittest discover test`).
 
-A level file starts with a table of 14 section offsets:
+A level file starts with a table of 13 section offsets:
 
 | # | Section |
 |---|---|
@@ -831,15 +854,14 @@ A level file starts with a table of 14 section offsets:
 | 1 | the objects, 6 bytes each (at most 149, LV_OBJS's room): the game's, copied to LV_OBJS |
 | 2, 3 | two tables by tile id, 256 each: the game's, copied to LV_ATTR0 and LV_ALTCLS |
 | 4 | the tile list: the files, each with its full-tile count, then each full tile's index in its file |
-| 5 | the sprite placement list: item, bank (4 or 5), image address, mask address; $FF |
+| 5 | the sprite placement list, 6 bytes an item: item, bank (4 or 5), image address, and 0 or, for an item the loader bakes, its tile (x \| y << 8); $FF |
 | 6 | the map, RLE: c < 128, c+1 literals; c >= 128, the next byte c-126 times |
 | 7 | FLATTAB's pairs |
 | 8 | the half tiles: index in file, row, file |
 | 9 | the halves' fill pairs |
 | 10 | MIRTAB (TILEMIRROR) |
-| 11 | the sprite directory, (BOXID0 + BOXN) x 8 |
-| 12 | SPRMASK, BOXID0 x 2 |
-| 13 | LV_PAGE0, 512 bytes, sector aligned at the end |
+| 11 | the sprite directory's level part, 2 x (BOXID0 + BOXN): the images' addresses by id, low bytes then high (0: not in this level; bit 7 clear: bank 5) |
+| 12 | LV_PAGE0, 512 bytes, sector aligned at the end |
 
 The header (LV_HDR): the engine's fields are lw and lh (+0, +1: log2 of the map's
 size in tiles), the objects' count (+6) and the tile set's shape (+20..+31,
@@ -855,10 +877,9 @@ environment) needs only the second.
 
 ## The build options
 
-`tools/build.sh` takes seven options from the environment (the game's `build.sh`
+`tools/build.sh` takes its options from the environment (the game's `build.sh`
 exports them), passes each to the assembler (`-D`; `cpu.inc` makes the rest 0) and
-to its tools.  With none set the build is what it always was (the masked sprites: Cleo's
-`NIBSPR=0` build).  What each changes:
+to its tools.  With none set a game builds for both machines.  What each changes:
 
 - **MASTERONLY.**  build.sh's targets are `master` alone: no Model B assembly, and
   the Master is linked unpinned (no `pincfg.py`), its bank 7 image sized from its own
@@ -867,25 +888,12 @@ to its tools.  With none set the build is what it always was (the masked sprites
   answers a Model B with "<game> needs a BBC Master 128".  The engine's asserts that
   held the Master to the Model B's code ends (`* <= B4_CODE_END`) still hold, so a
   game sets B4_CODE_END and B5_CODE_END to its own ends.
-- **NIBSPR.**  `NIB_LOOPS` in place of `SPRITE_LOOPS` in both SPR4CODE and SPR5CODE
-  (the row loop, `sprFN` and `sprFM`: each scanline pair of a cell is one stored byte,
-  X = the byte, `NMASK,x` the AND mask, `L0TAB,x` / `L1TAB,x` the two lines, SWAPTAB of
-  each for the mirror).  Both banks end with L0TAB $BC00, L1TAB $BD00, NMASK $BE00
-  (`nibtab.bin`, the game's) and SWAPTAB $BF00 (banks.s `NIB_TABLES`); build.sh moves
-  bank 4's table piece to $BC00 (the cfg's B4T and its BANKS entry) and widens B4X
-  and B5X to $600.  The prologue skips SPRMASK and the mask pointers; the directory's
-  `lines` is the rows stored and flag bit 1 clear, so its half-res arithmetic (two
-  scanlines a stored byte, `sp_rinc` 4) is the 4-bit layout exactly.  No SPRMASK in
-  ENGBSS or the level file (`levelfile.Level(nibble=True)`).  A box (flag bit 3) is
-  its screen bytes, every scanline stored (flag bit 1, lines = 2h), and its dispatch
-  entry is the copy blitter `NIBCOPY` in both banks (13 cycles a byte, unrolled for a
-  whole cell), so a box's backdrop keeps any dither exactly.
 - **BAKEITEM0** (the game's assets.inc): items from it on are baked by the loader
   (`ldprog.s bake`), not copied: the level's own tiles where the object stands, decoded
   as the Model B's gather does (the solid, the flats, the halves, full tiles: no
   mirrored ones), with the game's overlay laid over them -- (backdrop AND mask) OR
-  pixels, a column's pixels then its mask, staged in SPRX.  The placement entry's mask
-  field carries the object's tile (x, y); `bakekind.bin` gives each baked slot its kind
+  pixels, a column's pixels then its mask, staged in SPRX.  The placement entry's last
+  two bytes carry the object's tile (x | y << 8; an image's are 0); `bakekind.bin` gives each baked slot its kind
   and `bakegeom.bin` each kind's shape (bytes, lines, the offset from (8x, y) in game
   pixels across and tile rows down, the overlay's offset in SPRX).  imgtab stops at
   BAKEITEM0.  Cleo bakes every trampoline's rest state and its costliest stars: 309
@@ -902,29 +910,19 @@ to its tools.  With none set the build is what it always was (the masked sprites
   game's `sfxtab` are not assembled.
 - **DRAWFLAGS.**  `draw_sprites` stores SPR_XH in the record as it is (so a flip is a
   change to `match_sprites`), takes bit 7 into `sp_dfl` (a zero-page byte) and gives
-  the prologue x without it; `drawsprite` XORs `sp_dfl` into the directory's flags.
+  the prologue x without it; `drawsprite` takes `sp_dfl` as the flags, XORed into
+  `SPRG_FL`'s with SPRGFL.
 - **TALLMAP.**  `wcyh` (zero page) and `drawrect`'s full map row: *The display*.
 - **TIGHTBSS.**  The sprite records are nine arrays of 2 x MAXREC bytes (engine/defs.s:
   `REC_ID`, `REC_XL`, `REC_XH`, `REC_YL`, `REC_YH`, `REC_CX` the column's low byte,
   `REC_CY`, `REC_W`, `REC_H` = height | column high bits << 5 | clipped << 7; BUFROWS
   < 32 asserted), buffer 0's records then buffer 1's, indexed by register: `recb`
   (recp's byte) is the current buffer's first, `rq` (rp's) the record in hand, which
-  `draw_sprites` steps and the prologue writes the rectangle at (`tmp3` its scratch:
-  mtab is set later); `match_sprites` walks Y with X, `erase_old` steps `rq`.  The
+  `draw_sprites` steps and the prologue writes the rectangle at (`tmp3` its scratch); `match_sprites` walks Y with X, `erase_old` steps `rq`.  The
   dirty list likewise: `DIRTX` then `DIRTY_`, DIRTYMAX a buffer.  build.sh drops
   ENGBSS's `align = $100` from the linked cfg.
 - **MAXSPR.**  build.sh passes `-D MAXSPRDEF=n`; engine/defs.s defaults MAXSPRDEF to 28
   when neither the build nor assets.inc sets it.
-- **SPRGEOM.**  SPR_TABLE is 2 x BOXID0 bytes, `DIR_LO` then `DIR_HI` (banks.s);
-  `ldprog.s` copies that many (`DIRLEN`).  The prologue takes the id in X: the
-  address from DIR_LO/DIR_HI (high byte 0: return; bit 7 clear: bank 5, the bit put
-  back), `sp_flags` = `sp_dfl` (or 0 without DRAWFLAGS), the shape from the game's
-  `SPRG_IX` into `sp_g` (sp_mh's byte: NIBSPR has no mask), and W, lines, refx and,
-  at `@vert`, refy from the game's `SPRG_*` by shape; `sp_ext` = 2 x lines.  Needs
-  NIBSPR (cpu.inc says so).  `levelfile.directory_split` writes the level's part.  The directory covers the boxes
-  (BOXID0 + BOXN ids) and the prologue folds a "still" alias onto its box first; with
-  `SPRGFL` (assets.inc) the flags come from the game's `SPRG_FL` by shape, else from
-  DRAWFLAGS's `sp_dfl` (or 0).
 - **TILEMIRROR** (the oldest): the tile blitter's mirrored tiles, *The tiles*.
 
 ## Timing
