@@ -967,7 +967,7 @@ drawsprite:
 :
         stx sp_disp                 ; (a patched jmp in the column loop)
 
-        ; ---- screen base sp_rb for (wcx + c0, wcy + r0): one ringaddr, then +80
+        ; ---- screen base sp_rb for (wcx + c0, wcy + r0): one ringaddr7, then +80
         ; chars per row (w16 = wcx + sp_c0 was already built when the record rect
         ; was written)
 @rows:
@@ -976,7 +976,7 @@ drawsprite:
         clc
         adc wcy
         jsr ringaddr7               ; this bank's own copy (no crossing)
-        sta sp_rb+1                 ; A = sp+1: ringaddr's last store
+        sta sp_rb+1                 ; A = sp+1: ringaddr7's last store
         lda sp
         sta sp_rb
 
@@ -1046,7 +1046,7 @@ drawsprite:
 ; ============================================================================
         .segment "ENGCODE"
 render_core:
-        jsr selbb                   ; select_backbuf (bank 6: it patches ringaddr)
+        jsr selbb                   ; select_backbuf (bank 6: it patches drawrect)
         jsr calc_ring               ; ringS, barq (Model B: wcxm, mrow)
         jsr match_sprites
         jsr erase_old

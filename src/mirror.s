@@ -8,7 +8,7 @@
 ; one displayed row that straddles the ring end can be read as a single run.  Only
 ; the chars that row takes from it -- wcxm..79 -- need to be right, and when the
 ; window is slot aligned no row straddles at all.  It is made only when its row
-; has been written: its writers note the range (banks.s mirdirty6, mirdirty).
+; has been written: its writers note the range (drawrect's head and banks.s mirdirty: MIRDIRTY_BODY).
 mirror_copy:
         ldx curbuf
         lda wcxm

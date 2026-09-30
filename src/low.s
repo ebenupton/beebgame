@@ -52,14 +52,6 @@ irq_ret:                            ; a step's way back
 ; (a map is 32, 64, 128 or 256 tiles wide: row * 2^lw is row * 256 shifted right by
 ; mapshr = 8 - lw, which the loader sets from the header) and the strip copy is the
 ; one bank switch a tile row costs.
-maprow6:                            ; A = tile row -> ptr = LV_MAP + row * (1 << lw) + rc_tx0
-        jsr maprow                  ; (X kept; the logic's mapptr is its scratch) A = mapptr+1, C = 0
-        sta ptr+1                   ; tx0 < the map's width: no carry out of the low byte
-        lda mapptr
-        adc rc_tx0
-        sta ptr
-        rts
-
 mapstrip:                           ; (ptr) = the row's first tile: its gather, run in
         bankimm lda, BANK_MAP, 0    ; bank 5 beside the map (engine.s gather5), into
         sta ROMSEL_CPY              ; GATHERL/GATHERH here; bank 6 back (read only: no
@@ -71,10 +63,10 @@ page6:  bankimm lda, BANK_TILES, 0  ; (selbb and validate: page6 first; selbb th
         rts
 
 ; bank 7's two calls a frame into bank 6 that are not the blitter's entry:
-; select_backbuf (it patches ringaddr's operand) and scroll_validate (it draws the
+; select_backbuf (it patches drawrect's ring operand) and scroll_validate (it draws the
 ; new strips with drawrect itself)
 selbb:  jsr page6
-        wrsel BANK_TILES, 0         ; a write window: select_backbuf patches ringaddr
+        wrsel BANK_TILES, 0         ; a write window: select_backbuf patches drawrect
         jsr select_backbuf
         wrback 0, 1                 ; (closed)
         jmp pagelogic

@@ -227,7 +227,7 @@ The menus keep to bank 7, so the resident sprites stay from the first level on
 | Range | Model B | Master |
 |---|---|---|
 | TIL6ENT: `bank6_entry`, `drawrect_clip` | $8000-$806F | same (padded) |
-| TILCODE: `drawrect` and its row loop, its fills (the solid's one-byte cascade too), `ringaddr` and its row tables, `select_backbuf`, `scroll_validate`, `mirdirty6` and the ring modulus table (Model B) | $8070-$8691 | $8070-$8559, padded |
+| TILCODE: `drawrect` and its row loop, its fills (the solid's one-byte cascade too), its ring row tables, `select_backbuf`, `scroll_validate` and the ring modulus table (Model B) | $8070-$8691 | $8070-$8559, padded |
 | TILBSS: BUF_CY, FLATTAB | $8692-$869F | same |
 | the level's tiles, 64 bytes a slot from TILES = $8600: id k in slot k + TOFF (2), so id 1 is at $86C0, the first 64 bytes clear of the code | $86C0-$BFFF | same |
 
@@ -278,7 +278,7 @@ the interrupt plays them).
 The small tables are assembled, not built at start-up, each in the bank of the code
 that indexes it: the row multiples (`mulrowlo/hi`) in bank 7's kernel for the
 prologue, the records, the chain and the menus; the ring modulus (`ringmodtab`, RINGROWS x 5 entries, which
-`ringmod` reaches with two subtractions) in bank 6 for `ringaddr` on the Model B, where
+`ringmod` reaches with two subtractions) in bank 6 for `drawrect` on the Model B, where
 the Master's ring needs only `and #31`.  Bank 7 has its own `ringaddr7` (the modulus by
 subtraction, the base from `ringbhi`) so a sprite's screen address never crosses a bank.
 
@@ -291,7 +291,7 @@ RAM (`low.s`).  There is no table and no dispatch in any bank.
   `pagelogic`.  Once a sprite (the row loop in bank 4 or 5) and once a tile rectangle
   (`drawrect_clip` in bank 6, from `erase_old` and `draw_dirty`).
 - `selbb` and `validate`: bank 7's two other calls a frame into bank 6,
-  `select_backbuf` (which patches `ringaddr`'s row-table operand on the Model B) and
+  `select_backbuf` (which patches `drawrect`'s row-table operand on the Model B) and
   `scroll_validate` (which draws the newly exposed strips with `drawrect`).
 - `mapstrip`: from bank 6's `drawrect`, once a tile row: pages bank 5, runs `gather5`
   over the map in place, pages bank 6 back through `page6`.
@@ -348,7 +348,7 @@ not.**  Every bank `callbank` enters must have its entry at $8000.  In banks 4 a
 the code is one macro (`NIB_LOOPS`),
 assembled into SPR4CODE and SPR5CODE with `ds_entry` its first line, so the entry is
 at $8000 because nothing comes before it.
-Bank 6's code, TILCODE, is `engine/tiles.s` -- `ringaddr`, the tile blitter,
+Bank 6's code, TILCODE, is `engine/tiles.s` -- the tile blitter,
 `scroll_validate`, `select_backbuf` -- in source order, and `drawrect_clip`, where
 `callbank` must land, is not first in it; so `bank6_entry` (falling into
 `drawrect_clip`) is a segment of its own, placed first in the bank.  Bank 6 is also
@@ -400,7 +400,7 @@ from which `drawrect` rebuilds the full row it reads the map at: 256 tiles.
 
 Both buffers are rings of characters, 80 to a row, and the playfield is drawn in map
 space: map character (cx, cy) lives at ring character ((cy mod RINGROWS) x 80 + cx) mod
-RINGCHARS (`ringaddr`).  So a scroll only draws the newly exposed strips
+RINGCHARS (`drawrect`).  So a scroll only draws the newly exposed strips
 (`scroll_validate`), a displayed row may start anywhere in a slot and straddle the
 ring's end, the bar has a fixed home outside the ring, and only the playfield's
 sections walk the ring.
@@ -438,7 +438,7 @@ contiguously: the chain reads P1 up to the ring's end and M from the mirror
 (`build_sections`, `mirror.s`).  Only the characters that row takes from the mirror --
 `wcxm`..79, where `wcxm` is ringS mod 80 -- need to be right, and when the window is
 slot aligned no row straddles at all.  The blitters note the columns they write to the
-row the mirror follows (`mirdirty`, `mirdirty6`, from `drawrect`, the sprite prologue
+row the mirror follows (`mirdirty`, and `drawrect`'s own copy in line, the sprite prologue
 and `copy_partial`), and `mirror_copy`, the last step of `render_core`, copies only
 those; a move left uncovers characters the last copy never reached, so it redoes the
 whole row.
@@ -612,7 +612,8 @@ map's end are read too.  The Model B's gather tests for id 0 first (`beq`, 2 cyc
 tile): a solid costs it one store.
 
 `drawrect` (bank 6) draws a rectangle of map characters into the back buffer: per-rect
-invariants once, one `ringaddr` for the first row, then per tile row one `mapstrip` and
+invariants once, the first row's screen address (in line: every routine `drawrect`
+alone calls is written into it), then per tile row one `mapstrip` and
 one or two character rows.  A row may straddle the ring's end but a run -- the
 characters of one tile, at most four -- never does (below), so every run is drawn by
 an unrolled block entered by its length.  The blocks are the same code on both
@@ -627,7 +628,7 @@ chain of 32 `sta (sp),y` with an `iny` between each after its branch, entered at
 store with Y = 0 (the Model B's branch offsets in zero page, MTO, boot's: a byte
 shorter than a table, which keeps the row loop's `bmi` over the chain in reach); on
 the Model B ringmodtab and PADB_T6 before `drawrect` put its two hot stretches each
-in a page, on the Master PADM_T6 the row loop's `bmi`.  Each character row starts with `sp` already set, by `ringaddr` for
+in a page, on the Master PADM_T6 the row loop's `bmi`.  Each character row starts with `sp` already set, by `drawrect`'s head for
 the first and `@rowdone` for the rest.
 
 **Mirrored tiles** (TILEMIRROR=1): another stored tile reversed left to right, drawn a

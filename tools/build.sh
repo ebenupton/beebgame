@@ -156,10 +156,11 @@ for l in open(BD + '/labels.txt'):
     if len(p) >= 3 and p[0] == 'al':
         addr[p[2].lstrip('.')] = int(p[1], 16)
 # drawrect's @s0f (a cheap label: in the debug info, not labels.txt): the solid's
-# lda #fill, whose operand the loader patches
+# lda #fill, whose operand the loader patches.  Its @ scope is drawrect's, or on the
+# Model B RINGHIOP's (defined at drawrect's head: a symbol starts a new @ scope)
 dbg = open(BD + '/game.dbg').read()
-did = re.search(r'^sym\tid=(\d+),name="drawrect",', dbg, re.M).group(1)
-s0f = re.search(r'^sym\tid=\d+,name="@s0f",[^\n]*parent=%s,[^\n]*val=0x([0-9A-F]+)' % did, dbg, re.M)
+dids = '|'.join(re.findall(r'^sym\tid=(\d+),name="(?:drawrect|RINGHIOP)",', dbg, re.M))
+s0f = re.search(r'^sym\tid=\d+,name="@s0f",[^\n]*parent=(?:%s),[^\n]*val=0x([0-9A-F]+)' % dids, dbg, re.M)
 addr['SOLIDF'] = int(s0f.group(1), 16) + 1
 want.append('SOLIDF')
 # the game's hooks (README.md): equates, so in the debug info and not labels.txt --

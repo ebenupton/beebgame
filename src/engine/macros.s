@@ -253,3 +253,45 @@ RUNXS = 2
   .endif
         tax
 .endmacro
+
+; ----------------------------------------------------------------------------
+; MIRDIRTY_BODY exit: note a range of the mirror's row written (the Model B's mirror,
+; mirror.s): A = the first window column written of the row the mirror follows, X =
+; the last (0..79).  Those chars sit in the last slot row at wcxm on; only the ones
+; up to char 79 are in it (the rest wrapped to slot row 0), and only those from wcxm
+; are ever read.  Blank exit: a routine, ending in rts (bank 7's mirdirty, banks.s);
+; given one, in line, leaving there or falling out (drawrect's head).  A, X, Y
+; clobbered.
+; ----------------------------------------------------------------------------
+.macro MIRDIRTY_BODY exit
+        clc
+        adc wcxm
+        cmp #ROWCHARS
+  .ifblank exit
+        bcs @out
+  .else
+        bcs exit
+  .endif
+        pha
+        txa                         ; C clear: bcs @out not taken
+        adc wcxm
+        cmp #ROWCHARS
+        bcc :+
+        lda #ROWCHARS-1
+:       tax
+        ldy curbuf
+        lda #1
+        sta mirdty,y
+        pla
+        cmp mirlo,y
+        bcs :+
+        sta mirlo,y
+:       txa
+        cmp mirhi,y
+        bcc :+
+        sta mirhi,y
+:
+  .ifblank exit
+@out:   rts
+  .endif
+.endmacro

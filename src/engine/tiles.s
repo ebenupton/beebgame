@@ -7,11 +7,10 @@
 ; GATHERL/GATHERH in low RAM, and pages bank 6 back.  The row loop then draws the
 ; tile row's one or two char rows from those pairs.
 ;
-; On the Model B the code patches itself (select_backbuf ringaddr's operand, the row
+; On the Model B the code patches itself (select_backbuf drawrect's ring operand, the row
 ; loop its dispatch jumps), so every store into bank 6 is inside a write window
 ; (cpu.inc: wrsel/wrback); on the Master the window macros are empty.
 ;
-;   ringaddr        w16 = map char column, A = char row -> sp = its screen address
 ;   RINGLO/RINGHI   the ring rows' addresses (the Model B: a high-byte table a buffer)
 ;   drawrect        draw a rectangle of map chars (rc_x, rc_y, rc_w, rc_h)
 ;   scroll_validate make the current buffer hold the window, drawing only what it lacks
@@ -22,38 +21,7 @@
 ; Segments: TILCODE (bank 6), TIL6ENT (bank 6's first bytes).
 ; ============================================================================
 
-; ----------------------------------------------------------------------------
-; ringaddr: the screen address of a map char in the current back buffer
-;   In:   w16 = map char column (16 bit, < 8192), A = map char row
-;   Out:  sp = the address, folded into the ring;  A = sp+1;  X = the ring slot
-;         Y kept.
-; The sprite prologue has its own copy in bank 7 (ringaddr7).  On the Model B the
-; high-byte table is the current buffer's: select_backbuf patches @rh's operand
-; (RINGHIOP).
-; ----------------------------------------------------------------------------
         .segment "TILCODE"
-ringaddr:
-        ringmod                     ; A = the row's ring slot
-        tax
-        ; ---- sp+1:A = cx*8
-        lda w16+1
-        sta sp+1
-        lda w16
-        asl
-        rol sp+1
-        asl
-        rol sp+1
-        asl
-        rol sp+1                    ; C = 0 (cx < 8192)
-        ; ---- + the slot's address, folded at the ring end
-        adc RINGLO,x
-        sta sp
-        lda sp+1
-@rh:    adc RINGHI,x                ; Model B: the buffer's table (select_backbuf's)
-        ringup sp
-        sta sp+1
-        rts
-
 ; ---- the ring rows' addresses, RINGROWS of them
   .if .not BHW
 ; The Master: one table for both buffers -- main and shadow RAM share the addresses.
@@ -68,9 +36,8 @@ RINGHI:
   .endif
   .if BHW
 ; The Model B: both ring bases are xx80, so the two rings' low bytes are alike and
-; only the high bytes are per buffer.  RINGHIOP is defined here, after the rts,
-; because := ends the @ scope.
-RINGHIOP := @rh + 1
+; only the high bytes are per buffer: select_backbuf patches drawrect's read of them
+; (RINGHIOP).
 RINGLO:
   .repeat RINGROWS, r
         .byte <(RING_A + r*ROWBYTES)
@@ -101,11 +68,11 @@ ringmodtab:
 ; drawrect: draw map tiles into the current back buffer
 ;   In:   rc_x = first map char column (16 bit), rc_y = first map char row,
 ;         rc_w = chars wide (1..80), rc_h = char rows (0 draws nothing)
-;   Out:  rc_h = 0.  A, X, Y, sp, tp, ptr, w16, tmp (tmp2 under TILEMIRROR) and
+;   Out:  rc_h = 0.  A, X, Y, sp, tp, ptr, tmp (tmp2 under TILEMIRROR) and
 ;         the rc_ work bytes clobbered.
 ;
 ; Per rect: the invariants once (tx0, tiles-1, the first run's limit and char
-; offset), one ringaddr for the first row, the map row pointer.  Per tile row: one
+; offset), the first row's screen address, the map row pointer.  Per tile row: one
 ; mapstrip (the gather) and one or two char rows (@drawrow).  Per char row: runs --
 ; a run is the chars of one tile in this row, at most four -- dispatched by kind:
 ;   GATHERH bit 7 set   a full tile (its page; GATHERL its offset -- or, under
@@ -143,6 +110,34 @@ drawrect:
         bne :+
         rts
 :
+        ; ---- the first char row's screen address, rc_sp = sp = rc_x*8 + its ring
+        ; slot's, folded at the ring end.  First in drawrect, before any @ label:
+        ; RINGHIOP's := ends the @ scope, so here it splits nothing.  (The sprite
+        ; prologue has its own copy in bank 7: ringaddr7.)
+        lda rc_y
+        ringmod                     ; A = the row's ring slot
+        tax
+        lda rc_x+1                  ; ---- sp+1:A = rc_x*8
+        sta sp+1
+        lda rc_x
+        asl
+        rol sp+1
+        asl
+        rol sp+1
+        asl
+        rol sp+1                    ; C = 0 (rc_x < 8192)
+        adc RINGLO,x                ; ---- + the slot's address
+        sta sp
+        lda sp+1
+  .if BHW
+RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches it
+  .endif
+        adc RINGHI,x
+        ringup sp                   ; (the Model B's fold moves sp's low byte too)
+        sta sp+1
+        sta rc_sp+1
+        lda sp
+        sta rc_sp
   .if BHW
         ; ---- open the write window, to @done: the runs patch their dispatch jumps
         ; (cpu.inc).  A = bank 6's, which is paged already: harmless on a plain machine.
@@ -151,7 +146,7 @@ drawrect:
   .endif
   .if BHW
         ; ---- the mirror's notes: a rect that touches the map row the mirror follows
-        ; (mrow, calc_ring) says which window columns it wrote (mirdirty6, banks.s)
+        ; (mrow, calc_ring) says which window columns it wrote (MIRDIRTY_BODY, macros.s)
         lda mrow
         sec
         sbc rc_y
@@ -165,16 +160,14 @@ drawrect:
         adc rc_w
         tax
         dex                         ; ..the last one
-        pla
-        jsr mirdirty6               ; A = first column, X = last
+        pla                         ; A = first column, X = last
+        MIRDIRTY_BODY @nomir
 @nomir:
   .endif
         ; ---- per-rect invariants: tx0 = rc_x >> 2, and tiles-1 =
         ; ((rc_x + rc_w - 1) >> 2) - tx0 = ((rc_x & 3) + rc_w - 1) >> 2, so tx1 never
         ; needs building: at most 3 + 80 - 1 = 82, one byte, no 16-bit shift.
-        ; Each load of rc_x also leaves the copy ringaddr needs in w16.
         lda rc_x+1
-        sta w16+1                   ; ringaddr's copy
         lsr                         ; C = bit 0, A = bit 1 (rc_x+1 <= 3)
         tax
         lda rc_x
@@ -183,7 +176,6 @@ drawrect:
         ror                         ; A = tx0 (map width <= 256 tiles)
         sta rc_tx0
         lda rc_x
-        sta w16                     ; ringaddr's copy
         and #3
         sta rc_sc0                  ; (rc_x & 3 for now)
         asl
@@ -202,13 +194,7 @@ drawrect:
         sec
         sbc rc_sc0
         sta rc_sc0                  ; 4 - (rc_x & 3)
-        ; ---- the first char row's screen address
-        lda rc_y
-        jsr ringaddr
-        sta rc_sp+1                 ; ringaddr returns A = sp+1 (its last store)
-        lda sp
-        sta rc_sp
-        ; ---- map row pointer: built once here (arithmetic, in low RAM: maprow6) and
+        ; ---- map row pointer: built once here (maprow, low RAM's arithmetic) and
         ; stepped on by the stride per tile row (@nextrow)
   .if TALLMAP
         ; Char rows are kept a byte (the ring's modulus needs no more) but the map row
@@ -232,7 +218,11 @@ drawrect:
         lda rc_y
         lsr                         ; the tile row
   .endif
-        jsr maprow6
+        jsr maprow                  ; (X kept) A = mapptr+1, C = 0
+        sta ptr+1                   ; tx0 < the map's width: no carry out of the low byte
+        lda mapptr
+        adc rc_tx0
+        sta ptr                     ; ptr = LV_MAP + row * (1 << lw) + rc_tx0
         ; ---- only a rect's first tile row can start on an odd char row -- after it
         ; @nextrow always lands even -- so the test is here, once, not in the loop
         lda rc_y
@@ -306,7 +296,7 @@ drawrect:
 ; caller sets it.
 ; ----------------------------------------------------------------------------
 @drawrow:
-        ; (sp is the row's start already: ringaddr's for the rect's first, @rowdone's
+        ; (sp is the row's start already: drawrect's head for the rect's first, @rowdone's
         ;  for each after -- nothing between touches it)
         ; ---- the run state: first tile, first run's limit, all the row's chars left
         lda #0
@@ -769,17 +759,17 @@ scroll_validate:
 ;   In:   curbuf (0/1)
 ;   Out:  the Master: ACCCON's X bit (CPU access to shadow RAM for buffer 1).
 ;         The Model B: ringbhi, ringehi, ringe3 = the buffer's ring's constants, and
-;         ringaddr's high-byte table (RINGHIOP) patched to the buffer's.
+;         drawrect's high-byte table (RINGHIOP) patched to the buffer's.
 ;         Both: recb (TIGHTBSS) or recp = the buffer's first sprite record.
 ;         A, X clobbered;  Y kept.
-; It patches ringaddr's operand, so it is in bank 6; low RAM's selbb calls it with
+; It patches drawrect's operand, so it is in bank 6; low RAM's selbb calls it with
 ; bank 6 paged and a write window open.
 ; ----------------------------------------------------------------------------
         .segment "TILCODE"
 select_backbuf:
   .if BHW
         ; ---- the buffer's ring: its base and end, the two derived constants the
-        ; blitters' wrap tests use (its row table for ringaddr is below)
+        ; blitters' wrap tests use (its row table for drawrect is below)
         ldx curbuf
         lda @bhi,x
         sta ringbhi
@@ -812,7 +802,7 @@ select_backbuf:
         sta recp+1
   .endif
   .if BHW
-        ; ---- ringaddr's high bytes: this buffer's table
+        ; ---- drawrect's ring high bytes: this buffer's table
         lda @thl,x
         sta RINGHIOP
         lda @thh,x

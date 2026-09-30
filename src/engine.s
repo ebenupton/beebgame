@@ -53,7 +53,7 @@
 ;   engine/defs.s      constants: hardware, banks, screen shape, records, keys
 ;   engine/vars.s      zero page and every table, by where it lives
 ;   engine/macros.s    the ring-wrapping macros, RUNX
-;   engine/tiles.s     bank 6: ringaddr, drawrect, scroll_validate, select_backbuf,
+;   engine/tiles.s     bank 6: drawrect, scroll_validate, select_backbuf,
 ;                      the bank's entry (drawrect_clip)
 ;   engine/gather.s    bank 5: gather5, a tile row's ids into GATHERL/H
 ;   engine/sprloops.s  banks 4 and 5: the sprite row loops and blitters

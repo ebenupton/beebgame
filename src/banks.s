@@ -45,39 +45,10 @@ mulrowhi:
 ; follows, X = the last (0..79).  Those chars sit in the last slot row at wcxm on;
 ; only the ones up to char 79 are in it (the rest wrapped to slot row 0), and only
 ; those from wcxm are ever read (mirror.s).  Called by the tile blitter's head
-; (bank 6: mirdirty6) and the sprite prologue and copy_partial (bank 7: mirdirty):
-; one body, twice.
+; (bank 6: drawrect's head, in line) and the sprite prologue and copy_partial (bank 7:
+; mirdirty): one body, twice (MIRDIRTY_BODY, engine/macros.s).
         .segment "TILBSS"
   .if BHW                           ; (the Master has no mirror: the hardware folds)
-.macro MIRDIRTY_BODY
-        clc
-        adc wcxm
-        cmp #ROWCHARS
-        bcs @out
-        pha
-        txa                         ; C clear: bcs @out not taken
-        adc wcxm
-        cmp #ROWCHARS
-        bcc :+
-        lda #ROWCHARS-1
-:       tax
-        ldy curbuf
-        lda #1
-        sta mirdty,y
-        pla
-        cmp mirlo,y
-        bcs :+
-        sta mirlo,y
-:       txa
-        cmp mirhi,y
-        bcc :+
-        sta mirhi,y
-:
-@out:   rts
-.endmacro
-        .segment "TILCODE"
-mirdirty6:
-        MIRDIRTY_BODY
         .segment "ENGCODE"
 mirdirty:
         MIRDIRTY_BODY

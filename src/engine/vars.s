@@ -175,7 +175,7 @@ halfsub:   .res 1                   ; half0 less the first half's slot in the pa
 ; assembled as zero page.
         .segment "ZPF0": zeropage   ; $F0-$F3
 MAPSTRIDE: .res 2                   ; bytes per map row (1 << lw): drawrect's row step
-mapshr:    .res 1                   ; 8 - lw (maprow, maprow6): the loader's, as MAPSTRIDE
+mapshr:    .res 1                   ; 8 - lw (maprow): the loader's, as MAPSTRIDE
 MUSTICK:   .res 1                   ; a frame's tune step is due: the vsync's sound_tick
         .segment "ZPF5": zeropage   ; $F5-$FB
 rowbit:    .res 1                   ; the char row being drawn, as a flag bit (1, 2)
