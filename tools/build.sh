@@ -145,7 +145,7 @@ for pass in 1 2 3; do
 import re
 want = ['boot','dsk_type','dsk_drv','read_sectors','ld_sec','ld_n','ld_dst',
         'LV_HDR','LV_OBJS','LV_ATTR0','LV_ALTCLS','TILES','SPR_TABLE','mapshr','MAPSTRIDE','FLATTAB',
-        'half0','half1','half2','halfhi','halfhi5','halfsub','mir0','MIRTAB','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
+        'half0','halfhi5','halfsub','HLOW','mir0','MIRTAB','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
         'MAP5','LDZP','BARADDR','STAGE','STAGE_LVL','LDPROG','PBANK','PBOARD','dsk_banks','dsk_board',
         'ld_img','ld_open','LOADREQ','game_in']
 addr = {}

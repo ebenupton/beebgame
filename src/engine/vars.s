@@ -154,13 +154,11 @@ MUSPTR:   .res 2
 ; ---------------------------------------------------------------- the Model B's gather
 ; The arithmetic gather's shape (gather5; the loader's, per level): the Model B's
 ; hottest scalars (the Master's gather is its table, LV_PAGE0).  The level's half
-; tiles: the first id, the two range boundaries (bottom fills from half1, rowpairs
-; from half2), the halves' page, and half0 less the first half's slot in it.
+; tiles: the first id, the halves' page, and half0 less the first half's slot in it
+; (their low bits are a table: gather.s HLOW).
   .if BHW
         .segment "ZPHW": zeropage
 half0:     .res 1                   ; the first half tile's id
-half1:     .res 1                   ; bottom fills from here
-half2:     .res 1                   ; rowpairs from here
 halfhi5:   .res 1                   ; the halves' page
 halfsub:   .res 1                   ; half0 less the first half's slot in the page
         .zeropage
@@ -178,10 +176,9 @@ MAPSTRIDE: .res 2                   ; bytes per map row (1 << lw): drawrect's ro
 mapshr:    .res 1                   ; 8 - lw (maprow): the loader's, as MAPSTRIDE
 MUSTICK:   .res 1                   ; a frame's tune step is due: the vsync's sound_tick
         .segment "ZPF5": zeropage   ; $F5-$FB
-rowbit:    .res 1                   ; the char row being drawn, as a flag bit (1, 2)
+rowbit:    .res 1                   ; the char row being drawn, as a half's fill bit (8, 16)
 dpass:     .res 1                   ; draw_sprites' pass
 spclip:    .res 1                   ; set at every window edge a sprite is cut against
-halfhi:    .res 1                   ; the halves' page less 1 (the loader's), for @hfill
         .segment "ZPFD": zeropage   ; $FD-$FF
 MUSON:     .res 1                   ; the tune plays: the interrupt stub steps it
 crtcb:     .res 2                   ; build_sections: the buffer's CRTC base

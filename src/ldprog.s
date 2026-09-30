@@ -448,30 +448,49 @@ lv_load:
         beq :+
         jmp @file
 :
-        ; ---- the halves' fill pairs, where the halves end (hdst): the fill indexes
-        ; them by the slot from the halves' page, so its operands sit 2*HALFOFF below
+        ; ---- the halves' fill palette (8 first bytes, then 8 second), where the
+        ; halves end (hdst): @hfill's two loads index it by a half's colour
         lda #SEC_HPAIR
-        jsr section
+        jsr section                 ; src = the palette, then each half's low bits
+  .ifdef BAKEITEM0
+        lda src                     ; (the baker's: it reads both from the staged file)
+        sta sv_hpl
+        lda src+1
+        sta sv_hph
+  .endif
         lda hdst
         sta dst
         lda hdst+1
         sta dst+1
-        lda LV_HDR+HDR_NHALF               ; two bytes a half
-        asl
+        lda #16
         sta cnt
         lda #0
         sta cnt+1
         ldx PB_TILES
-        jsr bcopy                   ; (bank 7 back after it)
-        lda LV_HDR+HDR_HALFOFF
-        asl
-        eor #$FF
-        sec
-        adc hdst                    ; hdst - 2*HALFOFF: low in X, high in Y
-        tax
-        lda hdst+1
-        sbc #0
-        tay
+        jsr bcopy                   ; (bank 7 back after it; src unmoved: under a page)
+  .if BHW
+        ; ---- each half's low bits (its fill row and colour), by k, into bank 5's HLOW
+        ; for the gather: from HALFOFF on (k counts from the halves' page)
+        lda src
+        clc
+        adc #16
+        sta src
+        bcc :+
+        inc src+1
+:       lda #<HLOW
+        clc
+        adc LV_HDR+HDR_HALFOFF
+        sta dst
+        lda #>HLOW
+        adc #0
+        sta dst+1
+        lda LV_HDR+HDR_NHALF
+        sta cnt                     ; (cnt+1 is 0 still)
+        ldx PB_MAP
+        jsr bcopy
+  .endif
+        ldx hdst                    ; the palette: low in X, high in Y (HPAIR0, HPAIR1)
+        ldy hdst+1
         ; ---- the tile shape, into banks 5 and 6 (read here, with bank 7 in)
         lda LV_HDR+HDR_HALFPAGE
         sta sv_halfhi
@@ -480,8 +499,6 @@ lv_load:
   .ifdef BAKEITEM0                  ; (the baker's: the halves' slot offset and pairs)
         lda LV_HDR+HDR_HALFOFF
         sta sv_halfoff
-        stx sv_hpl
-        sty sv_hph
   .endif
   .if BHW || .defined(BAKEITEM0)    ; the arithmetic gather's (bank 5): the Master's
         lda LV_HDR+HDR_HALF0               ; gather is its table, LV_PAGE0 (the baker
@@ -504,17 +521,15 @@ lv_load:
   .endif
         lda PB_TILES
         jsr pgbank                  ; (X, Y kept)
-        stx HPAIR0
+        stx HPAIR0                  ; the palette's first bytes
         sty HPAIR0+1
-        inx
-        stx HPAIR1
-        bne :+
-        iny
-:       sty HPAIR1+1
-        ldx sv_halfhi               ; (X, Y free: HPAIR's done)
-        dex
-        stx halfhi                  ; (bank 6's: the row loop's @hfill, less 1 -- its sbc
-                                    ;  borrows: C clear at every entry to @run)
+        txa
+        clc
+        adc #8                      ; and its second, 8 on
+        sta HPAIR1
+        tya
+        adc #0
+        sta HPAIR1+1
         lda sv_solid
         sta SOLIDF                  ; the row loop's lda #fill for id 0
   .if BHW
@@ -522,10 +537,6 @@ lv_load:
         jsr pgbank
         lda sv_half0
         sta half0
-        lda sv_half1
-        sta half1
-        lda sv_half2
-        sta half2
         lda sv_halfhi
         and #$7F                    ; (a half's mark: its page less $80, gather5)
         sta halfhi5
@@ -1095,8 +1106,9 @@ bk_tile:
         sta bk_step
         jmp @emit
 @half:  sec                         ; ---- a half: k = id - half0 + HALFOFF; its row at the
-        sbc sv_half0                ; halves' page + k * 32 (+ byte * 8), its pair at the
-        clc                         ; pairs' base + 2k
+        sbc sv_half0                ; halves' page + k * 32 (+ byte * 8), its pair the
+        pha                         ; palette's by its colour (i = id - half0, kept)
+        clc
         adc sv_halfoff
         sta bk_k
         lsr
@@ -1113,20 +1125,25 @@ bk_tile:
         asl
         ora bk_bx
         sta ent
-        lda bk_k
-        asl
-        sta tmp2                    ; 2k (low); the high bit into the carry
-        lda #0
-        rol
-        sta tmp
+        pla                         ; i: its low bits are the section's 16 + i
+        clc                         ; (the staged file's: after the palette)
+        adc #16
+        tay
         lda sv_hpl
-        clc
-        adc tmp2
         sta cnt
         lda sv_hph
-        adc tmp
         sta cnt+1
-        jsr @pair
+        lda (cnt),y
+        and #7                      ; the colour
+        tay
+        lda (cnt),y                 ; the palette's first byte
+        sta bk_pa
+        tya
+        clc
+        adc #8
+        tay
+        lda (cnt),y                 ; and its second
+        sta bk_pb
         lda bk_t                    ; below half1 the top row fills, below half2 the
         cmp sv_half1                ; bottom, from it neither (the row twice)
         bcs :+

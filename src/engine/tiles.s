@@ -90,7 +90,7 @@ ringmodtab:
 ;   exactly there, which carries sp into a new page: @advc folds it (pagestep).  So
 ;   the runs have no wrap test.
 ; - C is clear at every entry to @run: @drawrow's clc, and @advsp's sp step on the
-;   loop back.  @hfill's sbc halfhi and the mirror's sbc #0 each borrow one on it.
+;   loop back.  The mirror's sbc #0 borrows one on it.
 ;   @drawrow's exit (@rowdone) does NOT leave C clear.
 ; - rc_lim: the chars the current run may take -- 4 - rc_x&3 for a row's first run
 ;   (rc_sc0, set per rect), 4 for the later ones (@runnext).
@@ -240,8 +240,8 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         stz rc_sub                  ; the tile's top char row: offset 0
         lda rc_ro0
         sta rowoff
-        lda #1                      ; the char row, as a half tile's flag bit
-        sta rowbit
+        lda #8                      ; the char row, as a half tile's fill bit (GATHERL
+        sta rowbit                  ;  bit 3 the top, bit 4 the bottom)
         jsr @drawrow
         dec rc_h
         beq @done
@@ -250,7 +250,7 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         sta rc_sub
         ora rc_ro0
         sta rowoff
-        lda #2
+        lda #16
         sta rowbit
         jsr @drawrow
         dec rc_h
@@ -271,11 +271,11 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         ; ---- @run's rarer ways, here behind @drawrow in its branches' reach, A =
         ; GATHERH: a flat ($40, to @solid) or a half tile (its page less $80: $06-$3F)
 @fx:    cmp #$40
-        bcc @half                   ; below $40: a half (C = 0, which @hfill's sbc needs)
+        bcc @half                   ; below $40: a half
         jmp @solid                  ; a flat, or the other solid
 @half:  ora #$80                    ; the half's page
         sta tp+1
-        lda GATHERL,x               ; its kind (bits 0-2): is this row its fill?
+        lda GATHERL,x               ; is this row its fill (bit 3 the top, bit 4 the bottom)?
         and rowbit
         beq @hcopy
         jmp @hfill
@@ -532,25 +532,12 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
 ; on this path.)
 ; ----------------------------------------------------------------------------
 @hfill:
-        ; ---- a half's pair: k back out of its address.  The sbc borrows one (C is
-        ; clear from @fx's cmp), and halfhi is the halves' page less 1.  GATHERH is the
-        ; page less $80 (a half's mark): the $80 goes out with the asl's.
-        lda GATHERH,x
-        sbc halfhi
-        asl
-        asl
-        asl
-        asl
-        sta tmp                     ; (k >> 3) << 4
+        ; ---- a half's fill: its colour in the level's palette, GATHERL's bits 0-2.
+        ; The loader patches both loads' operands (HPAIR0, HPAIR1: the palette's
+        ; first bytes, then its second).
         lda GATHERL,x
-        lsr
-        lsr
-        lsr
-        lsr                         ; (k & 7) << 1: a half's GATHERL has bits 4, 3 clear
-        ora tmp
-        tay                         ; Y = 2k: the pair's index
-        ; lda HALFPAIR,y twice: the pair, from where the loader put the table.  It
-        ; patches both operands (HPAIR0, HPAIR1, defined after the row loop).
+        and #7
+        tay
 @hp0:   lda $FFFF,y
         sta tp
 @hp1:   lda $FFFF,y
@@ -627,8 +614,9 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         .assert >@run8 = >(@run8+3*RUNXS), error, "RUN8 straddles a page (@advsp's read)"
 
 ; ---- the loader's patch points in the row loop
-; HPAIR0/HPAIR1: @hfill's two loads of a half tile's pair.  The table sits above the
-; halves, wherever the level's tiles ended, and the loader patches the operands.
+; HPAIR0/HPAIR1: @hfill's two loads of a half's fill pair, by its colour.  The level's
+; palette (8 first bytes, then 8 second) sits above the halves, wherever the level's
+; tiles ended, and the loader patches the operands.
 ; Defined here, after the row loop: a label would end its @ scope, and := puts them
 ; in labels.txt.  The first := ends the @ scope, so HPAIR1 goes by HPAIR0.
         .assert @hp1 = @hp0 + 5, error, "HPAIR1 must be 5 bytes past HPAIR0"

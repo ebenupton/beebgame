@@ -33,18 +33,19 @@
 ;                           bits clear); with TILEMIRROR a mirror too, kind 3
 ;   GATHERH $06-$3F         a half: its row's page less $80 (bit 7 clear marks it, so
 ;                           drawrect sends it the rare way, at @run), GATHERL the row's
-;                           offset and its flags (bit 2 = a half)
+;                           offset (bits 5-7), which of its char rows is the fill (bit 3
+;                           the top, bit 4 the bottom, neither: both rows stored) and
+;                           the fill's colour in the level's palette (bits 0-2)
 ; A fill is flagged by bit 7 of the high byte clear -- the row loop's bpl.
 ;
 ; Model B, the tile kinds by id range:
 ;   0              the level's solid: a fill
 ;   1 .. half0-1   full tiles: contiguous from TILES (page aligned, 64 bytes each), so
 ;                  the address is arithmetic, with no table beside them
-;   half0 .. ..    the HALF tiles (half0, half1, half2: the loader's): one 32-byte
-;                  char row stored at halfhi:00 + k*32; the other a fill (its pair in
-;                  HALFPAIR) or the same row again.  Their low byte carries the flags:
-;                  bit 2 = a half, bit 0 = the top row is the fill, bit 1 the bottom
-;                  (neither: both rows are the stored one)
+;   half0 .. ..    the HALF tiles (half0: the loader's): one 32-byte char row stored
+;                  at the halves' page + k*32; the other a fill (a pair from the level's
+;                  palette of 8, HPAIR0/HPAIR1) or the same row again.  Their low
+;                  bits, fill row and colour, are HLOW's, by k (the loader's)
 ;   mir0 .. ..     mirrored tiles (TILEMIRROR builds only): their source's slot
 ;   FLAT0 ..       flat tiles: a fill of two bytes alternating down every char, the low
 ;                  byte indexing the pair in FLATTAB (the loader's; the two solids are
@@ -117,9 +118,8 @@ gather5:
         cmp mir0
         bcs @gmir
   .endif
-        tax                         ; X = the id, for the range tests
         sbc halfsub                 ; k
-        sta tmp
+        tax
         lsr
         lsr
         lsr
@@ -127,21 +127,14 @@ gather5:
         adc halfhi5                 ; + (k >> 3): 8 half rows a page (halfhi5 less $80:
                                     ;  the loader's -- a half's mark)
         sta GATHERH,y
-        lda tmp
+        txa
         asl
         asl
         asl
         asl
         asl                         ; (k & 7) << 5: the shifts drop the rest
-        ; The flags, by range: bit 2 (a half) and the fill row's bit -- below half1
-        ; 4|1 (the top fills), from it 4|2 (the bottom; C from the cpx adds the 1),
-        ; and from half2 (so from half1) 6 -> 4, both rows stored.
-        cpx half1
-        adc #5
-        cpx half2
-        bcc @gh2                    ; below half2: done
-        eor #2                      ; from half2: 6 -> 4
-@gh2:   sta GATHERL,y
+        ora HLOW,x                  ; its fill row and colour
+        sta GATHERL,y
         dey
         bpl @gl
         bmi @gdone
@@ -168,11 +161,13 @@ gather5:
 @gdone: rts
 
 ; ----------------------------------------------------------------------------
-; The level's mirror shape (the loader's), for the Model B's arithmetic gather (the
-; half shape, half0-halfsub, is in zero page: vars.s)
+; The level's halves' low bits and mirror shape (the loader's), for the Model B's
+; arithmetic gather (the half shape, half0, halfsub, halfhi5, is in zero page: vars.s)
 ; ----------------------------------------------------------------------------
         .segment "MAP5BSS"
   .if BHW
+HLOW:      .res 64                  ; per half, by k (from the halves' page: HALFOFF on):
+                                    ;  its GATHERL low bits (the loader's)
    .if TILEMIRROR
 mir0:      .res 1                   ; the first mirrored tile's id (the loader's)
 MIRTAB:    .res MAXMIR              ; per mirrored id: the slot of the tile it mirrors

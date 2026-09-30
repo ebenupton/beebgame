@@ -144,7 +144,8 @@ class Level:
     map: bytes                  # 1 << (lw + lh) tile ids, row major
     flat: bytes                 # FLATTAB's pairs
     halves: bytes               # the half tiles: index in file, row, file
-    hpair: bytes                # the halves' fill pairs
+    hpair: bytes                # the halves' fill palette (8 first bytes, 8 second), then
+                                # each half's low bits (fill row, colour)
     mir: bytes                  # MIRTAB (TILEMIRROR; else empty)
     directory: bytes            # directory()
     page0: bytes                # LV_PAGE0: the Master's gather table, 512 bytes

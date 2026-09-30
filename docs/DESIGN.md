@@ -97,8 +97,8 @@ $F4, the MOS's copy of ROMSEL, which the interrupt restores from, and $FC, where
 MOS's interrupt entry keeps A (every handler returns with `lda $FC / rti`).  The rest,
 in segments ZPF0 ($F0-$F3), ZPF5 ($F5-$FB) and ZPFD ($FD-$FF), holds scalars that were
 absolute and are among the most accessed: MAPSTRIDE, mapshr, MUSTICK, rowbit, dpass,
-spclip, halfhi, MUSON and crtcb ($F9-$FB free).  `boot` zeroes them.  On the Model B the arithmetic gather's shape
-(half0-2, halfhi5, halfsub) and `jv`, the vector the 6502's `jmp (abs,x)` goes
+spclip, MUSON and crtcb ($F8-$FB free).  `boot` zeroes them.  On the Model B the arithmetic gather's shape
+(half0, halfhi5, halfsub) and `jv`, the vector the 6502's `jmp (abs,x)` goes
 through, are in its own segment, ZPHW.
 
 ### Low RAM (both machines)
@@ -604,8 +604,12 @@ through to the solid.  The flats and the halves' fill rows go down the one pair
 cascade (PCHAR).
 
 On the Model B `gather5` computes the pair from the id with the level's shape (half0,
-half1, half2, halfhi5 -- the halves' page less $80, the loader's --, halfsub, in zero
-page), since main RAM has no room for a table.
+halfhi5 -- the halves' page less $80, the loader's --, halfsub, in zero page), since
+main RAM has no room for a table; only a half's low bits are one, HLOW in bank 5 beside
+the gather.  A half's GATHERL is its row's offset (bits 5-7), which char row is the fill
+(bit 3 the top, bit 4 the bottom -- `rowbit` is 8 or 16 -- neither when both rows are
+stored) and the fill's colour (bits 0-2): an index into the level's palette of 8 pairs
+(Cleo's levels use 5 at most), so `@hfill` is an `and #7` and two patched loads.
 On the Master it is two indexed loads from LV_PAGE0 in main RAM, a table the packer
 builds per level; unused ids in it are a black fill ($40, 0), because the rows past a
 map's end are read too.  The Model B's gather tests for id 0 first (`beq`, 2 cycles a
@@ -831,8 +835,8 @@ of every bank from PBANK and sets the write bank by PBOARD by hand.
    bytes (the stream is not terminated).
 4. Each of the level's tile-set files staged in turn, its full tiles copied to
    consecutive slots from TILES and its half tiles' stored rows to their slots; then
-   the halves' fill pairs after them, HPAIR0/HPAIR1 patched, `halfhi` set, and on the
-   Model B the gather's shape.
+   the halves' fill palette after them (16 bytes), HPAIR0/HPAIR1 patched, and on the
+   Model B the gather's shape and each half's low bits (HLOW, bank 5).
 5. The sprites: SPRC to its fixed places if it is not already there; then SPRX staged (the
    Master: from the disc the first time, then kept in HAZEL and ANDY and restored from
    there), and every image the placement list names copied to its bank and address
@@ -883,7 +887,7 @@ A level file starts with a table of 13 section offsets:
 | 6 | the map, RLE: c < 128, c+1 literals; c >= 128, the next byte c-126 times |
 | 7 | FLATTAB's pairs |
 | 8 | the half tiles: index in file, row, file |
-| 9 | the halves' fill pairs |
+| 9 | the halves' fill palette (8 first bytes, 8 second), then each half's low bits (fill row: 8 top, 16 bottom; colour: 0-7) |
 | 10 | MIRTAB (TILEMIRROR) |
 | 11 | the sprite directory's level part, 2 x (BOXID0 + BOXN): the images' addresses by id, low bytes then high (0: not in this level; bit 7 clear: bank 5) |
 | 12 | LV_PAGE0, 512 bytes, sector aligned at the end |
