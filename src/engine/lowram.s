@@ -54,8 +54,9 @@ mapbyte:
 ; ----------------------------------------------------------------------------
 ; mapcol: a map byte and its column's neighbours, in one visit to bank 5
 ;   In:   mapptr = a row, Y = the column
-;   Out:  A = (mapptr),Y;  X = the byte a map row above it, Y = the one below
-;         (MAPSTRIDE apart);  tp clobbered (the blitter's: free outside a render)
+;   Out:  A = (mapptr),Y;  tp = the byte a map row above it, tp+1 the one below
+;         (MAPSTRIDE apart: tp is the blitter's, free outside a render);  X clobbered,
+;         Y kept
 ; Past the map's top or bottom row a neighbour is whatever lies there -- the map is
 ; 8K at $9C00, so $9B00-$BCFF, bank 5's sprites and tables, never I/O -- for the
 ; caller to ignore.
@@ -82,7 +83,8 @@ mapcol: lda mapptr                  ; tp = the row above
         adc MAPSTRIDE+1
         sta tp+1
         lda (tp),y
-        tay                         ; below
+        sta tp+1                    ; below
+        stx tp                      ; above
         lda mtmp
         jmp pagelogic
 
