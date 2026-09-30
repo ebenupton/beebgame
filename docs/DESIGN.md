@@ -715,7 +715,7 @@ the unrolled cell entered at its first line, otherwise the partial loop.  The
 commonest blitter, `sprFN`, falls into its column step, and the column countdown ends
 in the patched `jmp` itself.
 
-The 4-bit blitter (`NIBBLIT`: `sprFN`, and `sprFM` mirrored): an image is stored
+The 4-bit blitter (`NIBCELLS` and `NIBPART`: `sprFN`, and `sprFM` mirrored): an image is stored
 column by column, a byte a game-pixel row, the byte's two game pixels 4 bits each (the
 left in the high nibble), indices into one palette the game chooses, nibble 0
 transparent.  Three tables, the game's (`nibtab.bin`), turn a stored byte into screen

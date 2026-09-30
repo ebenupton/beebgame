@@ -29,7 +29,7 @@
 ;                end, falling into ds_rowloop; rts at ds_done.
 ;
 ; Macros:
-;   NPAIR, NIBBLIT   the 4-bit blitter (sprFN, sprFM mirrored)
+;   NPAIR, NIBCELLS, NIBPART   the 4-bit blitter (sprFN, sprFM mirrored)
 ;   NIBCOPY          the copy blitter, for boxes (sprFC)
 ;   NIB_LOOPS        the row loop and all three blitters
 ; Then the two copies: SPR4CODE (bank 4) and SPR5CODE (bank 5).
@@ -130,23 +130,24 @@ done:
 .endmacro
 
 ; ----------------------------------------------------------------------------
-; NIBBLIT name, mirror, ret, fall: the 4-bit blitter for one column of a char row
+; The 4-bit blitter for one column of a char row, in two macros so that a bank can
+; put its cells where they sit in one page:
+;   NIBCELLS name, mirror, ret, fall   the entries name_0 .. name_3: a cell to its
+;                      line 7 from pair 0..3 (lines 0, 2, 4, 6 on), the unrolled
+;                      pairs entered part way down.  fall given: the last pair falls
+;                      into ret, which must follow (the commonest blitter's saving of
+;                      a jmp).
+;   NIBPART name, mirror, ret          the entry name_pt: anything else -- the last
+;                      row, to line tmp2 < 7 -- lines tmp..tmp2 (tmp even, tmp2 odd),
+;                      a pair at a time, sp_lim the pair's line
 ;   name    the entries' prefix (sprFN, sprFM);  mirror  1 = through SWAPTAB
-;   ret     where it returns (sprretP, sprretM);  fall  given: the last pair falls
-;           into ret, which must follow (the commonest blitter's saving of a jmp)
+;   ret     where it returns (sprretP, sprretM)
 ;   In:     ptr = the column's source, sp = the char
 ;   Out:    A, X, Y clobbered;  sp_msk, sp_lim written
-; The entries, chosen once a row by the row loop (sprrow_tab), not a column:
-;   name_0 .. name_3   a cell to its line 7 from pair 0..3 (lines 0, 2, 4, 6 on):
-;                      the unrolled pairs, entered part way down
-;   name_pt            anything else -- the last row, to line tmp2 < 7 -- lines
-;                      tmp..tmp2 (tmp even, tmp2 odd), a pair at a time, sp_lim the
-;                      pair's line
+; The row loop chooses the entry once a row (sprrow_tab), not a column.
 ; ----------------------------------------------------------------------------
-.macro NIBBLIT name, mirror, ret, fall
+.macro NIBPART name, mirror, ret
         .local pl, pop, pnext
-
-; ---- part of a cell: lines tmp..tmp2
 .ident(.concat(.string(name), "_pt")):
         lda tmp
         sta sp_lim
@@ -212,16 +213,12 @@ pnext:  lda sp_lim                  ; the next pair, until past tmp2
         cmp tmp2
         bcc pl
         jmp ret
-
-; ---- a cell to line 7, from the pair the row loop chose
-.ident(.concat(.string(name), "_0")):
-        NPAIR 0, mirror
-.ident(.concat(.string(name), "_1")):
-        NPAIR 2, mirror
-.ident(.concat(.string(name), "_2")):
-        NPAIR 4, mirror
-.ident(.concat(.string(name), "_3")):
-        NPAIR 6, mirror
+.endmacro
+.macro NIBCELLS name, mirror, ret, fall
+  .repeat 4, j
+.ident(.sprintf("%s_%d", .string(name), j)):
+        NPAIR 2*j, mirror
+  .endrepeat
   .ifblank fall
         jmp ret
   .endif
@@ -282,8 +279,9 @@ ds_entry:                           ; BANKENTRY
         wrsel bank, bank
         jmp ds_rowloop
 
-; ---- the commonest blitter, falling into its column step
-        NIBBLIT sprFN, 0, sprretP, fall
+; ---- the commonest blitter's cells, falling into its column step: first in the bank,
+; so in its first page (their branches' targets too)
+        NIBCELLS sprFN, 0, sprretP, fall
 
 ; ---- the column steps: ptr to the next image column, then sp to the next char
 sprretP:                            ; next column: source pointer + rows
@@ -377,11 +375,17 @@ ds_done:
         wrback bank                 ; the write window's end
         rts
 
-; ---- the other blitters
-        NIBBLIT sprFM, 1, sprretM
-        NIBCOPY sprFC, sprretP
+; ---- the screen's page step, out of line
 sprscold2:
         spcold sprsback
+
+; ---- the other blitters: sprFM's cells (291 bytes, more than a page: pads.inc,
+; PADB_FM and PADM_FM, place them), the partial loops, the copy blitter.
+        PAD ::PADB_FM, ::PADM_FM
+        NIBCELLS sprFM, 1, sprretM
+        NIBPART sprFN, 0, sprretP
+        NIBPART sprFM, 1, sprretM
+        NIBCOPY sprFC, sprretP
 
 ; ---- the entries a row takes, by sp_disp + 2 x (its first line, or 8 for the partial
 ; loop): the prologue's sp_disp is 0 (sprFN), 18 (sprFM, mirrored: flag bit 0) or 36

@@ -1,12 +1,10 @@
-; The Master's padding in the sprite banks: its 65C02 code is shorter than the Model
-; B's, and the room it leaves (the pinned layout's: tools/pincfg.py) is spent before
-; the hot blitters so that their branches cross no page boundary -- the Model B's are
-; placed by the order of its code alone.  Found by the build (tools/pagecheck.py over
-; the profile's hot branches); each is at most the Master's slack in its bank.
-PADM_FN4 = 26                       ; bank 4: before the unmirrored mask blitter
-PADM_FM4 = 0                        ;         before the mirrored one
-PADM_FN5 = 3                        ; bank 5: before the mask blitter
-PADM_FC5 = 28                       ;         before the copy blitter
+; The sprite banks (both: one row loop, sprloops.s).  sprFN's cells lie in the bank's
+; first page by their place.  sprFM's are longer than a page, so one of their branches
+; crosses a page's end wherever they lie (a pair's beq done lands on the next pair):
+; the Master's pad puts it between pairs 1 and 2, where it measured best; the Model B's
+; would cost sprite room in both banks (the game's B4/B5_CODE_END) and bought nothing.
+PADB_FM = 0                         ; before sprFM's cells
+PADM_FM = 1
 ; Bank 7's engine code (ENGCODE) ends at the kernel on the Model B, so a pad there
 ; places the code before it; the Master's runs on from the Model B's start, so a pad
 ; places the code after it.  Found together over the profile's bank 7 branches and
