@@ -8,6 +8,7 @@
 ; the other banks and the Model B's interrupt stub.)
 ;
 ;   maprow     A = tile row -> mapptr = the row's address in the map
+;   mapcol     a map byte and the two beside it in its column, one bank switch
 ;   mapbyte    A = the map byte at (mapptr),Y
 ;   mapput     store A at (mapptr),Y
 ;   pagelogic  page bank 7 back in: the way home from every crossing
@@ -48,6 +49,41 @@ mapbyte:
         sta ROMSEL_CPY
         sta ROMSEL
         lda (mapptr),y
+        jmp pagelogic
+
+; ----------------------------------------------------------------------------
+; mapcol: a map byte and its column's neighbours, in one visit to bank 5
+;   In:   mapptr = a row, Y = the column
+;   Out:  A = (mapptr),Y;  X = the byte a map row above it, Y = the one below
+;         (MAPSTRIDE apart);  tp clobbered (the blitter's: free outside a render)
+; Past the map's top or bottom row a neighbour is whatever lies there -- the map is
+; 8K at $9C00, so $9B00-$BCFF, bank 5's sprites and tables, never I/O -- for the
+; caller to ignore.
+; ----------------------------------------------------------------------------
+mapcol: lda mapptr                  ; tp = the row above
+        sec
+        sbc MAPSTRIDE
+        sta tp
+        lda mapptr+1
+        sbc MAPSTRIDE+1
+        sta tp+1
+        bankimm lda, BANK_MAP, 0
+        sta ROMSEL_CPY
+        sta ROMSEL
+        lda (tp),y
+        tax                         ; above
+        lda (mapptr),y
+        sta mtmp                    ; this row's
+        lda mapptr                  ; tp = the row below
+        clc
+        adc MAPSTRIDE
+        sta tp
+        lda mapptr+1
+        adc MAPSTRIDE+1
+        sta tp+1
+        lda (tp),y
+        tay                         ; below
+        lda mtmp
         jmp pagelogic
 
 ; ----------------------------------------------------------------------------
