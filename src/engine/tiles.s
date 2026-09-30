@@ -391,8 +391,8 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         sta (sp),y
         iny
   .else
-        ldaz tp                     ; line 0 non-indexed
-        staz sp
+        lda (tp)                    ; line 0 non-indexed
+        sta (sp)
         ldy #1
   .endif
 .else

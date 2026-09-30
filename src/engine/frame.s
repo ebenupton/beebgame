@@ -396,7 +396,7 @@ match_sprites:
   .if BHW
         lda (rp),y                  ; Y = 0 from the cmpz above
   .else
-        ldaz rp
+        lda (rp)
   .endif
         cmp #BOXID0
         bcc @next
@@ -634,7 +634,7 @@ drawsprite:
         ldx #0                      ; X is dead on entry
         stx spclip                  ; set at every window edge the sprite is cut against
   .else
-        stza spclip                 ; set at every window edge the sprite is cut against
+        stz spclip                  ; set at every window edge the sprite is cut against
   .endif
 
         ; ==== the address from the level's DIR_LO/HI, the geometry from the game's
@@ -789,7 +789,7 @@ drawsprite:
         txa
   .else
         lda sp_ext
-        deca
+        dec a
   .endif
         adc sp_lb0
         sta w16
@@ -868,7 +868,7 @@ drawsprite:
         lda sp_c1
         sec
         sbc sp_c0
-        inca
+        inc a
     .endif
         sta REC_W,y
         lda sp_r1
@@ -915,7 +915,7 @@ drawsprite:
         lda sp_c1
         sec
         sbc sp_c0
-        inca
+        inc a
   .endif
         sta (rp),y
         iny                         ; REC_H

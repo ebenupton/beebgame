@@ -243,8 +243,8 @@ pnext:  lda sp_lim                  ; the next pair, until past tmp2
         lda (ptr),y
         sta (sp),y
   .else
-        ldaz ptr                    ; line 0 non-indexed
-        staz sp
+        lda (ptr)                   ; line 0 non-indexed
+        sta (sp)
   .endif
   .repeat 7, j
 .ident(.sprintf("%s_%d", .string(name), j+1)):
