@@ -1,5 +1,41 @@
+; ============================================================================
+; engine/macros.s -- the engine's macros: the CRTC write and the ring wrapping
+;
+; Included by engine.s after defs.s and vars.s; emits nothing by itself.  Each buffer's
+; screen is a ring of RINGROWS char rows (defs.s): an address that runs off the ring's
+; end must fold back to its start.  On the Master the ring is $3000-$7FFF, whole pages,
+; and the CRTC folds it for free, so the end test is the sign bit (RINGEND = $8000) and
+; only the high byte moves.  On the Model B the ring is 23 rows ($3980 bytes, not whole
+; pages): its END is page aligned, so the test is a compare on the high byte with the
+; buffer's ringehi (select_backbuf), but its base is at xx80, so the fold also takes
+; $80 from the low byte (with the borrow into the high byte).
+;
+;   crtc      write a CRTC register
+;   ringmod   A = a map char row -> its ring slot (bank 6: the table, or and #31)
+;   ringmod7  the same, by subtraction on the Model B (bank 7 has no table)
+;   ringtest  a high byte just moved forward: branch out if it ran off the ring's end
+;   ringfold  ringtest's out-of-line fold
+;   ringup    ringtest and ringfold in one, in line
+;   pagestep  a pointer's high byte one page on after its low byte carried, folded
+;   ringdn    a high byte just moved back: fold it under the ring's base
+;   spnext    sp on one char (8 bytes), folding at the ring end
+;   spcold    spnext's page step, out of line
+;   RUNX      a run's char count -> its dispatch index and byte count
+;
+; Anonymous labels.  The ring macros spell their skips with ':' labels, because a
+; named label would end the enclosing routine's cheap-local (@) scope.  So a caller
+; that branches with :+ / :- over one of them has to count the labels it adds: each
+; header gives the count (spnext, which says :++ to jump over pagestep's, is the
+; example).  ringmod uses .local labels instead and adds none.
+; ============================================================================
 
-; ---------------------------------------------------------------- macros
+; ----------------------------------------------------------------------------
+; crtc reg, val: write CRTC register reg
+;   reg:  the register number (an immediate is made of it)
+;   val:  the value's operand as lda takes it: #n, or an address
+;   Out:  A = the value;  N, Z from it;  X, Y, C kept
+;   Anonymous labels: none.
+; ----------------------------------------------------------------------------
 .macro crtc reg, val
         lda #reg
         sta CRTC_IDX
@@ -7,21 +43,24 @@
         sta CRTC_DAT
 .endmacro
 
-; ---------------------------------------------------------------- ring wrapping
-; A screen address that runs off the end of the ring folds back to its start.  On the
-; Master the ring runs to $8000 and the test is the sign bit; on the Model B it is a
-; compare with the buffer's ring end (ringehi).
-; These spell their skip with an anonymous label, so a caller that wants to branch
-; over one has to count it: see spnext, which says :++ for that reason.  A named
-; label here would end the enclosing routine's cheap-local scope.
-.macro ringmod                      ; A = a map char row -> its ring slot
+; ----------------------------------------------------------------------------
+; ringmod: a map char row -> its ring slot, row mod RINGROWS
+;   In:   A = the row, 0..255
+;   Out:  A = the slot, 0..RINGROWS-1
+;         Master (RINGROWS = 32, a power of two): an and -- X, C kept
+;         Model B (23): X = the row brought under RINGROWS*5;  C clobbered
+;   Anonymous labels: none (the Model B's are .local).
+; The Model B's is a table lookup in bank 6 (ringmodtab, banks.s), RINGROWS*5 long:
+; two subtractions bring the row into it, 141 bytes short of a 256-entry table.
+; ----------------------------------------------------------------------------
+.macro ringmod
 .if (RINGROWS & (RINGROWS - 1)) = 0
         and #(RINGROWS-1)
 .else
-        .local n1, n2               ; a row is 0..255 and the table RINGROWS*5 long
-        cmp #RINGROWS*5             ; (bank 6's): two subtractions bring the row into
-        bcc n1                      ; it, 141 bytes short of a 256-entry table
-        sbc #RINGROWS*5
+        .local n1, n2
+        cmp #RINGROWS*5
+        bcc n1
+        sbc #RINGROWS*5             ; C = 1 from the cmp
 n1:     cmp #RINGROWS*5
         bcc n2
         sbc #RINGROWS*5
@@ -29,102 +68,174 @@ n2:     tax
         lda ringmodtab,x
 .endif
 .endmacro
-.macro ringmod7                     ; the same, by subtraction: for bank 7 (calc_ring,
-  .if ::BHW                        ; ringaddr7), which has no copy of the table
+
+; ----------------------------------------------------------------------------
+; ringmod7: ringmod for bank 7 (calc_ring, ringaddr7), which has no copy of the table
+;   In:   A = the row
+;   Out:  A = the slot
+;         Model B: by repeated subtraction;  C = 0 (it leaves by its bcc);  X kept
+;         Master: ringmod's and #31;  X, C kept
+;   Anonymous labels: two on the Model B, none on the Master -- the counts differ, so
+;   do not branch over it with :+ / :-.
+; ----------------------------------------------------------------------------
+.macro ringmod7
+  .if ::BHW                         ; Model B
 :       cmp #RINGROWS
         bcc :+
-        sbc #RINGROWS
+        sbc #RINGROWS               ; C = 1 from the cmp, and stays 1
         bcs :-
 :
-  .else
+  .else                             ; Master
         ringmod
   .endif
 .endmacro
-; The ring's end is a page boundary, so the fold test is a compare on the high
-; byte alone.  A = high byte after moving forward, folded back into the ring.
-; The cmp leaves the carry set on the path that reaches the sbc, so the fold needs
-; no sec of its own whatever the caller was holding.
-.macro ringtest cold                ; A = a high byte just moved forward: to cold if it
-  .if ::BHW                        ; has run off the ring's end (ringfold there, out of
-        cmp ringehi                 ; line; the common case falls through)
+
+; ----------------------------------------------------------------------------
+; ringtest cold: has a high byte just moved forward run off the ring's end?
+;   In:   A = the high byte (the Master: N from the adc / inc that made it)
+;   Out:  fell through: A kept, still in the ring (the common case);  Model B C = 0
+;         branched to cold: it has run off -- fold it there with ringfold
+;   Anonymous labels: none.
+; The ring's end is a page boundary, so the test is on the high byte alone.  On the
+; Model B the cmp leaves the carry set on the path to cold, so ringfold needs no sec
+; of its own whatever the caller was holding.
+; ----------------------------------------------------------------------------
+.macro ringtest cold
+  .if ::BHW                         ; Model B: the buffer's ring end
+        cmp ringehi
         bcs cold
-  .else
+  .else                             ; Master
         bmi cold                    ; RINGEND = $8000: N from A
   .endif
 .endmacro
-.macro ringfold p                   ; ringup's fold, for ringtest's cold path: A back into
-  .if ::BHW                        ; the ring, p's low byte with it (the Model B)
+
+; ----------------------------------------------------------------------------
+; ringfold p: ringup's fold, for ringtest's cold path
+;   In:   A = the high byte past the ring's end;  p = the pointer it belongs to
+;         (Model B: C = 1, from ringtest's compare)
+;   Out:  A = the high byte back in the ring (the caller stores it);  C = 1
+;         Model B: p's low byte folded with it;  Master: p untouched
+;   Anonymous labels: none.
+; ----------------------------------------------------------------------------
+.macro ringfold p
+  .if ::BHW                         ; Model B: 16-bit fold, low byte first
         sbc #>RINGBYTES             ; C = 1 from ringtest's compare
         pha
         lda p
         sbc #<RINGBYTES
         sta p
         pla
-        sbc #0
-  .else
+        sbc #0                      ; the low byte's borrow
+  .else                             ; Master: the high byte alone
         sec
         sbc #>RINGBYTES
   .endif
 .endmacro
-.macro ringup p                     ; p names the pointer whose high byte A holds;
-  .if ::BHW                        ; the Master's fold never needs it
+
+; ----------------------------------------------------------------------------
+; ringup p: fold a high byte just moved forward back into the ring, in line
+;   In:   A = the high byte;  p = the pointer whose high byte A holds (the Master's
+;         fold never needs it);  Master: N from A (every caller's adc / inc a)
+;   Out:  A = the high byte, in the ring (the caller stores it)
+;         Model B: p's low byte folded with it;  C = 0 if no fold, 1 if folded
+;         Master: C kept if no fold, 1 if folded
+;   Anonymous labels: one.
+; Model B: A >= >RINGEND > >RINGBYTES, so the first sbc leaves C = 1.  The low byte
+; folds by $80, which borrows from A when p is below $80 (the sbc #0).
+; ----------------------------------------------------------------------------
+.macro ringup p
+  .if ::BHW                         ; Model B
         cmp ringehi                 ; the buffer's ring end, high byte (select_backbuf)
         bcc :+
-        sbc #>RINGBYTES             ; C = 1 from the compare, and stays 1: A >= >RINGEND
-        pha                         ; > >RINGBYTES.  The low byte folds by $80, which
-        lda p                       ; borrows from A when p is below $80 (C still 1)
-        sbc #<RINGBYTES
+        sbc #>RINGBYTES             ; C = 1 from the compare, and stays 1
+        pha
+        lda p
+        sbc #<RINGBYTES             ; $80: borrows when p is below it
         sta p
         pla
-        sbc #0
+        sbc #0                      ; C still 1
 :
-  .else
-        bpl :+                      ; RINGEND = $8000: N from A (every caller's adc / inc a)
+  .else                             ; Master
+        bpl :+                      ; RINGEND = $8000: N from A
         sec
         sbc #>RINGBYTES
 :
   .endif
 .endmacro
-.macro pagestep p, back             ; p's low byte has just carried out of a step forward
-  .if ::BHW                        ; (under $80: p's low byte is now below it): its high
-        inc p+1                     ; byte on one page, folded at the ring end.  C = 0 out
-        lda p+1                     ; (and, without back, a single anonymous label, as ringup's).  With
-        cmp ringehi                 ; back, the Model B's common case branches there
+
+; ----------------------------------------------------------------------------
+; pagestep p, back: p's high byte one page on, folded at the ring's end
+;   In:   p's low byte has just carried out of a step forward of under $80, so it is
+;         now below $80
+;   Out:  p updated;  C = 0;  A clobbered (the Master's only when it folds)
+;         With back, the Model B's common case (no fold) branches to back with C = 0.
+;   Anonymous labels: Model B, one without back and none with it;  Master, one
+;   always (so the Master falls out at the end even given back: follow it with a
+;   branch to back -- frame.s does, bcc).
+; Model B: the fold takes a ring less the low byte's borrow from the high byte.  The
+; low byte is below <RINGBYTES ($80), so the fold always borrows, and the low byte's
+; share is +$80 (an eor).
+; Master: RINGEND = $8000, so N from the inc says it ran off, and the page after the
+; end is $80 exactly (the step is under a page): the high byte goes back to the base,
+; the low byte unchanged (<RINGBYTES = 0).
+; ----------------------------------------------------------------------------
+.macro pagestep p, back
+  .if ::BHW                         ; Model B
+        inc p+1
+        lda p+1
+        cmp ringehi
     .ifblank back
         bcc :+
     .else
         bcc back
     .endif
-        sbc #>RINGBYTES+1           ; C = 1 from the compare: back a ring, less the low
-        sta p+1                     ; byte's borrow -- it is below <RINGBYTES ($80), so
-        lda p                       ; the fold always borrows, and the low byte's is +$80
-        eor #<RINGBYTES
+        sbc #>RINGBYTES+1           ; C = 1 from the compare: a ring, and the borrow
+        sta p+1
+        lda p
+        eor #<RINGBYTES             ; + $80
         sta p
         clc
         .assert <RINGBYTES = $80, error, "pagestep: the Model B's ring folds its low byte by $80"
     .ifblank back
 :
     .endif
-  .else
-        inc p+1                     ; RINGEND = $8000: N from the inc, and the page after
-        bpl :+                      ; the end is $80 exactly (a step under a page), the
-        lda #>RINGBASE              ; low byte unchanged (<RINGBYTES = 0)
+  .else                             ; Master
+        inc p+1                     ; N set: ran off the end
+        bpl :+
+        lda #>RINGBASE
         sta p+1
         .assert <RINGBYTES = 0 && RINGEND = $8000, error, "pagestep: the Master's ring"
 :       clc
   .endif
 .endmacro
-.macro ringdn                       ; A = high byte after moving back
+
+; ----------------------------------------------------------------------------
+; ringdn: fold a high byte just moved back under the ring's base
+;   In:   A = the high byte
+;   Out:  A = the high byte, in the ring;  C = 1 if no fold
+;   Anonymous labels: one.
+; The high byte alone: the Master's ring (RINGBASE is defined only there).
+; ----------------------------------------------------------------------------
+.macro ringdn
         cmp #>RINGBASE
         bcs :+
-        adc #>RINGBYTES
+        adc #>RINGBYTES             ; C = 0 from the compare
 :
 .endmacro
 
-.macro spnext cold                 ; sp on one char (8 bytes), folding at the ring end.
-        lda sp                      ; With cold: the page step is out of line there, in
-        clc                         ; branch reach (spcold, the caller's), and the
-        adc #8                      ; common case falls through
+; ----------------------------------------------------------------------------
+; spnext cold: sp on one char (8 bytes), folding at the ring's end
+;   Out:  sp moved on;  A clobbered;  C = 0 on the fall-through
+;   Without cold: the page step (pagestep sp) is in line.  Anonymous labels: two
+;   (pagestep's and its own -- hence its bcc :++).
+;   With cold: a carry out of the low byte branches to cold, which must be in branch
+;   reach and hold spcold (the caller's); the common case falls through.  Anonymous
+;   labels: none.
+; ----------------------------------------------------------------------------
+.macro spnext cold
+        lda sp
+        clc
+        adc #8
         sta sp
   .if .blank(cold)
         bcc :++                     ; past the fold's own anonymous label
@@ -134,18 +245,29 @@ n2:     tax
         bcs cold
   .endif
 .endmacro
-.macro spcold back                  ; spnext's page step, out of line: back to `back`
-        pagestep sp                 ; (C = 0)
+
+; ----------------------------------------------------------------------------
+; spcold back: spnext's page step, out of line
+;   Out:  jumps to back with C = 0 (pagestep's)
+;   Anonymous labels: one (pagestep's).
+; ----------------------------------------------------------------------------
+.macro spcold back
+        pagestep sp
         jmp back
 .endmacro
 
-; A = a run's chars (rc_n): X for its dispatch -- the Model B's, n, into a table of
-; low bytes; the Master's, 2n, for jmp (abs,x) -- and tmp = its bytes, 8n (C = 0)
+; ----------------------------------------------------------------------------
+; RUNX: a run's dispatch index and byte count
+;   In:   A = the run's chars, n (rc_n)
+;   Out:  X = its dispatch index -- the Model B's n, into a table of low bytes; the
+;         Master's 2n, for jmp (abs,x);  A = tmp = its bytes, 8n;  C = 0
+;   Anonymous labels: none.
+; ----------------------------------------------------------------------------
 .macro RUNX
-  .if BHW
+  .if BHW                           ; Model B
         tax
         asl
-  .else
+  .else                             ; Master
         asl
         tax
   .endif

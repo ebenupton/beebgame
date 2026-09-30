@@ -1,10 +1,41 @@
 ; ============================================================================
-; ringaddr: screen address of map char (w16 = cx 16 bit, A = cy) -> sp
+; engine/tiles.s -- the tile blitter and its frame calls, in bank 6
+;
+; Bank 6 holds every level's tile data, and the code that draws it into the back
+; buffer's ring lives beside it.  The map is in bank 5: once a tile row, drawrect
+; calls low RAM's mapstrip, which pages bank 5 in, runs the gather (gather.s) into
+; GATHERL/GATHERH in low RAM, and pages bank 6 back.  The row loop then draws the
+; tile row's one or two char rows from those pairs.
+;
+; On the Model B the code patches itself (select_backbuf ringaddr's operand, the row
+; loop its dispatch jumps), so every store into bank 6 is inside a write window
+; (cpu.inc: wrsel/wrback); on the Master the window macros are empty.
+;
+;   ringaddr        w16 = map char column, A = char row -> sp = its screen address
+;   RINGLO/RINGHI   the ring rows' addresses (the Model B: a high-byte table a buffer)
+;   drawrect        draw a rectangle of map chars (rc_x, rc_y, rc_w, rc_h)
+;   scroll_validate make the current buffer hold the window, drawing only what it lacks
+;   select_backbuf  point the blitters and sprite records at the current back buffer
+;   bank6_entry     callbank's way in (BANKENTRY, segment TIL6ENT: the start of bank 6)
+;   drawrect_clip   drawrect with the rect clipped to the window
+;
+; Segments: TILCODE (bank 6), TIL6ENT (bank 6's first bytes).
 ; ============================================================================
-        .segment "TILCODE"          ; bank 6 (the sprite prologue has its own: ringaddr7)
+
+; ----------------------------------------------------------------------------
+; ringaddr: the screen address of a map char in the current back buffer
+;   In:   w16 = map char column (16 bit, < 8192), A = map char row
+;   Out:  sp = the address, folded into the ring;  A = sp+1;  X = the ring slot
+;         Y kept.
+; The sprite prologue has its own copy in bank 7 (ringaddr7).  On the Model B the
+; high-byte table is the current buffer's: select_backbuf patches @rh's operand
+; (RINGHIOP).
+; ----------------------------------------------------------------------------
+        .segment "TILCODE"
 ringaddr:
-        ringmod
+        ringmod                     ; A = the row's ring slot
         tax
+        ; ---- sp+1:A = cx*8
         lda w16+1
         sta sp+1
         lda w16
@@ -13,16 +44,20 @@ ringaddr:
         asl
         rol sp+1
         asl
-        rol sp+1                    ; sp+1:A = cx*8; C = 0 (cx < 8192)
+        rol sp+1                    ; C = 0 (cx < 8192)
+        ; ---- + the slot's address, folded at the ring end
         adc RINGLO,x
         sta sp
         lda sp+1
-@rh:    adc RINGHI,x                ; (Model B: the buffer's table, select_backbuf's)
+@rh:    adc RINGHI,x                ; Model B: the buffer's table (select_backbuf's)
         ringup sp
         sta sp+1
         rts
-  .if .not BHW                      ; the Master's rows, one table for both buffers:
-RINGLO:                             ; main and shadow share the addresses
+
+; ---- the ring rows' addresses, RINGROWS of them
+  .if .not BHW
+; The Master: one table for both buffers -- main and shadow RAM share the addresses.
+RINGLO:
   .repeat RINGROWS, r
         .byte <(RINGBASE + r*ROWBYTES)
   .endrepeat
@@ -32,9 +67,10 @@ RINGHI:
   .endrepeat
   .endif
   .if BHW
-RINGHIOP := @rh + 1                 ; (after the rts: := ends the @ scope)
-; the ring rows' addresses, assembled: both bases are xx80, so the low bytes are the
-; two rings' alike and only the high bytes are per buffer
+; The Model B: both ring bases are xx80, so the two rings' low bytes are alike and
+; only the high bytes are per buffer.  RINGHIOP is defined here, after the rts,
+; because := ends the @ scope.
+RINGHIOP := @rh + 1
 RINGLO:
   .repeat RINGROWS, r
         .byte <(RING_A + r*ROWBYTES)
@@ -50,25 +86,60 @@ RINGHI_B:
   .endif
 
 ; ============================================================================
-; drawrect: draw map tiles into the current back buffer.
-;   rc_x (map chars, 16 bit), rc_y (map char rows), rc_w (chars 1..80), rc_h (rows)
+; drawrect: draw map tiles into the current back buffer
+;   In:   rc_x = first map char column (16 bit), rc_y = first map char row,
+;         rc_w = chars wide (1..80), rc_h = char rows (0 draws nothing)
+;   Out:  rc_h = 0.  A, X, Y, sp, tp, ptr, w16, tmp (tmp2 under TILEMIRROR) and
+;         the rc_ work bytes clobbered.
+;
+; Per rect: the invariants once (tx0, tiles-1, the first run's limit and char
+; offset), one ringaddr for the first row, the map row pointer.  Per tile row: one
+; mapstrip (the gather) and one or two char rows (@drawrow).  Per char row: runs --
+; a run is the chars of one tile in this row, at most four -- dispatched by kind:
+;   GATHERH bit 7 set   a stored tile (its page; GATHERL's low 3 bits the kind:
+;                       0 full, 4..6 a half, 3 a mirror under TILEMIRROR)
+;   GATHERH = 0         the level's solid (id 0): one byte, SOLIDF, down every line
+;   GATHERH = $40       a flat tile or the other solid: a pair from FLATTAB
+; and entered into an unrolled block by the run's length (1..4 chars).  The gather's
+; encoding is described in docs/DESIGN.md (The tiles) and gather.s.
+;
+; Invariants an editor must keep:
+; - A run never crosses the ring end.  A row may straddle it, but a ring row is 80
+;   chars and the ring a whole number of them, so the end falls on a map column that
+;   is a multiple of 80 -- a tile boundary, where a run starts.  A run can only END
+;   exactly there, which carries sp into a new page: @advc folds it (pagestep).  So
+;   the runs have no wrap test.
+; - C is clear at every entry to @run: @drawrow's clc, and @advsp's sp step on the
+;   loop back.  @hfill's sbc halfhi and the mirror's sbc #0 each borrow one on it.
+;   @drawrow's exit (@rowdone) does NOT leave C clear.
+; - rc_lim: the chars the current run may take -- 4 - rc_x&3 for a row's first run
+;   (rc_sc0, set per rect), 4 for the later ones (@runnext).
+; - @s0f's operand is SOLIDF and @hp0/@hp1's are HPAIR0/HPAIR1: the loader patches
+;   them.  Their labels must stay (build.sh finds @s0f in game.dbg).
+; - Model B: the dispatch patches a jmp's low byte, so the whole of drawrect, to
+;   @done, is a write window into bank 6; each block group (@b, @m, @f) must sit in
+;   one page (asserted after the blocks).
 ; ============================================================================
-        .segment "TILCODE"          ; bank 6, with the tiles
+        .segment "TILCODE"
 drawrect:
         lda rc_h
         bne :+
         rts
 :
-  .if BHW                           ; a write window, to @done: the runs patch their
-        bankimm lda, BANK_TILES, BANK_TILES, 3   ; dispatch jumps (cpu.inc; A = bank 6's,
-        wrsel BANK_TILES, BANK_TILES, 3          ; paged already: harmless on a plain one)
+  .if BHW
+        ; ---- open the write window, to @done: the runs patch their dispatch jumps
+        ; (cpu.inc).  A = bank 6's, which is paged already: harmless on a plain machine.
+        bankimm lda, BANK_TILES, BANK_TILES, 3
+        wrsel BANK_TILES, BANK_TILES, 3
   .endif
   .if BHW
-        lda mrow                    ; the map row the mirror follows (calc_ring): a rect
-        sec                         ; that touches it says which window columns it wrote
+        ; ---- the mirror's notes: a rect that touches the map row the mirror follows
+        ; (mrow, calc_ring) says which window columns it wrote (mirdirty6, banks.s)
+        lda mrow
+        sec
         sbc rc_y
         cmp rc_h
-        bcs @nomir
+        bcs @nomir                  ; the rect misses mrow
         lda rc_x
         sec
         sbc wcx                     ; the window column (rects are window clipped)
@@ -78,12 +149,15 @@ drawrect:
         tax
         dex                         ; ..the last one
         pla
-        jsr mirdirty6
+        jsr mirdirty6               ; A = first column, X = last
 @nomir:
   .endif
-        ; ---- per-rect invariants: tx0 = rc_x >> 2 ; tiles-1 = ((rc_x + rc_w - 1) >> 2) - tx0
+        ; ---- per-rect invariants: tx0 = rc_x >> 2, and tiles-1 =
+        ; ((rc_x + rc_w - 1) >> 2) - tx0 = ((rc_x & 3) + rc_w - 1) >> 2, so tx1 never
+        ; needs building: at most 3 + 80 - 1 = 82, one byte, no 16-bit shift.
+        ; Each load of rc_x also leaves the copy ringaddr needs in w16.
         lda rc_x+1
-        sta w16+1                   ; the ring address's copy, from this load too
+        sta w16+1                   ; ringaddr's copy
         lsr                         ; C = bit 0, A = bit 1 (rc_x+1 <= 3)
         tax
         lda rc_x
@@ -91,24 +165,27 @@ drawrect:
         cpx #1                      ; C = bit 1
         ror                         ; A = tx0 (map width <= 256 tiles)
         sta rc_tx0
-        lda rc_x                    ; tiles-1 = tx1 - tx0 = ((rc_x & 3) + rc_w - 1) >> 2,
-        sta w16                     ; the copy the ring address needs, from the same load
-        and #3                      ; so tx1 never needs building: max 3 + 80 - 1 = 82,
-        sta rc_sc0                  ; one byte, no 16-bit shift, no w16
+        lda rc_x
+        sta w16                     ; ringaddr's copy
+        and #3
+        sta rc_sc0                  ; (rc_x & 3 for now)
         asl
         asl
         asl                         ; C = 0 (rc_sc0 < 4): the adc's clc
-        sta rc_ro0
+        sta rc_ro0                  ; the first run's char offset, (rc_x & 3) << 3
         lda rc_sc0
         adc rc_w
-        sbc #0                      ; C = 0 (<= 83, no carry): the -1
+        sbc #0                      ; the -1 (C = 0); <= 83, no carry out
         lsr
         lsr
-        sta rc_nt
-        lda #4                      ; the first run's limit, once a rect (each row's first
-        sec                         ; run takes it, @drawrow; the later runs 4, @runnext)
+        sta rc_nt                   ; tiles-1
+        ; the first run's limit, once a rect: each row's first run takes it
+        ; (@drawrow), the later runs 4 (@runnext)
+        lda #4
+        sec
         sbc rc_sc0
-        sta rc_sc0
+        sta rc_sc0                  ; 4 - (rc_x & 3)
+        ; ---- the first char row's screen address
         lda rc_y
         jsr ringaddr
         sta rc_sp+1                 ; ringaddr returns A = sp+1 (its last store)
@@ -116,14 +193,17 @@ drawrect:
         sta rc_sp
         ; ---- map row pointer: built once here (arithmetic, in low RAM: maprow6) and
         ; stepped on by the stride per tile row (@nextrow)
-  .if TALLMAP                       ; (char rows are kept a byte, the ring's modulus needs
-        lda rc_y                    ;  no more; the map row does: the rect's full row is
-        sec                         ;  the window's, wcyh:wcy, plus its offset from it)
-        sbc wcy                     ; the offset, -128..127 (A keeps it: ldy, cmp and
-        ldy #0                      ;  dey leave it be)
+  .if TALLMAP
+        ; Char rows are kept a byte (the ring's modulus needs no more) but the map row
+        ; needs more: the rect's full row is the window's, wcyh:wcy, plus its offset
+        ; from it.  Only the carry of that add is wanted: its low byte is rc_y.
+        lda rc_y
+        sec
+        sbc wcy                     ; the offset, -128..127 (ldy, cmp, dey keep A)
+        ldy #0
         cmp #$80
         bcc :+
-        dey                         ; (its sign)
+        dey                         ; Y = its sign
 :       clc
         adc wcy                     ; (= rc_y: only the carry is wanted)
         tya
@@ -133,22 +213,24 @@ drawrect:
         ror                         ; the tile row: the full row >> 1
   .else
         lda rc_y
-        lsr
+        lsr                         ; the tile row
   .endif
         jsr maprow6
-        lda rc_y                    ; only a rect's first tile row can start on an odd
-        and #1                      ; char row -- after it @nextrow always lands even, so
-        beq @rowy                   ; the test is here, once, not in the loop
-        jsr mapstrip                ; (odd: the first tile row's gather, then its second
-                                    ;  char row)
-        jmp @second
+        ; ---- only a rect's first tile row can start on an odd char row -- after it
+        ; @nextrow always lands even -- so the test is here, once, not in the loop
+        lda rc_y
+        and #1
+        beq @rowy
+        jsr mapstrip                ; odd: the first tile row's gather,
+        jmp @second                 ; then its second char row
+        ; ---- per tile row: the gather, run in bank 5 beside the map (gather5), into
+        ; GATHERL/H in low RAM.  The write bank stays drawrect's window's, 6: the
+        ; gather stores into no bank, nor does an interrupt.
 @rowy:
-        jsr mapstrip                ; the row's gather, run in bank 5 beside the map
-                                    ; (gather5, below): GATHERL/H in low RAM.  The write
-                                    ; bank stays drawrect's window's, 6: the gather
-                                    ; stores into no bank, nor does an interrupt
-        ; ---- draw this char row, and (without re-gathering) the odd row of the same tile row
-        stz rc_sub
+        jsr mapstrip
+        ; ---- draw this char row, and (without re-gathering) the odd row of the
+        ; same tile row
+        stz rc_sub                  ; the tile's top char row: offset 0
         lda rc_ro0
         sta rowoff
         lda #1                      ; the char row, as a half tile's flag bit
@@ -157,7 +239,7 @@ drawrect:
         dec rc_h
         beq @done
 @second:
-        lda #32
+        lda #32                     ; the tile's bottom char row: offset 32
         sta rc_sub
         ora rc_ro0
         sta rowoff
@@ -166,7 +248,8 @@ drawrect:
         jsr @drawrow
         dec rc_h
         beq @done
-@nextrow:                           ; one map row on
+@nextrow:
+        ; ---- one map row on
         lda ptr
         clc
         adc MAPSTRIDE
@@ -175,71 +258,87 @@ drawrect:
         adc MAPSTRIDE+1
         sta ptr+1
         jmp @rowy
-@done:  wrback BANK_TILES, 4        ; (the window's end)
+@done:  wrback BANK_TILES, 4        ; the write window's end
         rts
+
         ; ---- @run's rarer ways, here behind @drawrow in its branches' reach: a fill
         ; other than the solid (to @solid), a half tile
 @fx:    jmp @solid                  ; (C is clear: clear at every entry to @run)
-@half:  and rowbit                  ; a half tile: is this row its fill?  (A mirror's 3
-        beq @hcopy                  ; is: @hfill tells them apart)
+        ; a half tile, A = its kind: is this row its fill?  A mirror's 3 also says
+        ; yes: @hfill tells them apart
+@half:  and rowbit
+        beq @hcopy
         jmp @hfill
-@hcopy: lda GATHERL,x               ; no: the stored row -- (k&7)<<5 with this run's
-        eor rowoff                  ; char offset less the row's 32: rowoff's bits
-        and #$E0                    ; outside $E0 through the two eors
+        ; no: the stored row -- GATHERL's bits $E0, (k&7)<<5, with rowoff's others,
+        ; this run's char offset less the row's 32 (the two eors merge them)
+@hcopy: lda GATHERL,x
+        eor rowoff
+        and #$E0
         eor rowoff
         jmp @tpsta
-@drawrow:                           ; (rc_y is the rect's first row still: only
-                                    ;  drawrect's entry reads it, and every caller sets it)
+
+; ----------------------------------------------------------------------------
+; @drawrow: one char row of the rect, run by run
+;   In:   rc_sp = the row's screen address; rc_sub, rowoff, rowbit set for the row;
+;         GATHERL/GATHERH = the tile row's gather
+;   Out:  rc_sp stepped one char row on (+640, folded at the ring end);  C undefined
+; rc_y is the rect's first row still: only drawrect's entry reads it, and every
+; caller sets it.
+; ----------------------------------------------------------------------------
+@drawrow:
         ; ---- screen base (per-rect ringaddr, +640 per row)
         lda rc_sp
         sta sp
         lda rc_sp+1
         sta sp+1
-        ; (a row may straddle the ring end, a run never does: a ring row is 80 chars
-        ; and the ring a whole number of them, so the end falls on a map column that
-        ; is a multiple of 80 -- a tile boundary, where a run starts.  A run can end
-        ; exactly there, which @advc folds.)
+        ; ---- the run state: first tile, first run's limit, all the row's chars left
         lda #0
-        sta rc_gi
+        sta rc_gi                   ; the run's index into GATHERL/H
         lda rc_sc0
         sta rc_lim
         lda rc_w
-        sta cnt
-        clc                         ; C is clear at every entry to @run (@advsp's sp step
-        ; leaves it clear on the loop back): @hfill's sbc halfhi and the mirror's borrow one
+        sta cnt                     ; chars left in the row
+        clc                         ; C = 0 at every entry to @run (see drawrect)
+
+        ; ---- a run: the kind from GATHERH.  Bit 7 set: a tile page ($80-$BF),
+        ; copied.  Clear: a fill -- 0 the level's solid, on through (the commonest
+        ; run); $40 a flat tile or the other solid (@fx).
 @run:
         ldx rc_gi
-        lda GATHERH,x               ; bit 7 set: a tile page ($80-$BF), copied; clear, a
-        bmi @tile                   ; fill: 0 the level's solid, on through (the commonest
+        lda GATHERH,x
+        bmi @tile
         SAMEPAGE *, @tile
-        bne @fx                     ; run), $40 up a flat tile or the other solid
+        bne @fx
         ; ---- id 0, the level's solid, the commonest run: one byte, the loader's
-        ; (SOLIDF), stored down every line of it
-@sol0:  lda rc_lim                  ; chars in this run, as @tpset
+        ; (SOLIDF), stored down every line of it.  Chars in this run, as @tpset.
+@sol0:  lda rc_lim
         cmp cnt
         bcc :+
         lda cnt
-:       sta rc_n
+:       sta rc_n                    ; min(rc_lim, cnt)
         RUNX                        ; X, tmp = 8*rc_n
 @sdisp:
   .if BHW
-        lda @mtl-1,x                ; the entry's low byte into the jmp below (the
-        sta @sj+1                   ; blocks share a page: asserted)
+        ; the entry's low byte into the jmp below (the blocks share a page: asserted)
+        lda @mtl-1,x
+        sta @sj+1
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
 @sj:    jmp @m31
   .else
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
         jmpx @mt-2
   .endif
+
+        ; ---- a stored tile.  Every tile is in bank 6, selected once per tile row.
 @tile:  sta tp+1                    ; the tile pointer's high byte
-        lda GATHERL,x               ; every tile is in bank 6, selected once per tile row
+        lda GATHERL,x
         and #7                      ; the kind: 0 a full tile, 4..6 a half, 3 a mirror
         bne @half
 @full:  lda GATHERL,x
-        ora rowoff                  ; (a full tile's lo byte is (id&3)<<6: bits 0-5 clear)
+        ora rowoff                  ; a full tile's lo byte is (id&3)<<6: bits 0-5 clear
 @tpsta: sta tp
+        ; ---- chars in this run: min(rc_lim, cnt) -> rc_n, X, tmp = 8*rc_n
 @tpset:
-        ; chars in this run: min(rc_lim, cnt) -> rc_n, X, tmp = 8*rc_n
         lda rc_lim
         cmp cnt
         bcc :+
@@ -248,24 +347,31 @@ drawrect:
         RUNX
 @tdisp:
   .if BHW
-        lda @jtl-1,x                ; the entry's low byte into the jmp (the blocks
-        sta @tj+1                   ; share a page: asserted)
+        ; the entry's low byte into the jmp (the blocks share a page: asserted)
+        lda @jtl-1,x
+        sta @tj+1
 @tj:    jmp @b31
   .else
         jmpx @jt-2
 @jt:    .word @b7, @b15, @b23, @b31
   .endif
-        ; unrolled copy, one block per char in descending char order so that entry at
-        ; char n-1 copies chars n-1..0.
-.macro CPYN                         ; next line: A = (tp),y -> (sp),y ; y++
+
+; ----------------------------------------------------------------------------
+; The tile copy: unrolled, one block per char in descending char order, so that
+; entry at char n-1 copies chars n-1..0.  (tp),y -> (sp),y, 8 lines a char.
+; ----------------------------------------------------------------------------
+; CPYN: one line, A = (tp),y -> (sp),y; Y+1
+.macro CPYN
         lda (tp),y
         sta (sp),y
         iny
 .endmacro
+; CHARCPY c: char c's 8 lines, (tp)+8c -> (sp)+8c.  A, Y clobbered; C kept.
 .macro CHARCPY c
 .if c = 0
   .if ::BHW
-        ldy #0                      ; line 0 (staz would reload the same 0 into Y)
+        ; line 0 (staz would reload the same 0 into Y)
+        ldy #0
         lda (tp),y
         sta (sp),y
         iny
@@ -293,48 +399,67 @@ drawrect:
 @b23:   CHARCPY 2
 @b15:   CHARCPY 1
 @b7:    CHARCPY 0
-@advsp: lda cnt                     ; the chars left: C is clear at every entry to @advsp,
-        sbc rc_n                    ; so cnt - rc_n - 1, -1 at the row's last run -- whose sp
-        bmi @rowdone                ; step is skipped: sp is dead after it (@rowdone steps
-        adc #0                      ; rc_sp); else C = 1: +1 back, and C = 0
+
+; ----------------------------------------------------------------------------
+; @advsp: after a run -- count its chars off and step sp past them.  C is clear at
+; every entry to @advsp, so the sbc gives cnt - rc_n - 1: -1 at the row's last run,
+; whose sp step is skipped (sp is dead after it: @rowdone steps rc_sp).  Otherwise
+; C = 1, and the adc #0 puts the 1 back and leaves C = 0.
+; ----------------------------------------------------------------------------
+@advsp: lda cnt
+        sbc rc_n
+        bmi @rowdone                ; the row's last run
+        adc #0                      ; C = 1: +1 back, and C = 0
         sta cnt
         lda sp
-        adc tmp
+        adc tmp                     ; sp += 8*rc_n
         sta sp
-        bcs @advc                   ; (the carry out of line, after @rowdone)
-@runnext:                           ; (C = 0: the loop back's)
-        lda #4                      ; later tiles in the row: whole
+        bcs @advc                   ; a page on: the carry out of line, after @rowdone
+        ; ---- the next run: later tiles in the row are whole and start at column 0
+@runnext:                           ; C = 0 (the loop back's)
+        lda #4
         sta rc_lim
         lda rc_sub
-        sta rowoff                  ; later tiles in the row start at column 0
+        sta rowoff
         inc rc_gi
         jmp @run
+        ; ---- the row done: next char row, +640 with the ring wrap
 @rowdone:
-        lda rc_sp                   ; next char row: +640 with ring wrap
+        lda rc_sp
         adc #<ROWBYTES              ; C = 0: @advsp's sbc borrowed
         sta rc_sp
         lda rc_sp+1
         adc #>ROWBYTES
-        ringtest @rfold             ; (the fold out of line)
+        ringtest @rfold             ; the fold out of line
         sta rc_sp+1
         rts
 @rfold: ringfold rc_sp
         sta rc_sp+1
         rts
-@advc:  pagestep sp, @runnext        ; a page on: the ring's end only if the run ended
-        jmp @runnext                ; exactly there (never inside one: drawrect); C = 0
-  .if TILEMIRROR                    ; (cpu.inc: off by default -- no level needs a mirror)
-        ; ---- a mirrored full tile: its source's chars right to left, each byte's two
-        ; game pixels swapped -- ((b & $33) << 2) | ((b & $CC) >> 2); the dither is per
-        ; game pixel, so a game pixel's dots move as one.  A char at a time through spnext,
-        ; which folds at the ring end: rare tiles (the packer mirrors only what the
-        ; bank cannot hold, the least used first), so no unrolled copy.
+        ; ---- sp's carry into a new page: the ring's end only if the run ended exactly
+        ; there (never inside one: drawrect).  C = 0 out.  (Model B: pagestep's common
+        ; case branches to @runnext itself; the Master's falls to the jmp.)
+@advc:  pagestep sp, @runnext
+        jmp @runnext
+
+  .if TILEMIRROR
+; ----------------------------------------------------------------------------
+; @mir: a mirrored full tile (TILEMIRROR, cpu.inc: off by default -- no level needs
+; a mirror).  Its source's chars right to left, each byte's two game pixels swapped:
+; ((b & $33) << 2) | ((b & $CC) >> 2).  The dither is per game pixel, so a game
+; pixel's dots move as one.  A char at a time through spnext, which folds at the ring
+; end: mirrors are rare tiles (the packer mirrors only what the bank cannot hold, the
+; least used first), so there is no unrolled copy.
+;   In:   X = rc_gi;  tp+1 = the source's page (@tile);  C = 0 (as at @run)
+; ----------------------------------------------------------------------------
 @mir:   lda GATHERL,x
-        and #$C0
+        and #$C0                    ; the source tile's offset in its page
         ora rc_sub                  ; the char row
         sta tp
-        lda rc_lim                  ; the first char drawn is the source's rc_lim - 1 (C = 0:
-        sbc #0                      ;  clear at every entry to @run)
+        ; the first char drawn is the source's rc_lim - 1 (the sbc #0 is the -1:
+        ; C = 0, clear at every entry to @run)
+        lda rc_lim
+        sbc #0
         asl
         asl
         asl
@@ -344,8 +469,9 @@ drawrect:
         cmp cnt
         bcc :+
         lda cnt
-:       sta rc_n
-        sta tmp2
+:       sta rc_n                    ; min(rc_lim, cnt)
+        sta tmp2                    ; chars to go
+        ; ---- one char: 8 lines, each byte's pixels swapped
 @mc:    ldy #7
 :       lda (tp),y
         and #$33
@@ -360,32 +486,41 @@ drawrect:
         sta (sp),y
         dey
         bpl :-
-        lda tp                      ; the source's char to the left (a run stays in its
-        sec                         ; tile's char row: no borrow before the last char,
-        sbc #8                      ; and after it tp is dead)
+        ; the source's char to the left: a run stays in its tile's char row, so no
+        ; borrow before the last char, and after it tp is dead
+        lda tp
+        sec
+        sbc #8
         sta tp
         spnext
         dec tmp2
         bne @mc
-        lda cnt                     ; @advsp's count, its sp step done here (spnext)
+        ; ---- @advsp's count; its sp step is done already (spnext)
+        lda cnt
         clc
-        sbc rc_n
+        sbc rc_n                    ; cnt - rc_n - 1
         bmi @mdone
-        adc #0
+        adc #0                      ; C = 1: +1 back, and C = 0 for @runnext
         sta cnt
         jmp @runnext
 @mdone: jmp @rowdone
   .endif
-        ; ---- fills: a half tile's fill row, a flat tile, the other solid -- no source
-        ; bytes: a pair, even lines tp, odd tp+1, down every char
+
+; ----------------------------------------------------------------------------
+; The fills: a half tile's fill row, a flat tile, the other solid -- no source bytes,
+; a pair: even lines tp, odd lines tp+1, down every char.  (tp is otherwise unused
+; on this path.)
+; ----------------------------------------------------------------------------
 @hfill:
   .if TILEMIRROR
         lda GATHERL,x               ; the kind: bit 2 clear is a mirror (3), set a half
         and #4
         beq @mir
   .endif
-        lda GATHERH,x               ; the half's pair: k back out of its address
-        sbc halfhi                  ; (C is clear at every entry to @run: halfhi is less 1)
+        ; ---- a half's pair: k back out of its address.  The sbc borrows one (C is
+        ; clear at every entry to @run), and halfhi is the halves' page less 1.
+        lda GATHERH,x
+        sbc halfhi
         asl
         asl
         asl
@@ -395,19 +530,23 @@ drawrect:
         lsr
         lsr
         lsr
-        lsr                         ; (k & 7) << 1: a half's GATHERL has bits 4 and 3 clear
+        lsr                         ; (k & 7) << 1: a half's GATHERL has bits 4, 3 clear
         ora tmp
-        tay
-@hp0:   lda $FFFF,y                 ; lda HALFPAIR,y: the pair, from where the loader
-        sta tp                      ; put the table (it patches both operands: HPAIR0,
-@hp1:   lda $FFFF,y                 ; HPAIR1, defined after the row loop)
+        tay                         ; Y = 2k: the pair's index
+        ; lda HALFPAIR,y twice: the pair, from where the loader put the table.  It
+        ; patches both operands (HPAIR0, HPAIR1, defined after the row loop).
+@hp0:   lda $FFFF,y
+        sta tp
+@hp1:   lda $FFFF,y
         sta tp+1
         jmp @fillgo                 ; (the rarer: @solid falls through)
-@solid: ldy GATHERL,x               ; the flat pair: even lines from tp, odd from tp+1
-        lda FLATTAB,y               ; (tp is otherwise unused on this path)
+        ; ---- a flat tile or the other solid: the pair from FLATTAB
+@solid: ldy GATHERL,x
+        lda FLATTAB,y
         sta tp
         lda FLATTAB+1,y
         sta tp+1
+        ; ---- chars in this run: min(rc_lim, cnt) -> rc_n, X, tmp = 8*rc_n
 @fillgo:
         lda rc_lim
         cmp cnt
@@ -417,16 +556,19 @@ drawrect:
         RUNX
 @fdisp:
   .if BHW
-        lda @ftl-1,x                ; the entry's low byte into the jmp (A is dead:
-        sta @fj+1                   ; every entry loads tp); the blocks share a page
+        ; the entry's low byte into the jmp (A is dead: every entry loads tp); the
+        ; blocks share a page
+        lda @ftl-1,x
+        sta @fj+1
 @fj:    jmp @f31
   .else
         jmpx @ft-2
 @ft:    .word @f7, @f15, @f23, @f31
   .endif
-; the pair: even lines tp, odd lines tp+1 -- each byte loaded once a char and stored
-; four times, every store setting its own Y (70 cycles a char, where alternating the
-; loads down a dey chain was 88)
+; PCHAR c: char c filled with the pair -- even lines tp, odd lines tp+1.  Each byte
+; is loaded once a char and stored four times, every store setting its own Y (70
+; cycles a char, where alternating the loads down a dey chain was 88).  A, Y
+; clobbered; C kept.
 .macro PCHAR c
         lda tp
         ldy #8*c+6
@@ -453,9 +595,13 @@ drawrect:
 @f7:    PCHAR 0
         jmp @advsp
 
+; ----------------------------------------------------------------------------
+; The solid's blocks: A (SOLIDF) stored down all 8 lines of each char, from @s0f.
+; ----------------------------------------------------------------------------
   .if .not BHW
 @mt:    .word @m7, @m15, @m23, @m31
   .endif
+; MFIL k: A stored at lines k down to k-7 (one char, k = 8c+7).  Y clobbered; A, C kept.
 .macro MFIL k
         ldy #k
         sta (sp),y
@@ -464,7 +610,7 @@ drawrect:
         sta (sp),y
         .endrepeat
 .endmacro
-        PAD ::PADB_M6, 0            ; (@m31..@m7 in one page: pads.inc)
+        PAD ::PADB_M6, 0            ; @m31..@m7 in one page (pads.inc)
 @m31:   MFIL 31
 @m23:   MFIL 23
 @m15:   MFIL 15
@@ -476,35 +622,48 @@ drawrect:
         sta (sp),y
         staz sp                     ; line 0 non-indexed
         jmp @advsp
-  .if BHW                           ; the Model B's dispatch: each group's entries by
-@jtl:   .byte <@b7, <@b15, <@b23, <@b31   ; chars (1..4), low bytes only -- the jmp's
-@mtl:   .byte <@m7, <@m15, <@m23, <@m31   ; high byte is its group's page
+
+  .if BHW
+; The Model B's dispatch: each group's entries by chars (1..4), low bytes only -- the
+; jmp's high byte is its group's page.
+@jtl:   .byte <@b7, <@b15, <@b23, <@b31
+@mtl:   .byte <@m7, <@m15, <@m23, <@m31
 @ftl:   .byte <@f7, <@f15, <@f23, <@f31
         .assert >@b7 = >@b31 && >@m7 = >@m31 && >@f7 = >@f31, error, "a dispatch group straddles a page: pads.inc PADB_M6 (or move it)"
   .endif
 
-; @hfill's two loads of a half tile's pair: the table sits above the halves, wherever
-; the level's tiles ended, and the loader patches the operands.  (Defined here, after
-; the row loop: a label would end its @ scope, and := puts them in labels.txt.)
+; ---- the loader's patch points in the row loop
+; HPAIR0/HPAIR1: @hfill's two loads of a half tile's pair.  The table sits above the
+; halves, wherever the level's tiles ended, and the loader patches the operands.
+; Defined here, after the row loop: a label would end its @ scope, and := puts them
+; in labels.txt.  The first := ends the @ scope, so HPAIR1 goes by HPAIR0.
         .assert @hp1 = @hp0 + 5, error, "HPAIR1 must be 5 bytes past HPAIR0"
-HPAIR0  := @hp0 + 1                 ; (the first := ends the @ scope: HPAIR1 goes by it)
+HPAIR0  := @hp0 + 1
 HPAIR1  := HPAIR0 + 5
-; (@s0f's operand, the solid's fill byte, is SOLIDF to the loader: build.sh finds the
-; label in game.dbg, which lists cheap labels -- a symbol here would end the scope)
+; SOLIDF: @s0f's operand, the solid's fill byte.  build.sh finds the label in
+; game.dbg, which lists cheap labels -- a symbol here would end the scope.
 
 ; ============================================================================
 ; scroll_validate: make the current buffer hold the window (wcx, wcy), ROWCHARS x
 ; BUFROWS, drawing only the strips it lacks
-        .segment "TILCODE"          ; bank 6, with the row loop
+;   In:   curbuf;  wcx (16 bit), wcy;  the buffer's BUF_CX/BUF_CXH/BUF_CY
+;   Out:  the buffer's BUF_CX/BUF_CXH/BUF_CY = the window, BUF_BOTOK = 0.
+;         A, X, Y, w16, w16b and drawrect's work clobbered.
+; dx = wcx - BUF_CX: |dx| < 80 draws the new columns (a strip of dx columns, all
+; BUFROWS high); dy = wcy - BUF_CY: a small one draws the new rows (full width).
+; Anything bigger redraws the whole window (@full).  An invalid buffer holds
+; BUF_CX = $80xx (lvreset, mark_dirty), which the |dx| >= 80 test sends to @full.
+; Called from low RAM's validate, which pages bank 6 in.
+; ============================================================================
+        .segment "TILCODE"
 scroll_validate:
-        ldx curbuf                  ; (an invalid buffer holds BUF_CX = $80xx, which the
-                                    ;  |dx| >= 80 test below sends to @full)
-        ; dy = wcy - BUF_CY
+        ldx curbuf
+        ; ---- dy = wcy - BUF_CY
         lda wcy
         sec
         sbc BUF_CY,x
         sta w16b
-        ; dx = wcx - BUF_CX
+        ; ---- dx = wcx - BUF_CX
         lda wcx
         sec
         sbc BUF_CX,x
@@ -512,14 +671,14 @@ scroll_validate:
         lda wcx+1
         sbc BUF_CXH,x
         sta w16+1
-        ; |dx| >= 80 -> full  (A still holds w16+1, flags still from the sbc)
+        ; ---- |dx| >= 80 -> full  (A still holds w16+1, flags still from the sbc)
         beq @dxpos
         cmp #$FF
         bne @full
         lda w16
         cmp #<-79
         bcc @full
-        ; dx negative: draw cols wcx .. wcx+(-dx)-1, rows wcy..wcy+BUFROWS-1
+        ; ---- dx negative: draw cols wcx .. wcx+(-dx)-1, rows wcy..wcy+BUFROWS-1
         eor #$FF                    ; (A still holds w16)
         adc #0                      ; C = 1 from the cmp: A = -w16, and C = 0 (w16 <> 0)
         sta rc_w
@@ -528,17 +687,19 @@ scroll_validate:
         lda wcx+1
         sta rc_x+1
         bcc @docols                 ; C = 0 from the adc
-@full:  ; (here, between two unconditional exits, in reach of every branch to it)
+        ; ---- the whole window.  Here, between two unconditional exits, in reach of
+        ; every branch to it.
+@full:
         lda wcy
         sta rc_y
         lda #BUFROWS
         sta rc_h
         bne @dorows                 ; BUFROWS <> 0
 @dxpos: lda w16
-        beq @dyc
+        beq @dyc                    ; dx = 0
         cmp #ROWCHARS
         bcs @full                   ; not taken: C = 0 for the adc
-        ; dx positive: cols (oldcx+80) .. wcx+79 = dx cols starting at wcx+80-dx
+        ; ---- dx positive: cols (oldcx+80) .. wcx+79 = dx cols starting at wcx+80-dx
         sta rc_w
         eor #$FF                    ; A = 255 - rc_w, C still 0 from the cmp above
         adc #ROWCHARS               ; A = ROWCHARS-1-rc_w, C = 1 (rc_w <= 79)
@@ -553,9 +714,11 @@ scroll_validate:
         lda #BUFROWS
         sta rc_h
         jsr drawrect
+        ; ---- dy
 @dyc:   lda w16b
         beq @done
         bpl @dypos
+        ; ---- dy negative: rows wcy .. wcy+(-dy)-1
         cmp #<-30
         bcc @full
         eor #$FF
@@ -564,6 +727,7 @@ scroll_validate:
         lda wcy
         sta rc_y
         bcc @dorows                 ; C = 0 from the adc
+        ; ---- dy positive: the dy rows starting at wcy+BUFROWS-dy
 @dypos: cmp #BUFROWS
         bcs @full                   ; not taken: C = 0 for the adc
         sta rc_h
@@ -571,6 +735,7 @@ scroll_validate:
         adc #BUFROWS                ; A = BUFROWS-1-rc_h, C = 1 (rc_h <= BUFROWS-1)
         adc wcy                     ; + wcy + 1 -> wcy + BUFROWS - rc_h
         sta rc_y
+        ; ---- rows rc_y.., rc_h of them, the window's full width
 @dorows:
         lda wcx
         sta rc_x
@@ -579,6 +744,7 @@ scroll_validate:
         lda #ROWCHARS
         sta rc_w
         jsr drawrect                ; (falls into @done)
+        ; ---- the buffer now holds the window
 @done:
         ldx curbuf
         stz BUF_BOTOK,x             ; the window moved: the slot below is stale again
@@ -593,23 +759,36 @@ scroll_validate:
 ; ============================================================================
 ; Frame control
 ; ============================================================================
-; select_backbuf: point the blitters at the current back buffer -- on the Master CPU
-; access to its RAM (ACCCON X), on the Model B its ring's constants -- and the
-; sprite records at its half
-        .segment "TILCODE"          ; bank 6 (it patches ringaddr's operand)
+; ----------------------------------------------------------------------------
+; select_backbuf: point the blitters at the current back buffer, and the sprite
+; records at its half
+;   In:   curbuf (0/1)
+;   Out:  the Master: ACCCON's X bit (CPU access to shadow RAM for buffer 1).
+;         The Model B: ringbhi, ringehi, ringe3 = the buffer's ring's constants, and
+;         ringaddr's high-byte table (RINGHIOP) patched to the buffer's.
+;         Both: recb (TIGHTBSS) or recp = the buffer's first sprite record.
+;         A, X clobbered;  Y kept.
+; It patches ringaddr's operand, so it is in bank 6; low RAM's selbb calls it with
+; bank 6 paged and a write window open.
+; ----------------------------------------------------------------------------
+        .segment "TILCODE"
 select_backbuf:
   .if BHW
-        ldx curbuf                  ; the buffer's ring: its base and end, the two
-        lda @bhi,x                  ; derived constants the blitters' wrap tests use,
-        sta ringbhi                 ; and its row table for ringaddr
+        ; ---- the buffer's ring: its base and end, the two derived constants the
+        ; blitters' wrap tests use (its row table for ringaddr is below)
+        ldx curbuf
+        lda @bhi,x
+        sta ringbhi
         lda @ehi,x
         sta ringehi
         sec
         sbc #3
-        sta ringe3
+        sta ringe3                  ; >RINGEND - 3 (mirror.s)
   .else
-        php                         ; the ISR writes ACCCON's D bit; this read-modify-
-        sei                         ; write of the X bit must not straddle one
+        ; ---- ACCCON's X bit.  The ISR writes ACCCON's D bit: this read-modify-write
+        ; must not straddle one.
+        php
+        sei
         lda ACCCON
         and #$FB
         ldx curbuf
@@ -618,17 +797,19 @@ select_backbuf:
 :       sta ACCCON
         plp
   .endif
+        ; ---- the sprite records: X = curbuf (0/1)
   .if TIGHTBSS
-        lda @rb,x                   ; X = curbuf (0/1): its first sprite record
+        lda @rb,x                   ; its first sprite record
         sta recb
   .else
-        lda @rlo,x                  ; X = curbuf (0/1): its sprite record base
+        lda @rlo,x                  ; its sprite record base
         sta recp
         lda @rhi,x
         sta recp+1
   .endif
   .if BHW
-        lda @thl,x                  ; ringaddr's high bytes: this buffer's table
+        ; ---- ringaddr's high bytes: this buffer's table
+        lda @thl,x
         sta RINGHIOP
         lda @thh,x
         sta RINGHIOP+1
@@ -647,24 +828,30 @@ select_backbuf:
 @rhi:   .byte >SPRREC, >(SPRREC+MAXREC*RECSZ)
   .endif
 
-
-        .segment "TIL6ENT"         ; the start of bank 6
 ; ============================================================================
-; callbank's way into this bank (BANKENTRY): the write bank first -- A is the bank, as
-; callbank left it -- then drawrect_clip
+; bank6_entry: callbank's way into this bank (BANKENTRY), at the start of bank 6
+; (segment TIL6ENT).  It sets no write bank: drawrect_clip stores into no bank, and
+; drawrect opens and closes its own window.  It falls straight into drawrect_clip.
+; ============================================================================
+        .segment "TIL6ENT"
 bank6_entry:
         .assert * = BANKENTRY, error, "bank6_entry must start bank 6"
-                                    ; (no write bank: drawrect_clip stores into no bank,
-                                    ;  and drawrect opens and closes its own window)
+
+; ----------------------------------------------------------------------------
 ; drawrect_clip: drawrect, with the rect clipped to the current window
 ; (rows wcy..wcy+BUFROWS-1, cols wcx..wcx+ROWCHARS-1)
+;   In:   rc_x (16 bit), rc_y, rc_w, rc_h: the rect, unclipped
+;   Out:  the rect clipped, then drawrect (tail jump);  or nothing drawn if none of
+;         it is in the window.  tmp clobbered (and drawrect's work).
+; Callers: erase_old and draw_dirty, through callbank.
+; ----------------------------------------------------------------------------
 drawrect_clip:
-        ; rows
+        ; ---- rows
         lda rc_y
         sec
         sbc wcy                     ; rel row start (may be negative), kept in A
         bpl :+
-        ; start above window: shrink
+        ; ---- start above the window: shrink
         clc
         adc rc_h
         beq @none
@@ -683,8 +870,8 @@ drawrect_clip:
         beq @none
         bmi @none
         sta rc_h
-:       ; cols: rel = rc_x - wcx (16 bit signed)
-        lda rc_x
+        ; ---- cols: rel = rc_x - wcx (16 bit signed)
+:       lda rc_x
         sec
         sbc wcx
         tay                         ; rel lo, kept in Y
@@ -692,9 +879,10 @@ drawrect_clip:
         sbc wcx+1
         tax                         ; rel hi, kept in X (N,Z as the sbc left them)
         bpl @right
-        ; rel < 0: the visible width is w + rel, and rel is already two's complement,
-        ; so add rather than negate-and-subtract.  Only a result whose high byte comes
-        ; out exactly 0 survives: anything else is the whole rect off the left edge.
+        ; ---- rel < 0: the visible width is w + rel, and rel is already two's
+        ; complement, so add rather than negate-and-subtract.  Only a result whose
+        ; high byte comes out exactly 0 survives: anything else is the whole rect
+        ; off the left edge.
         tya
         clc
         adc rc_w                    ; the low sum: the width, if it survives
@@ -702,8 +890,10 @@ drawrect_clip:
         inx                         ; hi + C = 0 only for hi = $FF with a carry out
         bne @none
         bcc @none                   ; (inx and branches leave C alone)
-        ldx wcx                     ; rel is now exactly 0, so the right clip is just
-        stx rc_x                    ; min(width, ROWCHARS): the width is still in A
+        ; rel is now exactly 0, so the right clip is just min(width, ROWCHARS): the
+        ; width is still in A
+        ldx wcx
+        stx rc_x
         ldx wcx+1
         stx rc_x+1
         cmp #ROWCHARS+1
@@ -711,6 +901,7 @@ drawrect_clip:
         lda #ROWCHARS
 :       sta rc_w
         jmp drawrect
+        ; ---- rel >= 0: off the right, or clip the right edge
 @right: bne @none                   ; Z from the tax: rel >= 256 -> off right
         tya
         cmp #ROWCHARS
@@ -724,4 +915,3 @@ drawrect_clip:
         sta rc_w
 :       jmp drawrect
 @none:  rts
-

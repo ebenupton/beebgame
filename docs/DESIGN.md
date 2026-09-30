@@ -43,7 +43,7 @@ write-select boards), and in three placements on the Master -- its interrupt han
 and state in main RAM, its tile gather's table in main RAM, and its HAZEL/ANDY copy
 of SPRX.  Where a 6502 spelling costs the Master no cycle it is used on both.  One of
 everything else: one fill path, one `build_sections`, one `crtc_init`, one interrupt
-body (`engine.s`; the Model B's stub pages it in, the Master's handler is it).
+body (`engine/kernel.s`; the Model B's stub pages it in, the Master's handler is it).
 
 The data lies alike too.  `tools/build.sh` links the Model B first and then the Master with
 every shared segment pinned at the Model B's address (`tools/pincfg.py`): the
@@ -73,7 +73,7 @@ The level files, the sprites, the tile set and the bar template are on the disc 
 and read by both.  Each machine has its own bank images (BANKSB, BANKSM), load-time
 program (LDPROGB, LDPROGM) and bank 7 images (IMG7B, IMG7M).  Because
 the level files carry the sprites' placed addresses, the level layout is the Model B's
-on both machines: `engine.s` asserts that each sprite bank's code ends exactly at
+on both machines: `engine/sprloops.s` and `engine/gather.s` assert that each sprite bank's code ends exactly at
 `B4_CODE_END`/`B5_CODE_END` on the Model B and at most there on the Master, whose
 shorter code leaves a gap.  `build.sh` checks that the two builds' shared files are
 byte-identical.
@@ -87,7 +87,7 @@ It is off by default: no level needs it.
 
 | Range | Use |
 |---|---|
-| $00-$79 | the engine's (ZEROPAGE): defs.inc's (NSPR, BARDIRTY, SFXREQ, mtmp -- cpu.inc's scratch --, the ring and mirror state, the sprite prologue's hand-over, curR7, SECIDX), then engine.s's (`mapptr`, maprow's result, among them); LDPROG's 17 bytes (LDZP) are the sprite prologue's scratch, dead during a load |
+| $00-$79 | the engine's (ZEROPAGE): defs.inc's (NSPR, BARDIRTY, SFXREQ, mtmp -- cpu.inc's scratch --, the ring and mirror state, the sprite prologue's hand-over, curR7, SECIDX), then engine/vars.s's (`mapptr`, maprow's result, among them); LDPROG's 17 bytes (LDZP) are the sprite prologue's scratch, dead during a load |
 | $7A-$80 | the Model B's own, the engine's (ZPHW: `jv`, the gather's shape); a gap on the Master |
 | $81-$EF | the game's (ZPGAME) |
 | $F0-$FF | the MOS's zero page, but $F4 and $FC: the engine's hottest scalars |
@@ -341,11 +341,10 @@ the write bank before anything stores into the bank (each of these banks patches
 own code: the sprite loops their dispatch, the tile blitter its operands).  In banks 4
 and 5 the code is one macro, `SPRITE_LOOPS`, assembled into SPR4CODE and SPR5CODE with
 `ds_entry` its first line, so the entry is at $8000 because nothing comes before it.
-Bank 6's code, TILCODE, is gathered from all through `engine.s` -- `ringaddr`,
-`select_backbuf`, `scroll_validate`, the tile blitter -- in source order, and
-`drawrect_clip`, where `callbank` must land, is not first in it; so `bank6_entry`
-(the write bank, then falling into `drawrect_clip`) is a segment of its own, placed
-first in the bank.  Bank 6 is also the one entered other ways -- `selbb` and
+Bank 6's code, TILCODE, is `engine/tiles.s` -- `ringaddr`, the tile blitter,
+`scroll_validate`, `select_backbuf` -- in source order, and `drawrect_clip`, where
+`callbank` must land, is not first in it; so `bank6_entry` (falling into
+`drawrect_clip`) is a segment of its own, placed first in the bank.  Bank 6 is also the one entered other ways -- `selbb` and
 `validate` from low RAM call routines inside it and set the write bank themselves,
 and `mapstrip` returns into it -- which is why its entry is a label of its own and not
 the start of a routine that is called from inside the bank too.
@@ -488,7 +487,7 @@ keyboard and runs the sound.
 which puts every other field's vsync half a scanline later (on BeebEm's Model B it
 showed as a band across the picture).
 
-The VS2T constants (defs.inc for the Model B, `engine.s` for the Master) are the
+The VS2T constants (defs.inc for the Model B, `engine/kernel.s` for the Master) are the
 vsync-to-bar time less the pulse, less the lead that puts each step ahead of its
 restart (-35 -36), less the step's own entry costs: on the Model B -23 for the stub
 entering bank 7 through `pagelogic` (which also sets the write bank) and -12 for the
@@ -902,7 +901,7 @@ to its tools.  With none set the build is what it always was (the masked sprites
   change to `match_sprites`), takes bit 7 into `sp_dfl` (a zero-page byte) and gives
   the prologue x without it; `drawsprite` XORs `sp_dfl` into the directory's flags.
 - **TALLMAP.**  `wcyh` (zero page) and `drawrect`'s full map row: *The display*.
-- **TIGHTBSS.**  The sprite records are nine arrays of 2 x MAXREC bytes (engine.s:
+- **TIGHTBSS.**  The sprite records are nine arrays of 2 x MAXREC bytes (engine/defs.s:
   `REC_ID`, `REC_XL`, `REC_XH`, `REC_YL`, `REC_YH`, `REC_CX` the column's low byte,
   `REC_CY`, `REC_W`, `REC_H` = height | column high bits << 5 | clipped << 7; BUFROWS
   < 32 asserted), buffer 0's records then buffer 1's, indexed by register: `recb`
@@ -911,7 +910,7 @@ to its tools.  With none set the build is what it always was (the masked sprites
   mtab is set later); `match_sprites` walks Y with X, `erase_old` steps `rq`.  The
   dirty list likewise: `DIRTX` then `DIRTY_`, DIRTYMAX a buffer.  build.sh drops
   ENGBSS's `align = $100` from the linked cfg.
-- **MAXSPR.**  build.sh passes `-D MAXSPRDEF=n`; engine.s defaults MAXSPRDEF to 28
+- **MAXSPR.**  build.sh passes `-D MAXSPRDEF=n`; engine/defs.s defaults MAXSPRDEF to 28
   when neither the build nor assets.inc sets it.
 - **SPRGEOM.**  SPR_TABLE is 2 x BOXID0 bytes, `DIR_LO` then `DIR_HI` (banks.s);
   `ldprog.s` copies that many (`DIRLEN`).  The prologue takes the id in X: the

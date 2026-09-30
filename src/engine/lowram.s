@@ -1,13 +1,33 @@
-        .segment "LOWCODE"          ; low RAM
 ; ============================================================================
-; Map access for the logic, which lives in bank 7 and so cannot select bank 5
-; itself.  Each of these leaves bank 7 selected, so the logic calls them directly.
+; engine/lowram.s -- the engine's map access, in low RAM
+;
+; Low RAM ($0140-$02FF) is visible whichever sideways bank is paged in, so code that
+; switches banks under itself lives here.  The game's logic runs in bank 7 but the map
+; is in bank 5: these routines page the map in, touch it, and page bank 7 back, so the
+; logic can simply call them.  (low.s holds the rest of low RAM: the crossings into
+; the other banks and the Model B's interrupt stub.)
+;
+;   maprow     A = tile row -> mapptr = the row's address in the map
+;   mapbyte    A = the map byte at (mapptr),Y
+;   mapput     store A at (mapptr),Y
+;   pagelogic  page bank 7 back in: the way home from every crossing
+;
+; Segment: LOWCODE (copied down from the boot piece at start-up).
 ; ============================================================================
-; A = tile row -> mapptr = address of that map row
-maprow:                             ; row * 2^lw = (row << 8) >> (8 - lw): mapshr is
-        ldy #0                      ; the loader's; no table to page in.  X
-        sty mapptr                  ; is kept (the logic calls this with it live);
-        ldy mapshr                  ; Y comes back 0
+        .segment "LOWCODE"
+
+; ----------------------------------------------------------------------------
+; maprow: the address of a map row
+;   In:   A = tile row
+;   Out:  mapptr = LV_MAP + (row << lw), the map being 2^lw tiles wide;  Y = 0
+;   Keeps X (the logic calls this with X live).
+; row << lw is worked out as (row << 8) >> (8 - lw): mapshr = 8 - lw is the loader's,
+; so no table has to be paged in.
+; ----------------------------------------------------------------------------
+maprow:
+        ldy #0
+        sty mapptr                  ; row << 8 has no low byte
+        ldy mapshr                  ; then 8 - lw shifts right
         beq :++
 :       lsr
         ror mapptr
@@ -18,7 +38,11 @@ maprow:                             ; row * 2^lw = (row << 8) >> (8 - lw): mapsh
         sta mapptr+1
         rts
 
-; A = (mapptr),y ; Y preserved
+; ----------------------------------------------------------------------------
+; mapbyte: read the map
+;   In:   mapptr, Y
+;   Out:  A = (mapptr),Y;  X, Y kept
+; ----------------------------------------------------------------------------
 mapbyte:
         bankimm lda, BANK_MAP, 0
         sta ROMSEL_CPY
@@ -26,31 +50,37 @@ mapbyte:
         lda (mapptr),y
         jmp pagelogic
 
-; store A at (mapptr),y ; Y preserved
+; ----------------------------------------------------------------------------
+; mapput: write the map
+;   In:   A = the byte, mapptr, Y
+;   Out:  A, X, Y kept
+; The store is a write window (cpu.inc): the write bank is 5 for it, and 7 again
+; before bank 7 is paged back in.  Falls into pagelogic.
+; ----------------------------------------------------------------------------
 mapput: pha
         bankimm lda, BANK_MAP, 0
         sta ROMSEL_CPY
         sta ROMSEL
-        wrsel BANK_MAP, 0           ; a write window: the store
+        wrsel BANK_MAP, 0           ; open the write window
         pla
         sta (mapptr),y
         pha
-        wrback 0, 2                 ; (closed)
+        wrback 0, 2                 ; close it
         pla
         .assert * = pagelogic, error, "mapput falls into pagelogic"
 
-
-
-
-; ============================================================================
-; pagelogic: bank 7 back, for reading -- the return path of every crossing from bank 7
-; (map access, callbank, the thunks); the write bank is 7's already (cpu.inc)
-; ============================================================================
+; ----------------------------------------------------------------------------
+; pagelogic: page bank 7 back in, for reading
+;   Out:  A, X, Y and the carry all kept -- these sit in the middle of calls that
+;         return values in them
+; The return path of every crossing from bank 7: map access, callbank, the thunks.
+; The write bank is 7's already (cpu.inc), so only the read bank changes.
+; ----------------------------------------------------------------------------
         .segment "LOWCODE"
-pagelogic:                          ; A, X, Y and the carry all come through intact:
-        pha                         ; these sit in the middle of calls that return values
+pagelogic:
+        pha
         bankimm lda, BANK_LVL, 0
         sta ROMSEL_CPY
-        sta ROMSEL                  ; (no write bank: it is 7's already -- cpu.inc)
+        sta ROMSEL
         pla
         rts

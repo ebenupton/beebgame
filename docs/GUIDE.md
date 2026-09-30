@@ -35,7 +35,7 @@ Three facts about the machines shape everything you write:
    in game code is almost never.
 2. **Two window sizes.**  The playfield is 160 game pixels wide on both, but 84 game
    pixels tall on the Model B (21 character rows) and 120 on the Master (30 rows):
-   `WINPX`, `VISROWS`, `VISLINES` in `engine.s`.  Your camera, your menus and your
+   `WINPX`, `VISROWS`, `VISLINES` in `engine/defs.s`.  Your camera, your menus and your
    level design must work in both.
 3. **Banked code.**  Your game's code lives in bank 7 of sideways RAM, beside the
    engine's.  It can call the engine directly; the engine reaches the other banks
