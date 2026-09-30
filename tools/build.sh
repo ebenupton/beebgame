@@ -21,8 +21,6 @@
 #   MASTERONLY=1 builds the Master alone: no Model B assembly, link or files, the
 #                Master linked unpinned, its own layout the level files' (a game too big
 #                for the Model B; the boot loader says so on one)
-#   NIBSPR=1     sprites stored as 4-bit pixels of one palette, expanded by the
-#                blitter (cpu.inc; docs/DESIGN.md, the nibble sprites)
 #   GAMEHAZEL=1  the game's own code in HAZEL (segments HAZCODE, HAZDATA, HAZBSS), a
 #                piece of BANKS the boot loader copies once; the Master only, and SPRX
 #                is then read at every level load (no copy is kept in HAZEL/ANDY)
@@ -37,7 +35,7 @@
 #                page aligned (after GAMEBSS as it falls)
 #   MAXSPR=n     the sprite slots (the most sprites on screen at once), in place of
 #                the game's assets.inc MAXSPRDEF; 28 when neither sets it
-#   SPRGEOM=1    the sprite directory split (NIBSPR only): the level carries the images'
+#   SPRGEOM=1    the sprite directory split: the level carries the images'
 #                addresses alone (DIR_LO, DIR_HI), the game the geometry every level
 #                shares, deduplicated (SPRG_IX by id; SPRG_W, SPRG_RX, SPRG_RY, SPRG_LN
 #                by shape): docs/GUIDE.md, A sprite's directory entry
@@ -51,7 +49,7 @@ mkdir -p build
 if [ "$TILEMIRROR" = 1 ]; then MIRDEF="-D TILEMIRROR=1"; else TILEMIRROR=0; MIRDEF=""; fi
 export TILEMIRROR
 # the options, as the assembler's flags (cpu.inc defaults each to 0)
-for o in MASTERONLY NIBSPR GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP SPRGEOM TIGHTBSS; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP SPRGEOM TIGHTBSS; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then MIRDEF="$MIRDEF -D $o=1"; else eval "$o=0"; fi
     export $o
@@ -74,9 +72,8 @@ for t in $TARGETS; do
     mkdir -p $BD
     [ -n "$SKIP_ASSETS" ] || sh -c "$GAME_ASSETS"
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
-    [ "$NIBSPR" = 1 ] && sed -i.bak 's#start = \$BB00, size = \$0500#start = $BC00, size = $0400#; s#B4X:     start = \$8000, size = \$0400#B4X:     start = $8000, size = $0600#; s#B5X:     start = \$8000, size = \$0300#B5X:     start = $8000, size = $0600#' $BD/game.cfg   # (the sprite banks: the expansion tables, no mask pages; both blitters in each, larger)
     [ "$TIGHTBSS" = 1 ] && sed -i.bak '/^ *ENGBSS:/s#, align = \$100##' $BD/game.cfg   # (ENGBSS where GAMEBSS ends)
-    [ "$TILEMIRROR" = 1 ] && sed -i.bak 's#start = \$8000, size = \$0700#start = $8000, size = $0800#; s#start = \$8000, size = \$0300#start = $8000, size = $0340#' $BD/game.cfg
+    [ "$TILEMIRROR" = 1 ] && sed -i.bak 's#start = \$8000, size = \$0700#start = $8000, size = $0800#' $BD/game.cfg
     for f in BANKS MENU GAME IMG7 LDPROG; do [ -f $BD/$f ] || : > $BD/$f; done
     python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc     # (the loader's: one definition)
 done
@@ -243,7 +240,7 @@ for l in open(BD + '/labels.txt'):
     p = l.split()
     if len(p) >= 3 and p[0] == 'al':
         lab[p[2].lstrip('.')] = int(p[1], 16)
-pieces = [(4, 0x8000, 'b4x.bin'), (4, 0xBC00 if os.environ.get('NIBSPR') == '1' else 0xBB00, 'b4t.bin'),   # (NIBSPR: its tables from $BC00)
+pieces = [(4, 0x8000, 'b4x.bin'), (4, 0xBC00, 'b4t.bin'),
           (5, 0x8000, 'b5x.bin'), (5, 0xBC00, 'b5t.bin'),
           (6, 0x8000, 'b6x.bin'),                                 # (B6X in the cfg)
           (7, 0x7000, 'boot.bin'),        # main RAM (BOOTRAM): start-up and the low-RAM image

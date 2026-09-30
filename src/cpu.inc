@@ -39,9 +39,6 @@ TILEMIRROR = 0
         .ifndef MASTERONLY
 MASTERONLY = 0                      ; the Master alone: no Model B build
         .endif
-        .ifndef NIBSPR
-NIBSPR = 0                          ; sprites as 4-bit pixels of one palette
-        .endif
         .ifndef GAMEHAZEL
 GAMEHAZEL = 0                       ; the game's code in HAZEL too (the Master alone)
         .endif
@@ -63,9 +60,6 @@ TIGHTBSS = 0                        ; 9-byte sprite records, ENGBSS not page ali
         .ifndef SPRGEOM
 SPRGEOM = 0                         ; the directory split: the level's addresses, the game's geometry
         .endif
-  .if SPRGEOM <> 0 && NIBSPR = 0
-        .error "SPRGEOM is for 4-bit sprites: build with NIBSPR=1"
-  .endif
   .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
         .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
   .endif

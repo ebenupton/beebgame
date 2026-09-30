@@ -626,10 +626,10 @@ copy_partial:
 ; The steps: fetch the geometry; clip horizontally (sp_c0..sp_c1, first image column
 ; sp_c) and vertically (lines lstart..lend, char rows sp_r0..sp_r1); write the
 ; record; (Model B) note the mirror's columns; pick the blitter; work out the screen,
-; image and mask pointers; and jump to the row loop (SPRITE_LOOPS) in the data's bank
+; and image pointers; and jump to the row loop (NIB_LOOPS, sprloops.s) in the data's bank
 ; through callbank.  spclip counts the window edges it was cut against.
 ; ============================================================================
-        .segment "ENGCODE"          ; bank 7, with the records and SPRMASK
+        .segment "ENGCODE"          ; bank 7, with the records
         PAD ::PADB_DS, ::PADM_DS
 drawsprite:
   .if BHW
@@ -642,7 +642,7 @@ drawsprite:
   .if SPRGEOM
         ; ==== SPRGEOM: the address from the level's DIR_LO/HI, the geometry from
         ; the game's SPRG_* tables by shape
-sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane, no sp_mh)
+sp_g    = sp_mh                     ; the sprite's shape (sp_mh's byte: no mask plane)
     .if BOXN
         ; a "nothing can disturb it" alias draws the same picture as the id BOXN below
         cmp #BOXID0+BOXN
@@ -666,7 +666,7 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         ; ---- the shape's flags, width and lines.  With SPRGFL (assets.inc says so)
         ; the flags are the game's, by shape: a game that mirrors by id rather than
         ; by the list.  Without it the list's mirror is the only flag: every
-        ; scanline stored is clear (NIBSPR's images).
+        ; scanline stored is clear (every image's).
         ldy SPRG_IX,x
         sty sp_g
     .ifdef SPRGFL
@@ -738,16 +738,6 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         beq :+
         bankimm ldx, BANK_TIL1, BANK_LVL
 :       stx sp_dbank                ; wanted later: the directory is still being read
-  .if .not NIBSPR
-        ; ---- the mask plane's address (4-bit sprites have none)
-        lda sp_id
-        asl
-        tax
-        lda SPRMASK,x
-        sta sp_mbase
-        lda SPRMASK+1,x
-        sta sp_mbase+1              ; (C = 0 still: the asl, sp_id < 128)
-  .endif
         ; ---- the image's address, width and lines
         ldaz ptr
         sta sp_ptr
@@ -762,8 +752,6 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         lda (ptr),y
         sta sp_lines
         sta sp_ext
-        lsr
-        sta sp_mh                   ; mask bytes per column group = game-pixel rows
         lda sp_flags
         and #2
         bne :+
@@ -962,7 +950,7 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         lda sp_r1
         sbc sp_r0                   ; C still set by the width sbc above (sp_c1 >= sp_c0)
         adc #0                      ; and set by this one (sp_r1 >= sp_r0): + 1
-        sta tmp3                    ; (free here: mtab is set in @rows)
+        sta tmp3                    ; (free here)
         ; the column's high bits (< 4: a map is 1024 chars wide at most) to bits 5-6
         lda w16+1
         asl
@@ -1056,14 +1044,6 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         tax
 :
         stx sp_disp                 ; (a patched jmp in the column loop)
-  .if .not NIBSPR
-        ; ---- the phase of the first column drawn, and its page: MASKTAB0 is 1K
-        ; aligned, so phase = page & 3
-        lda sp_c
-        and #3
-        ora #>MASKTAB0
-        sta sp_mpg0
-  .endif
 
         ; ---- screen base sp_rb for (wcx + c0, wcy + r0): one ringaddr, then +80
         ; chars per row (w16 = wcx + sp_c0 was already built when the record rect
@@ -1122,38 +1102,6 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         bne @mul
 @mdone: sta sp_rp
 
-  .if .not NIBSPR
-        ; ---- the mask row pointer sp_mrp = mask plane + (first image column / 4)
-        ; * game-pixel rows + the same offset in game-pixel rows (w16, signed >> 1).
-        ; (4-bit sprites: no mask plane to walk.)
-        stx mtab                    ; X = 0 here: MASKTAB pages are indexed by mask byte
-        lda w16+1
-        asl                         ; C = the sign
-        ror w16+1
-        ror w16
-        lda sp_c
-        lsr
-        lsr
-        tay                         ; column groups to step over
-        lda sp_mbase
-        clc
-        adc w16
-        tax
-        lda sp_mbase+1
-        adc w16+1
-        sta sp_mrp+1
-        txa
-        cpy #0
-        beq @mgdone
-        clc
-@mgrp:  adc sp_mh
-        bcc @mgnc
-        inc sp_mrp+1
-        clc
-@mgnc:  dey
-        bne @mgrp
-@mgdone: sta sp_mrp
-  .endif
 
         ; ---- the columns, and away to the row loop
         lda sp_c1

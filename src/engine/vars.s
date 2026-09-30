@@ -117,11 +117,7 @@ sp_c:     .res 1
 sp_lim:   .res 1
 sp_cnt:   .res 1                  ; sprite column countdown
         .assert sp_rp - LDZP >= 17, error, "the loader's zero page runs past the prologue's scratch"
-; The mask walk aliases zero page the blit no longer needs; the rest of it is
-; defs.inc's (sp_mh, sp_mrp...).
-mptr    = w16                    ; this column group's mask bytes, one per game-pixel row
-; mtab: the MASKTAB page for this column's phase (tmp3 = 0, tmp4 = the page)
-mtab    = tmp3
+; Aliases of zero page the blit no longer needs:
 sp_msk  = tmp4c8                  ; the AND mask of the pair being drawn
 sp_id   = sp_ext                  ; the sprite id, until sp_ext is set a few lines later
 spi:      .res 1                  ; draw_sprites: the sprite's number (X in its loop)

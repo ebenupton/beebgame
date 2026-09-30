@@ -11,11 +11,11 @@ whole sectors at the end, so the Model B's loader reads the file short of them.
     import levelfile as lf
     data = lf.encode(lf.Level(lw=5, lh=5, game_header={2: x, ...}, shape=lf.Shape(...),
                               objects=b'...', tile_tables=(attr, altcls), tiles=b'...',
-                              placement=[(item, bank, img, mask), ...], map=b'...',
+                              placement=[(item, bank, img, extra), ...], map=b'...',
                               flat=b'...', halves=b'...', hpair=b'...', mir=b'',
-                              directory=[None | (addr, bank, geometry), ...],
-                              masks=[addr, ...], page0=b'...', boxid0=103, boxn=15))
-    lf.decode(data, 103)        # the sections back, the map unpacked: for checks
+                              directory=lf.directory([None | (addr, bank, geometry), ...]),
+                              page0=b'...', boxid0=103, boxn=15))
+    lf.decode(data)             # the sections back, the map unpacked: for checks
 """
 from dataclasses import dataclass, field
 import os, re, sys
@@ -60,9 +60,10 @@ class Shape:
 
 # ---------------------------------------------------------------- the limits (src/defs.inc)
 OBJ_BYTES, OBJ_MAX = 6, 149     # LV_OBJS: 894 bytes, main RAM
-DIR_ENTRY = 8                   # SPR_TABLE: an entry a sprite id, BOXID0 + BOXN of them;
-                                # SPRMASK: a mask address for each id below BOXID0 (the
-                                # game's numbers, from its assets.inc: Level.boxid0, boxn)
+DIR_ENTRY = 8                   # SPR_TABLE: an entry a sprite id, BOXID0 + BOXN of them
+                                # (the game's numbers, from its assets.inc: Level.boxid0,
+                                # boxn).  The smask section is empty (4-bit sprites have
+                                # no mask planes): kept, so the sections keep their numbers
 STAGE_LVL_B = 0x7C00 - 0x5C00   # the Model B's level stage (without LV_PAGE0)
 STAGE_M = 0x8000 - 0x3000       # the Master's stage
 MASTERONLY = os.environ.get('MASTERONLY') == '1'   # (the build's: no Model B, no limit of its)
@@ -107,21 +108,20 @@ def unrle(data, n=None):
 
 # ---------------------------------------------------------------- the sprites' sections
 def placement(items):
-    """(item, bank, image address, mask address or 0) for each image the level places
-    from the shared files, in item order; $FF ends it"""
+    """(item, bank, image address, extra) for each image the level places from the
+    shared files, in item order; $FF ends it.  extra is 0, or for an item the loader
+    bakes (ldprog.s bake) its tile: x | y << 8"""
     out = bytearray()
-    for item, bank, img, mask in items:
+    for item, bank, img, extra in items:
         assert 0 <= item < 255 and bank in (4, 5), (item, bank)
-        out += bytes([item, bank, img & 255, img >> 8, mask & 255, mask >> 8])
+        out += bytes([item, bank, img & 255, img >> 8, extra & 255, extra >> 8])
     return bytes(out + b'\xff')
 
 
-def directory(entries, masks):
-    """SPR_TABLE and SPRMASK: an entry for every sprite id (BOXID0 images, then BOXN
-    boxes), each None or (address, bank, geometry) -- geometry the entry's other six
-    bytes (W, h, refx, refy, flags, lines); a bank-5 image gets DIR_BANK5 in its flags
-    -- and a mask address (0: none) for each image id, BOXID0 of them"""
-    assert len(masks) < len(entries)
+def directory(entries):
+    """SPR_TABLE: an entry for every sprite id (BOXID0 images, then BOXN boxes), each
+    None or (address, bank, geometry) -- geometry the entry's other six bytes (W, h,
+    refx, refy, flags, lines); a bank-5 image gets DIR_BANK5 in its flags"""
     d = bytearray()
     for e in entries:
         if e is None:
@@ -132,7 +132,7 @@ def directory(entries, masks):
         if bank == 5:
             g[4] |= DIR_BANK5
         d += bytes([addr & 255, addr >> 8]) + g
-    return bytes(d), b''.join(bytes([a & 255, a >> 8]) for a in masks)
+    return bytes(d)
 
 
 def directory_split(entries):
@@ -166,12 +166,10 @@ class Level:
     halves: bytes               # the half tiles: index in file, row, file
     hpair: bytes                # the halves' fill pairs
     mir: bytes                  # MIRTAB (TILEMIRROR; else empty)
-    directory: bytes            # directory()[0], or directory_split() (SPRGEOM)
-    masks: bytes                # directory()[1]
+    directory: bytes            # directory(), or directory_split() (SPRGEOM)
     page0: bytes                # LV_PAGE0: the Master's gather table, 512 bytes
     boxid0: int = 0             # the game's sprite ids: BOXID0 images, then BOXN boxes
     boxn: int = 0               #  (assets.inc)
-    nibble: bool = False        # 4-bit sprites (NIBSPR): no mask planes, SPRMASK empty
     game_header: dict = field(default_factory=dict)   # offset -> byte, HDR_GAME only
 
 
@@ -191,13 +189,12 @@ def encode(lv):
     assert len(lv.map) == 1 << (lv.lw + lv.lh), (len(lv.map), lv.lw, lv.lh)
     assert all(len(t) == 256 for t in lv.tile_tables) and len(lv.tile_tables) == 2
     assert lv.boxid0 > 0 and len(lv.directory) == dir_len(lv.boxid0, lv.boxn)
-    assert len(lv.masks) == (0 if lv.nibble else 2 * lv.boxid0)
     assert len(lv.page0) == PAGE0_LEN
     maprle = rle(lv.map)
     assert unrle(maprle) == lv.map
     body = dict(hdr=header(lv), objs=lv.objects, attr=lv.tile_tables[0], altcls=lv.tile_tables[1],
                 tiles=lv.tiles, place=lv.placement, map=maprle, flat=lv.flat, halves=lv.halves,
-                hpair=lv.hpair, mir=lv.mir, dir=lv.directory, smask=lv.masks, page0=lv.page0)
+                hpair=lv.hpair, mir=lv.mir, dir=lv.directory, smask=b'', page0=lv.page0)
     off = 2 * len(SECTIONS)
     table, data = bytearray(), bytearray()
     for name in SECTIONS:
@@ -213,20 +210,14 @@ def encode(lv):
     return out
 
 
-def decode(data, boxid0, nibble=None):
-    """the sections by name (the map unpacked, the header's fields as well); boxid0,
-    the game's, says how long SPRMASK is (none with 4-bit sprites: NIBSPR, the build's
-    environment unless nibble says)"""
-    if nibble is None:
-        nibble = os.environ.get('NIBSPR') == '1'
-    if nibble:
-        boxid0 = 0
+def decode(data):
+    """the sections by name (the map unpacked, the header's fields as well)"""
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     ends = offs[1:] + [len(data)]
     sec = {n: data[o:e] for n, o, e in zip(SECTIONS, offs, ends)}
     sec['page0'] = sec['page0'][:PAGE0_LEN]
-    sec['pad'] = sec['smask'][2 * boxid0:]          # (to LV_PAGE0's sector)
-    sec['smask'] = sec['smask'][:2 * boxid0]
+    sec['pad'] = sec['smask']                       # (empty smask: to LV_PAGE0's sector)
+    sec['smask'] = b''
     h = sec['hdr']
     sec['map'] = unrle(sec['map'], 1 << (h[HDR_LW] + h[HDR_LH]))
     sec['fields'] = dict(lw=h[HDR_LW], lh=h[HDR_LH], nobj=h[HDR_NOBJ],
@@ -253,7 +244,7 @@ def check(data, boxid0, boxn):
     assert offs[0] == 2 * len(SECTIONS) and offs == sorted(offs), 'the section table'
     assert offs[SEC['page0']] % 256 == 0 and len(data) - offs[SEC['page0']] == PAGE0_LEN, 'LV_PAGE0'
     assert (len(data) - PAGE0_LEN <= STAGE_LVL_B or MASTERONLY) and len(data) <= STAGE_M, 'too big for a stage'
-    sec = decode(data, boxid0)
+    sec = decode(data)
     f = sec['fields']
     assert len(sec['objs']) == OBJ_BYTES * f['nobj'] and f['nobj'] <= OBJ_MAX, 'the objects'
     assert len(sec['map']) == 1 << (f['lw'] + f['lh']), 'the map'
@@ -261,8 +252,7 @@ def check(data, boxid0, boxn):
     assert len(sec['attr']) == 256 and len(sec['altcls']) == 256, 'the tile tables'
     assert len(sec['halves']) == 2 * f['nhalf'], 'the half tiles'
     assert len(sec['mir']) == f['nmir'], 'MIRTAB'
-    nib = os.environ.get('NIBSPR') == '1'
-    assert len(sec['dir']) == dir_len(boxid0, boxn) and len(sec['smask']) == (0 if nib else 2 * boxid0), 'the directory'
+    assert len(sec['dir']) == dir_len(boxid0, boxn), 'the directory'
     assert not any(sec['pad']) and len(sec['pad']) < 256, 'the padding before LV_PAGE0'
     p = sec['place']
     assert len(p) % 6 == 1 and p[-1] == 0xFF and all(p[i + 1] in (4, 5) for i in range(0, len(p) - 1, 6)), 'the placements'

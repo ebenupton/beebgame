@@ -27,36 +27,14 @@ ringmodtab:                         ; A = a map char row (brought under RINGROWS
   .endif
 
 ; ---------------------------------------------------------------- the sprite banks
-; MASKTAB0..3 at the same address in both banks that hold sprite data, so the
-; prologue in bank 7 can name a mask page for either; SWAPTAB in bank 4 alone
-; (bank 5 draws nothing mirrored: the packer keeps such images out, and that page
-; holds the map instead).  MODE 1: four screen pixels a byte, two bits each.
-.macro MASK4 f                      ; AND mask by pair: keep what is NOT opaque
-  .if f = 0
-        .byte $FF
-  .elseif f = 1
-        .byte $CC
-  .elseif f = 2
-        .byte $33
-  .else
-        .byte $00
-  .endif
-.endmacro
-.macro MASK_TABLES
-        .assert * = MASKTAB0, error, "MASKTAB0 must be at the same address in both sprite banks"
-.repeat 4, kk                       ; MASKTABk[x] = mask4[(x >> (6 - 2k)) & 3]
-  .repeat 256, xx
-        MASK4 {((xx >> (6 - 2*kk)) & 3)}
-  .endrepeat
-.endrepeat
-.endmacro
+; The expansion tables and SWAPTAB (the dot reversal) end both sprite banks, at the
+; same addresses (defs.inc), so the prologue in bank 7 can name them for either.
 .macro SWAP_TABLE
         .assert * = SWAPTAB, error, "SWAPTAB must be at SWAPTAB"
 .repeat 256, xx                     ; four-dot reversal: bits 7<->4, 6<->5, 3<->0, 2<->1
         .byte ((xx & $88) >> 3) | ((xx & $44) >> 1) | ((xx & $22) << 1) | ((xx & $11) << 3)
 .endrepeat
 .endmacro
-  .if NIBSPR
 ; 4-bit sprites: the game's expansion tables (its palette: nibtab.bin, L0TAB, L1TAB and
 ; NMASK, 768 bytes, from its asset step) and the dot reversal, in both sprite banks
 .macro NIB_TABLES
@@ -64,18 +42,10 @@ ringmodtab:                         ; A = a map char row (brought under RINGROWS
         .incbin "nibtab.bin", 0, 768
         SWAP_TABLE
 .endmacro
-        .segment "SPR4SWAP"
+        .segment "SPR4TAB"
         NIB_TABLES
-        .segment "SPR5MASK"
+        .segment "SPR5TAB"
         NIB_TABLES
-  .else
-        .segment "SPR4SWAP"
-        SWAP_TABLE
-        .segment "SPR4MASK"
-        MASK_TABLES
-        .segment "SPR5MASK"
-        MASK_TABLES
-  .endif
 
 ; ---------------------------------------------------------------- the mirror's notes
 ; the mirror's range: A = the first window column written of the row the mirror
@@ -139,11 +109,6 @@ LV_ALTCLS:  .res 256                ; alt class by tile id
 LV_HDR:     .res 32                 ; header: lw, lh, nobj, the tile set's shape, and
                                     ; the game's own fields (tools/levelfile.py)
         .segment "ENGBSS"           ; the engine's: the sprite directory
-  .if .not NIBSPR                   ; (4-bit sprites have no mask planes)
-SPRMASK:    .res 2*BOXID0           ; mask plane address by sprite id (the boxes, from
-                                    ; BOXID0, have none): the loader's, read by the
-                                    ; prologue (this bank)
-  .endif
   .if SPRGEOM                       ; (the split directory: the level's part, by id, the
 SPR_TABLE:  .res 2*(BOXID0+BOXN)    ;  images' addresses: low bytes, then high bytes -- 0
 DIR_LO      = SPR_TABLE             ;  not in this level, bit 7 clear in bank 5; the

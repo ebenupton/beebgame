@@ -21,9 +21,6 @@ TILEMIRROR = 0
         .ifndef GAMEHAZEL           ; (cpu.inc's: the game's code in HAZEL -- then SPRX is
 GAMEHAZEL = 0                       ;  staged from the disc every time, as the Model B's)
         .endif
-        .ifndef NIBSPR              ; (cpu.inc's: 4-bit sprites, no mask planes, no SPRMASK)
-NIBSPR = 0
-        .endif
         .ifndef SPRGEOM             ; (cpu.inc's: the split directory, 2 bytes a sprite id)
 SPRGEOM = 0
         .endif
@@ -631,20 +628,6 @@ DIRLEN = (BOXID0+BOXN)*8
         sta cnt+1
         ldx PB_LVL
         jsr bcopy
-  .if .not NIBSPR                   ; (4-bit sprites have no mask planes: no SPRMASK)
-        lda #SEC_SMASK
-        jsr section
-        lda #<SPRMASK
-        sta dst
-        lda #>SPRMASK
-        sta dst+1
-        lda #2*BOXID0
-        sta cnt
-        lda #0
-        sta cnt+1
-        ldx PB_LVL
-        jsr bcopy
-  .endif
         ; ---- the flat tiles' pairs, into bank 6 with the blitter's fill
         lda #SEC_FLAT
         jsr section
