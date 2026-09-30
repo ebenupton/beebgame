@@ -24,6 +24,6 @@ PADM_DS = 8
 PADB_CP = 0                         ; before copy_partial
 PADM_CP = 9
 PADB_T6 = 40                        ; bank 6, the Model B: after ringmodtab, before drawrect
-PADM_T6 = 228                       ; bank 6, the Master: before drawrect (220-248 fit)
+PADM_T6 = 228                       ; bank 6, the Master: before drawrect (puts @run's bmi @tile in a page)
                                     ; (tiles.s: its hot stretches each in a page)
 PADB_BB = 0                         ; the Model B: after blank_below

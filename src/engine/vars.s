@@ -31,6 +31,9 @@
   .if BHW
         .segment "ZPHW": zeropage
 jv:       .res 2                  ; jmpx's vector: jmp (abs,x) has no 6502 form (cpu.inc)
+MTO:      .res 4                  ; drawrect's solid-chain offsets, by chars (1..4): 72, 48,
+                                  ;  24, 0 (boot's) -- in zero page, a byte shorter to read
+                                  ;  than a table, which keeps @run's bmi @tile in reach
   .endif
 
 ; ---------------------------------------------------------------- scratch
@@ -183,9 +186,6 @@ halfhi:    .res 1                   ; the halves' page less 1 (the loader's), fo
 MUSON:     .res 1                   ; the tune plays: the interrupt stub steps it
 crtcb:     .res 2                   ; build_sections: the buffer's CRTC base
         .zeropage
-MTO:      .res 4                    ; drawrect's solid-chain offsets, by chars (1..4): 72, 48,
-                                    ;  24, 0 (boot's) -- in zero page, a byte shorter to read
-                                    ;  than a table, which keeps @run's bmi @tile in reach
 
 ; ============================================================================
 ; Tables (uninitialised)

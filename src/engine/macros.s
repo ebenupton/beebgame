@@ -227,18 +227,29 @@ n2:     tax
 .endmacro
 
 ; ----------------------------------------------------------------------------
-; RUNN: a run's chars, min(rc_lim, cnt) -> rc_n and X, with C = 0 for the patched
-; branch that dispatches it and for @advsp after the blocks (which keep X and C).
-; rc_lim < cnt, a run with more to follow, falls through with C = 0 already; the
-; row's last run pays the clc.
+; RUNN: a run's chars, min(rc_lim, cnt) -> rc_n, and X its dispatch index, n x RUNXS:
+; the Model B's n (a table of branch offsets), the Master's 2n (jmp (abs,x)).  C = 0
+; out, for the Model B's patched branch and for @advsp after the blocks (which keep
+; X and C).  rc_lim < cnt, a run with more to follow, falls through with C = 0
+; already; the row's last run pays the Model B a clc, the Master's asl clears it.
 ;   Anonymous labels: one.
 ; ----------------------------------------------------------------------------
+  .if BHW
+RUNXS = 1
+  .else
+RUNXS = 2
+  .endif
 .macro RUNN
         lda rc_lim
         cmp cnt
         bcc :+
         lda cnt
+  .if BHW
         clc
+  .endif
 :       sta rc_n
+  .if .not BHW
+        asl                         ; n <= 4: C = 0
+  .endif
         tax
 .endmacro

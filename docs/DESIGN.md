@@ -615,17 +615,19 @@ tile): a solid costs it one store.
 invariants once, one `ringaddr` for the first row, then per tile row one `mapstrip` and
 one or two character rows.  A row may straddle the ring's end but a run -- the
 characters of one tile, at most four -- never does (below), so every run is drawn by
-an unrolled block entered by its length, on both machines through a branch right
-before the blocks whose offset the run patches (each group's entries in the branch's
-page, asserted, so it costs a jmp's 3 cycles; on the Model B `drawrect` is a write
-window for it).  X holds the run's length from the dispatch (RUNN: `min`, then `tax`)
-to `@advsp`, which steps `sp` by a 4-byte table of 8n -- every block keeps X.  A fill
+an unrolled block entered by its length.  The blocks are the same code on both
+machines; only the entry differs.  The Model B patches a branch right before the
+blocks (each group's entries in the branch's page, asserted, so it costs a jmp's 3
+cycles; `drawrect` is a write window for it); the Master goes through `jmp (abs,x)`.
+X holds the run's dispatch index from RUNN (`min`, then `tax`: n on the Model B, 2n
+on the Master) to `@advsp`, which steps `sp` by a table of 8n -- every block keeps X.  A fill
 of a pair stores each byte four times a character, every store setting its own Y (70
 cycles a character; alternating loads down a `dey` chain was 88).  The solid is one
 chain of 32 `sta (sp),y` with an `iny` between each after its branch, entered at a
-store with Y = 0, the offsets in zero page (MTO, boot's: a byte shorter than a table,
-which keeps the row loop's `bmi` over the chain in reach); on the Model B ringmodtab
-and PADB_T6 before `drawrect` put its two hot stretches each in a page.  Each character row starts with `sp` already set, by `ringaddr` for
+store with Y = 0 (the Model B's branch offsets in zero page, MTO, boot's: a byte
+shorter than a table, which keeps the row loop's `bmi` over the chain in reach); on
+the Model B ringmodtab and PADB_T6 before `drawrect` put its two hot stretches each
+in a page, on the Master PADM_T6 the row loop's `bmi`.  Each character row starts with `sp` already set, by `ringaddr` for
 the first and `@rowdone` for the rest.
 
 **Mirrored tiles** (TILEMIRROR=1): another stored tile reversed left to right, drawn a
