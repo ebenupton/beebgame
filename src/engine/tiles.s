@@ -334,19 +334,21 @@ drawrect:
 @sdisp:
   .if BHW
         ; ---- the Model B: a patched branch into the chain that follows, taken (C = 0,
-        ; RUNX's asl).  The chain is 32 of dey / sta (sp),y and Y = 8n, so the first
-        ; dey stores line 8n-1: the branch skips 32 - 8n of them (MTO, zero page).
-        ; 8 cycles a byte and tay for the entry's ldy: what the unrolled blocks cost.
-        tay
+        ; RUNX's asl).  The chain is 32 stores counting up, an iny between each, and
+        ; is entered at a store with Y = 0, so it stores lines 0 to 8n-1: the branch
+        ; skips the first 32 - 8n stores (MTO, zero page: 3 bytes a store, iny's).
+        ; 7 cycles a byte, and one ldy for the run.
+        ldy #0
         lda MTO-1,x
         sta @sj+1
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
 @sj:    bcc @mch
 @mch:
-    .repeat 32
-        dey
+    .repeat 31
         sta (sp),y
+        iny
     .endrepeat
+        sta (sp),y
         jmp @advsp
         .assert @sj+2 = @mch && >@mch = >(@mch+72), error, "the solid chain must follow its branch, its entries in one page"
   .else
@@ -610,13 +612,13 @@ drawrect:
         ldy #8*c
         sta (sp),y
         lda tp+1
-        ldy #8*c+7
-        sta (sp),y
-        ldy #8*c+5
+        iny
         sta (sp),y
         ldy #8*c+3
         sta (sp),y
-        ldy #8*c+1
+        ldy #8*c+5
+        sta (sp),y
+        ldy #8*c+7
         sta (sp),y
 .endmacro
 @f31:   PCHAR 3
