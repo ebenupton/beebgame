@@ -851,28 +851,10 @@ placewalk:                          ; the placement list's items from file fnum,
 
         lda (ent),y
         cmp fnum
-        bne @mask
+        bne @plnext                 ; (in another file)
         ldy #1                      ; the image: src = STAGE + offset, cnt = length
         jsr srccnt
         ldy #2
-        lda (lp),y
-        sta dst
-        iny
-        lda (lp),y
-        sta dst+1
-        jsr plcopy                  ; to the placement's bank
-@mask:  ldy #5
-        lda (ent),y
-        cmp fnum
-        bne @plnext
-        ldy #8
-        lda (ent),y
-        iny
-        ora (ent),y
-        beq @plnext                 ; no mask
-        ldy #6
-        jsr srccnt
-        ldy #4
         lda (lp),y
         sta dst
         iny
@@ -896,7 +878,7 @@ placewalk:                          ; the placement list's items from file fnum,
 ; stars) is not copied but made here: the level's own tiles where the object stands,
 ; the game's overlay over them -- (backdrop AND mask) OR pixels -- from SPRX, staged:
 ; a column's pixels (lines bytes) then its mask.  The placement entry carries the
-; object's tile (x, y) where an image carries its mask address; bakekind gives the
+; object's tile (x, y) where an image carries 0; bakekind gives the
 ; slot's kind and bakegeom the kind's shape: bytes wide, lines (every scanline), the
 ; backdrop's origin from (8x, 8y) -- game pixels across (16 bit), whole tile rows down
 ; -- and the overlay's offset in SPRX.  A tile is decoded as the Model B's gather
@@ -1254,7 +1236,7 @@ stage:                              ; file A -> STAGE
         sta ACCCON
         rts
   .endif
-imgent:                             ; item -> ent = imgtab + item*10
+imgent:                             ; item -> ent = imgtab + item*5
         lda #0
         sta ent+1
         lda item
@@ -1265,9 +1247,8 @@ imgent:                             ; item -> ent = imgtab + item*10
         adc item                    ; * 5
         bcc :+
         inc ent+1
-:       asl
-        rol ent+1                   ; * 10 (C = 0)
-        adc #<imgtab
+        clc
+:       adc #<imgtab
         sta ent
         lda ent+1
         adc #>imgtab
@@ -1470,4 +1451,4 @@ wrhi:   .byte >wr_game, >wr_menu
 bakekind: .incbin "bakekind.bin"   ; by baked slot: its kind (the game's)
 bakegeom: .incbin "bakegeom.bin"   ; by kind: bytes, lines, dx (16 bit), dty, overlay offset (16 bit), 0
   .endif
-imgtab: .incbin "imgtab.bin"  ; per item: file, offset, length, mask file, offset, length
+imgtab: .incbin "imgtab.bin"  ; per item: its file, offset and length (5 bytes)

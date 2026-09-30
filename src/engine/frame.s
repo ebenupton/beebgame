@@ -642,7 +642,6 @@ drawsprite:
   .if SPRGEOM
         ; ==== SPRGEOM: the address from the level's DIR_LO/HI, the geometry from
         ; the game's SPRG_* tables by shape
-sp_g    = sp_mh                     ; the sprite's shape (sp_mh's byte: no mask plane)
     .if BOXN
         ; a "nothing can disturb it" alias draws the same picture as the id BOXN below
         cmp #BOXID0+BOXN

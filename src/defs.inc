@@ -65,10 +65,7 @@ ringe3:   .res 1                    ;   >RINGEND-3 (mirror.s)
 mrow:     .res 1                    ; the map char row in the ring's last slot (calc_ring)
 wcxm:     .res 1                    ; ringS mod 80: the mirror's first useful char
 sp_disp:  .res 1                    ; the sprite's blitter index, for the loop's bank
-sp_mpg0:  .res 1
-sp_mh:    .res 1
-sp_mrp:   .res 2
-sp_mbase: .res 2
+sp_g:     .res 1                    ; the sprite's shape (SPRGEOM: the prologue's)
 curR7:    .res 1                    ; two hot scalars (profiled: ~41 and ~35 accesses a
 SECIDX:   .res 1                    ;  frame): the chain's R7 and step
 
