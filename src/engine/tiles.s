@@ -719,7 +719,7 @@ scroll_validate:
         beq @done
         bpl @dypos
         ; ---- dy negative: rows wcy .. wcy+(-dy)-1
-        cmp #<-30
+        cmp #<-(BUFROWS-1)          ; -dy >= BUFROWS: the whole window (as dy > 0 does)
         bcc @full
         eor #$FF
         adc #0                      ; C = 1 from the cmp: A = -w16b, and C = 0
