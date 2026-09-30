@@ -109,13 +109,9 @@ LV_ALTCLS:  .res 256                ; alt class by tile id
 LV_HDR:     .res 32                 ; header: lw, lh, nobj, the tile set's shape, and
                                     ; the game's own fields (tools/levelfile.py)
         .segment "ENGBSS"           ; the engine's: the sprite directory
-  .if SPRGEOM                       ; (the split directory: the level's part, by id, the
-SPR_TABLE:  .res 2*(BOXID0+BOXN)    ;  images' addresses: low bytes, then high bytes -- 0
-DIR_LO      = SPR_TABLE             ;  not in this level, bit 7 clear in bank 5; the
-DIR_HI      = SPR_TABLE+BOXID0+BOXN ;  geometry is the game's, SPRG_*; the boxes' too)
-  .else
-SPR_TABLE:  .res (BOXID0+BOXN)*8    ; the sprite directory as the packer finished it:
-                                    ; an entry a sprite id, BOXID0 images then BOXN boxes
-                                    ; (the level's addresses): the loader's, read by
-                                    ; the prologue in place
-  .endif
+; The directory's level part, by sprite id: the images' addresses, low bytes then high
+; bytes -- 0 not in this level, bit 7 clear in bank 5.  The geometry is the game's
+; (SPRG_*), the boxes' too.
+SPR_TABLE:  .res 2*(BOXID0+BOXN)
+DIR_LO      = SPR_TABLE
+DIR_HI      = SPR_TABLE+BOXID0+BOXN

@@ -615,14 +615,13 @@ copy_partial:
 ;         the record in hand: rq (TIGHTBSS) or rp, set up by draw_sprites
 ;   Out:  the record's rectangle (REC_CX, REC_CY, REC_W, REC_H) written when any of
 ;         the sprite is in the window; then the row loop has drawn it.  Returns
-;         without either when it is wholly off the window (or, SPRGEOM, not in this
-;         level).  A, X, Y and the prologue's zero page clobbered.
-; The directory is the level's, in bank 7 at SPR_TABLE (ldprog.s): an 8-byte entry
-; by id (image address, width in bytes, height, ref x, ref y, flags, lines); the data
-; is in bank 4, or bank 5 when the entry's flag bit 4 is set.  (SPRGEOM: the level's
-; DIR_LO/DIR_HI, bit 7 of the high byte clear for bank 5, and the game's SPRG_* for
-; the geometry, by its shape SPRG_IX.)  Flags: bit 0 mirrored, bit 1 every scanline
-; stored, bit 3 the copy blitter, bit 4 in bank 5.
+;         without either when it is wholly off the window or not in this level.
+;         A, X, Y and the prologue's zero page clobbered.
+; The directory is split.  The level's part, in bank 7 (banks.s, ldprog.s): DIR_LO and
+; DIR_HI, the image's address by id, 0 if not in this level, bit 7 of the high byte
+; clear for bank 5.  The game's part: the geometry by shape (SPRG_IX by id; SPRG_W,
+; SPRG_RX, SPRG_RY, SPRG_LN and, with SPRGFL, SPRG_FL by shape).  Flags: bit 0
+; mirrored, bit 1 every scanline stored (a box), bit 3 the copy blitter.
 ; The steps: fetch the geometry; clip horizontally (sp_c0..sp_c1, first image column
 ; sp_c) and vertically (lines lstart..lend, char rows sp_r0..sp_r1); write the
 ; record; (Model B) note the mirror's columns; pick the blitter; work out the screen,
@@ -639,9 +638,8 @@ drawsprite:
         stza spclip                 ; set at every window edge the sprite is cut against
   .endif
 
-  .if SPRGEOM
-        ; ==== SPRGEOM: the address from the level's DIR_LO/HI, the geometry from
-        ; the game's SPRG_* tables by shape
+        ; ==== the address from the level's DIR_LO/HI, the geometry from the game's
+        ; SPRG_* tables by shape
     .if BOXN
         ; a "nothing can disturb it" alias draws the same picture as the id BOXN below
         cmp #BOXID0+BOXN
@@ -701,72 +699,6 @@ drawsprite:
         sec
         sbc SPRG_RX,y
 
-  .else
-        ; ==== the 8-byte directory entry at SPR_TABLE + id*8
-        ; a "nothing can disturb it" alias draws the same picture as the id BOXN below
-        cmp #BOXID0+BOXN
-        bcc :+
-        sbc #BOXN                   ; (C = 1: the bcc not taken)
-:
-        sta sp_id
-  .if BHW
-        stx ptr+1                   ; X = 0 still
-  .else
-        stza ptr+1
-  .endif
-        asl                         ; id*8 -> offset
-        rol ptr+1
-        asl
-        rol ptr+1
-        asl
-        rol ptr+1                   ; C = 0: id < 128
-        adc #<SPR_TABLE
-        sta ptr
-        lda ptr+1
-        adc #>SPR_TABLE
-        sta ptr+1
-        ; ---- the flags, and the data's bank
-        ldy #6
-        lda (ptr),y
-  .if DRAWFLAGS
-        eor sp_dfl                  ; the list's mirror flips the directory's
-  .endif
-        sta sp_flags
-        bankimm ldx, BANK_SPR, BANK_LVL
-        and #$10                    ; bit 4: the data is in bank 5
-        beq :+
-        bankimm ldx, BANK_TIL1, BANK_LVL
-:       stx sp_dbank                ; wanted later: the directory is still being read
-        ; ---- the image's address, width and lines
-        ldaz ptr
-        sta sp_ptr
-        ldy #1
-        lda (ptr),y
-        sta sp_ptr+1
-        iny
-        lda (ptr),y
-        sta sp_w
-        beq @out0                   ; width 0: no image
-        ldy #7
-        lda (ptr),y
-        sta sp_lines
-        sta sp_ext
-        lda sp_flags
-        and #2
-        bne :+
-        asl sp_ext                  ; half-res: two scanlines per stored row
-        ; ---- horizontal: sx = spx - refx - wx ; c0 = sx >> 1.  tmp3 = refx's sign
-        ; extension: sext inlined, the jsr/rts was 12 cycles of the 39
-:       ldy #4
-        lda (ptr),y
-        and #$80
-        beq @sxp
-        lda #$FF
-@sxp:   sta tmp3
-        lda spx
-        sec
-        sbc (ptr),y
-  .endif
 
         ; ---- (both) finish sx = spx - refx - wx, and c0 = sx >> 1 in w16
         tax
@@ -821,21 +753,12 @@ drawsprite:
         ; ---- vertical: sy = spy - refy - wy ; lb0 = 2*sy + wfine, the sprite's
         ; first scanline below the window's top (16 bit signed)
 @vert:
-  .if SPRGEOM
         ldy sp_g
         lda SPRG_RY,y
         jsr sext                    ; tmp3 = refy's sign (Y kept)
         lda spy
         sec
         sbc SPRG_RY,y
-  .else
-        ldy #5
-        lda (ptr),y
-        jsr sext                    ; tmp3 = refy's sign
-        lda spy
-        sec
-        sbc (ptr),y
-  .endif
         tax
         lda spy+1
         sbc tmp3

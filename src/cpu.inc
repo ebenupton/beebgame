@@ -57,9 +57,6 @@ DRAWFLAGS = 0                       ; draw flags in the sprite list's x high byt
         .ifndef TIGHTBSS
 TIGHTBSS = 0                        ; 9-byte sprite records, ENGBSS not page aligned
         .endif
-        .ifndef SPRGEOM
-SPRGEOM = 0                         ; the directory split: the level's addresses, the game's geometry
-        .endif
   .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
         .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
   .endif

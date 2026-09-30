@@ -13,7 +13,7 @@ whole sectors at the end, so the Model B's loader reads the file short of them.
                               objects=b'...', tile_tables=(attr, altcls), tiles=b'...',
                               placement=[(item, bank, img, extra), ...], map=b'...',
                               flat=b'...', halves=b'...', hpair=b'...', mir=b'',
-                              directory=lf.directory([None | (addr, bank, geometry), ...]),
+                              directory=lf.directory([None | (addr, bank), ...]),
                               page0=b'...', boxid0=103, boxn=15))
     lf.decode(data)             # the sections back, the map unpacked: for checks
 """
@@ -60,7 +60,7 @@ class Shape:
 
 # ---------------------------------------------------------------- the limits (src/defs.inc)
 OBJ_BYTES, OBJ_MAX = 6, 149     # LV_OBJS: 894 bytes, main RAM
-DIR_ENTRY = 8                   # SPR_TABLE: an entry a sprite id, BOXID0 + BOXN of them
+                                # SPR_TABLE: 2 bytes a sprite id, BOXID0 + BOXN of them
                                 # (the game's numbers, from its assets.inc: Level.boxid0,
                                 # boxn).  The smask section is empty (4-bit sprites have
                                 # no mask planes): kept, so the sections keep their numbers
@@ -68,13 +68,11 @@ STAGE_LVL_B = 0x7C00 - 0x5C00   # the Model B's level stage (without LV_PAGE0)
 STAGE_M = 0x8000 - 0x3000       # the Master's stage
 MASTERONLY = os.environ.get('MASTERONLY') == '1'   # (the build's: no Model B, no limit of its)
 PAGE0_LEN = 512
-DIR_BANK5 = 0x10                # a directory entry's flags: the data is in bank 5
-SPRGEOM = os.environ.get('SPRGEOM') == '1'   # (the build's: the split directory, 2 bytes an id)
 
 
 def dir_len(boxid0, boxn):
-    """the directory section's length: 8 bytes a sprite id, or (SPRGEOM) 2"""
-    return (2 if SPRGEOM else DIR_ENTRY) * (boxid0 + boxn)
+    """the directory section's length: 2 bytes a sprite id"""
+    return 2 * (boxid0 + boxn)
 
 
 # ---------------------------------------------------------------- the map's run length code
@@ -119,24 +117,7 @@ def placement(items):
 
 
 def directory(entries):
-    """SPR_TABLE: an entry for every sprite id (BOXID0 images, then BOXN boxes), each
-    None or (address, bank, geometry) -- geometry the entry's other six bytes (W, h,
-    refx, refy, flags, lines); a bank-5 image gets DIR_BANK5 in its flags"""
-    d = bytearray()
-    for e in entries:
-        if e is None:
-            d += bytes(DIR_ENTRY); continue
-        addr, bank, geom = e
-        assert len(geom) == 6 and bank in (4, 5)
-        g = bytearray(geom)
-        if bank == 5:
-            g[4] |= DIR_BANK5
-        d += bytes([addr & 255, addr >> 8]) + g
-    return bytes(d)
-
-
-def directory_split(entries):
-    """SPR_TABLE split (SPRGEOM): an entry for every sprite id, None or (address, bank);
+    """SPR_TABLE, the directory's level part: for every sprite id, None or (address, bank);
     the addresses' low bytes, then their high bytes -- 0 for None, bit 7 clear for bank
     5 (the images are all at $8000..$BFFF: bit 7 is always set in the address itself).
     The geometry is the game's own tables (SPRG_*), the same in every level."""
@@ -166,7 +147,7 @@ class Level:
     halves: bytes               # the half tiles: index in file, row, file
     hpair: bytes                # the halves' fill pairs
     mir: bytes                  # MIRTAB (TILEMIRROR; else empty)
-    directory: bytes            # directory(), or directory_split() (SPRGEOM)
+    directory: bytes            # directory()
     page0: bytes                # LV_PAGE0: the Master's gather table, 512 bytes
     boxid0: int = 0             # the game's sprite ids: BOXID0 images, then BOXN boxes
     boxn: int = 0               #  (assets.inc)
