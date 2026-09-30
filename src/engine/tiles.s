@@ -87,15 +87,15 @@ RINGHI_B:
   .if BHW
 ; The ring slot of a map char row, row mod RINGROWS, for ringmod (macros.s): five rings
 ; long, as the macro brings a row under RINGROWS*5 (the Master's ring is 32 rows: its
-; ringmod is an and).  It sits here, before drawrect, with a pad after it: together
-; they put drawrect's two hot stretches -- @run's bmi to @tile, over the solid chain,
+; ringmod is an and).  It sits here, before drawrect, with a pad after it (the
+; Master's, PADM_T6, alone): together they put drawrect's two hot stretches -- @run's bmi to @tile, over the solid chain,
 ; and @b31..@b7 -- each in a page, with the page boundary on the tile path between.
 ringmodtab:
 .repeat RINGROWS*5, i
         .byte i .mod RINGROWS
 .endrepeat
-        PAD ::PADB_T6, 0
   .endif
+        PAD ::PADB_T6, ::PADM_T6
 
 ; ============================================================================
 ; drawrect: draw map tiles into the current back buffer
@@ -129,10 +129,12 @@ ringmodtab:
 ;   (rc_sc0, set per rect), 4 for the later ones (@runnext).
 ; - @s0f's operand is SOLIDF and @hp0/@hp1's are HPAIR0/HPAIR1: the loader patches
 ;   them.  Their labels must stay (build.sh finds @s0f in game.dbg).
-; - Model B: the dispatch patches a branch's offset, so the whole of drawrect, to
-;   @done, is a write window into bank 6.  Each branch sits right before its blocks,
-;   which share its page (asserted after the blocks; ringmodtab and PADB_T6 place
-;   them), so it costs a jmp's 3 cycles.
+; - The dispatch patches a branch's offset (on the Model B the whole of drawrect, to
+;   @done, is a write window into bank 6 for it).  Each branch sits right before its
+;   blocks, which share its page (asserted after the blocks; on the Model B
+;   ringmodtab and PADB_T6 place them), so it costs a jmp's 3 cycles.
+; - X = the run's chars from RUNN to @advsp: every block keeps X (and C), and
+;   @advsp steps sp by RUN8's 8n.
 ; ============================================================================
         .segment "TILCODE"
 drawrect:
@@ -325,19 +327,13 @@ drawrect:
         bne @fx
         ; ---- id 0, the level's solid, the commonest run: one byte, the loader's
         ; (SOLIDF), stored down every line of it.  Chars in this run, as @tpset.
-@sol0:  lda rc_lim
-        cmp cnt
-        bcc :+
-        lda cnt
-:       sta rc_n                    ; min(rc_lim, cnt)
-        RUNX                        ; X, tmp = 8*rc_n
+@sol0:  RUNN
 @sdisp:
-  .if BHW
-        ; ---- the Model B: a patched branch into the chain that follows, taken (C = 0,
-        ; RUNX's asl).  The chain is 32 stores counting up, an iny between each, and
-        ; is entered at a store with Y = 0, so it stores lines 0 to 8n-1: the branch
-        ; skips the first 32 - 8n stores (MTO, zero page: 3 bytes a store, iny's).
-        ; 7 cycles a byte, and one ldy for the run.
+        ; ---- a patched branch into the chain that follows, taken (C = 0: RUNN).  The
+        ; chain is 32 stores counting up, an iny between each, and is entered at a
+        ; store with Y = 0, so it stores lines 0 to 8n-1: the branch skips the first
+        ; 32 - 8n stores (MTO, zero page: 3 bytes a store, iny's).  7 cycles a byte,
+        ; and one ldy for the run.
         ldy #0
         lda MTO-1,x
         sta @sj+1
@@ -351,10 +347,6 @@ drawrect:
         sta (sp),y
         jmp @advsp
         .assert @sj+2 = @mch && >@mch = >(@mch+72), error, "the solid chain must follow its branch, its entries in one page"
-  .else
-@s0f:   lda #0                      ; SOLIDF: the fill, stored alone
-        jmpx @mt-2
-  .endif
 
         ; ---- a stored tile.  Every tile is in bank 6, selected once per tile row.
 @tile:  sta tp+1                    ; the tile pointer's high byte
@@ -367,25 +359,14 @@ drawrect:
 @full:  lda GATHERL,x
         ora rowoff                  ; a full tile's lo byte is (id&3)<<6: bits 0-5 clear
 @tpsta: sta tp
-        ; ---- chars in this run: min(rc_lim, cnt) -> rc_n, X, tmp = 8*rc_n
-@tpset:
-        lda rc_lim
-        cmp cnt
-        bcc :+
-        lda cnt
-:       sta rc_n
-        RUNX
+        ; ---- chars in this run: min(rc_lim, cnt) -> rc_n and X
+@tpset: RUNN
 @tdisp:
-  .if BHW
-        ; the entry's offset into the branch, which is taken: C = 0 (RUNX's asl).  The
+        ; the entry's offset into the branch, which is taken: C = 0 (RUNN).  The
         ; blocks follow it in one page (asserted), so the branch costs what a jmp would
         lda @jto-1,x
         sta @tj+1
 @tj:    bcc @b31
-  .else
-        jmpx @jt-2
-@jt:    .word @b7, @b15, @b23, @b31
-  .endif
 
 ; ----------------------------------------------------------------------------
 ; The tile copy: unrolled, one block per char in descending char order, so that
@@ -443,7 +424,7 @@ drawrect:
         adc #0                      ; C = 1: +1 back, and C = 0
         sta cnt
         lda sp
-        adc tmp                     ; sp += 8*rc_n
+        adc @run8-1,x               ; sp += 8*rc_n (X = rc_n: the blocks keep X)
         sta sp
         bcs @advc                   ; a page on: the carry out of line, after @rowdone
         ; ---- the next run: later tiles in the row are whole and start at column 0
@@ -578,25 +559,15 @@ drawrect:
         sta tp
         lda FLATTAB+1,y
         sta tp+1
-        ; ---- chars in this run: min(rc_lim, cnt) -> rc_n, X, tmp = 8*rc_n
+        ; ---- chars in this run: min(rc_lim, cnt) -> rc_n and X
 @fillgo:
-        lda rc_lim
-        cmp cnt
-        bcc :+
-        lda cnt
-:       sta rc_n
-        RUNX
+        RUNN
 @fdisp:
-  .if BHW
-        ; the entry's offset into the branch, taken as C = 0 (RUNX's asl); A is dead
-        ; (every entry loads tp).  The blocks follow it in one page (asserted)
+        ; the entry's offset into the branch, taken as C = 0 (RUNN); A is dead (every
+        ; entry loads tp).  The blocks follow it in one page (asserted)
         lda @fto-1,x
         sta @fj+1
 @fj:    bcc @f31
-  .else
-        jmpx @ft-2
-@ft:    .word @f7, @f15, @f23, @f31
-  .endif
 ; PCHAR c: char c filled with the pair -- even lines tp, odd lines tp+1.  Each byte
 ; is loaded once a char and stored four times, every store setting its own Y (70
 ; cycles a char, where alternating the loads down a dey chain was 88).  A, Y
@@ -627,44 +598,17 @@ drawrect:
 @f7:    PCHAR 0
         jmp @advsp
 
-; ----------------------------------------------------------------------------
-; The solid's blocks: A (SOLIDF) stored down all 8 lines of each char, from @s0f.
-; ----------------------------------------------------------------------------
-  .if .not BHW                      ; (the Master's: the Model B's is the chain at @sdisp)
-@mt:    .word @m7, @m15, @m23, @m31
-; MFIL k: A stored at lines k down to k-7 (one char, k = 8c+7).  Y clobbered; A, C kept.
-.macro MFIL k
-        ldy #k
-        sta (sp),y
-        .repeat 7
-        dey
-        sta (sp),y
-        .endrepeat
-.endmacro
-@m31:   MFIL 31
-@m23:   MFIL 23
-@m15:   MFIL 15
-@m7:    ldy #7
-        .repeat 6
-        sta (sp),y
-        dey
-        .endrepeat
-        sta (sp),y
-        staz sp                     ; line 0 non-indexed
-        jmp @advsp
-  .endif
-
-  .if BHW
-; The Model B's dispatch, each group's entries by chars (1..4): a patched branch, the
-; entry's offset from it, right before its blocks (the solid's chain: MTO, zero page).
-; Each group's entries share a page with the branch's next byte, so a taken branch
-; costs a jmp's 3 cycles.
+; The dispatch, each group's entries by chars (1..4): a patched branch, the entry's
+; offset from it, right before its blocks (the solid's chain: MTO, zero page).  Each
+; group's entries share a page with the branch's next byte, so a taken branch costs a
+; jmp's 3 cycles.  RUN8: a run's bytes by chars, for @advsp's sp step (X = n).
 @jto:   .byte @b7-(@tj+2), @b15-(@tj+2), @b23-(@tj+2), @b31-(@tj+2)
 @fto:   .byte @f7-(@fj+2), @f15-(@fj+2), @f23-(@fj+2), @f31-(@fj+2)
         .assert @tj+2 = @b31 && @fj+2 = @f31, error, "the branch dispatches must sit right before their blocks"
         .assert @b7-(@tj+2) <= 127 && @f7-(@fj+2) <= 127, error, "a dispatch branch's blocks run past its reach"
         .assert >@b7 = >@b31 && >@f7 = >@f31, error, "a dispatch group straddles a page"
-  .endif
+@run8:  .byte 8, 16, 24, 32
+        .assert >@run8 = >(@run8+3), error, "RUN8 straddles a page (@advsp's read)"
 
 ; ---- the loader's patch points in the row loop
 ; HPAIR0/HPAIR1: @hfill's two loads of a half tile's pair.  The table sits above the

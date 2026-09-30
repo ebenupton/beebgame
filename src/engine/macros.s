@@ -1,5 +1,5 @@
 ; ============================================================================
-; engine/macros.s -- the engine's macros: the ring wrapping, and RUNX
+; engine/macros.s -- the engine's macros: the ring wrapping, and RUNN
 ;
 ; Included by engine.s after defs.s and vars.s; emits nothing by itself.  Each buffer's
 ; screen is a ring of RINGROWS char rows (defs.s): an address that runs off the ring's
@@ -18,7 +18,7 @@
 ;   pagestep  a pointer's high byte one page on after its low byte carried, folded
 ;   spnext    sp on one char (8 bytes), folding at the ring end
 ;   spcold    spnext's page step, out of line
-;   RUNX      a run's char count -> its dispatch index and byte count
+;   RUNN      a run's char count: min(rc_lim, cnt) -> rc_n, X; C = 0
 ;
 ; Anonymous labels.  The ring macros spell their skips with ':' labels, because a
 ; named label would end the enclosing routine's cheap-local (@) scope.  So a caller
@@ -227,21 +227,18 @@ n2:     tax
 .endmacro
 
 ; ----------------------------------------------------------------------------
-; RUNX: a run's dispatch index and byte count
-;   In:   A = the run's chars, n (rc_n)
-;   Out:  X = its dispatch index -- the Model B's n, into a table of low bytes; the
-;         Master's 2n, for jmp (abs,x);  A = tmp = its bytes, 8n;  C = 0
-;   Anonymous labels: none.
+; RUNN: a run's chars, min(rc_lim, cnt) -> rc_n and X, with C = 0 for the patched
+; branch that dispatches it and for @advsp after the blocks (which keep X and C).
+; rc_lim < cnt, a run with more to follow, falls through with C = 0 already; the
+; row's last run pays the clc.
+;   Anonymous labels: one.
 ; ----------------------------------------------------------------------------
-.macro RUNX
-  .if BHW                           ; Model B
+.macro RUNN
+        lda rc_lim
+        cmp cnt
+        bcc :+
+        lda cnt
+        clc
+:       sta rc_n
         tax
-        asl
-  .else                             ; Master
-        asl
-        tax
-  .endif
-        asl
-        asl
-        sta tmp
 .endmacro
