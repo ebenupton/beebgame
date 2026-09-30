@@ -108,8 +108,6 @@ sprx_ok:  .res 1                    ;  Master) SPRX in HAZEL/ANDY: ldprog.s
 ; What the interrupt stores, in main RAM so that it stores into no bank and needs no
 ; write bank of its own (cpu.inc: the write bank is 7's but for short windows) -- last
 ; in low RAM, so that nothing else moved for it
-SFXDUR:    .res 1                   ; the sound effect's steps to go (sound_tick)
-LOADREQ:   .res 1                   ; 0 running, 1 stop asked, 2 stopped, 3 resume asked (load_begin)
 MUSDUR:    .res 1                   ; the tune's player (music_tick, the menus' image;
 MUSNOTE:   .res 3                   ;  MUSON is in zero page): the note's steps to go,
 ISRT1:     .res 1                   ;  each channel's note, and its scratch

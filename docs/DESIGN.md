@@ -629,8 +629,7 @@ on the Master) to `@advsp`, which steps `sp` by a table of 8n -- every block kee
 of a pair stores each byte four times a character, every store setting its own Y (70
 cycles a character; alternating loads down a `dey` chain was 88).  The solid is one
 chain of 32 `sta (sp),y` with an `iny` between each after its branch, entered at a
-store with Y = 0 (the Model B's branch offsets in zero page, MTO, boot's: a byte
-shorter than a table, which keeps the row loop's `bmi` over the chain in reach); on
+store with Y = 0 (the Model B's branch offsets a table beside the dispatch's); on
 the Model B ringmodtab and PADB_T6 before `drawrect` put its two hot stretches each
 in a page, on the Master PADM_T6 the row loop's `bmi`.  Each character row starts with `sp` already set, by `drawrect`'s head for
 the first and `@rowdone` for the rest.

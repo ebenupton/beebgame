@@ -18,7 +18,7 @@
 ;   pagestep  a pointer's high byte one page on after its low byte carried, folded
 ;   spnext    sp on one char (8 bytes), folding at the ring end
 ;   spcold    spnext's page step, out of line
-;   RUNN      a run's char count: min(rc_lim, cnt) -> rc_n, X; C = 0
+;   RUNN      a run's char count: min(rc_lim, cnt) -> X (x RUNXS); C = 0
 ;
 ; Anonymous labels.  The ring macros spell their skips with ':' labels, because a
 ; named label would end the enclosing routine's cheap-local (@) scope.  So a caller
@@ -227,8 +227,9 @@ n2:     tax
 .endmacro
 
 ; ----------------------------------------------------------------------------
-; RUNN: a run's chars, min(rc_lim, cnt) -> rc_n, and X its dispatch index, n x RUNXS:
-; the Model B's n (a table of branch offsets), the Master's 2n (jmp (abs,x)).  C = 0
+; RUNN: a run's chars, n = min(rc_lim, cnt), as X, its dispatch index, n x RUNXS: the
+; Model B's n (a table of branch offsets), the Master's 2n (jmp (abs,x)) -- the only
+; copy: @advsp reads n and 8n back through X from tables (@run1, @run8).  C = 0
 ; out, for the Model B's patched branch and for @advsp after the blocks (which keep
 ; X and C).  rc_lim < cnt, a run with more to follow, falls through with C = 0
 ; already; the row's last run pays the Model B a clc, the Master's asl clears it.
@@ -247,7 +248,7 @@ RUNXS = 2
   .if BHW
         clc
   .endif
-:       sta rc_n
+:
   .if .not BHW
         asl                         ; n <= 4: C = 0
   .endif

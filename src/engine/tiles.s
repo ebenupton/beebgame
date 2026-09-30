@@ -324,10 +324,10 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         ; entered at a store with Y = 0, so it stores lines 0 to 8n-1, skipping the
         ; first 32 - 8n stores (3 bytes a store, iny's).  7 cycles a byte, and one ldy
         ; for the run.  The Model B enters by a patched branch, taken (C = 0: RUNN),
-        ; its offsets in zero page (MTO); the Master by jmp (abs,x) (@st).
+        ; its offsets a table (@mto); the Master by jmp (abs,x) (@st).
         ldy #0
   .if BHW
-        lda MTO-1,x
+        lda @mto-1,x
         sta @sj+1
   .endif
 @s0f:   lda #0                      ; SOLIDF: the fill, stored alone
@@ -358,7 +358,7 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
 @full:  lda GATHERL,x
         ora rowoff                  ; a full tile's lo byte is (id&3)<<6: bits 0-5 clear
 @tpsta: sta tp
-        ; ---- chars in this run: min(rc_lim, cnt) -> rc_n and X
+        ; ---- chars in this run: min(rc_lim, cnt) -> X
 @tpset: RUNN
 @tdisp:
   .if BHW
@@ -417,17 +417,17 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
 
 ; ----------------------------------------------------------------------------
 ; @advsp: after a run -- count its chars off and step sp past them.  C is clear at
-; every entry to @advsp, so the sbc gives cnt - rc_n - 1: -1 at the row's last run,
+; every entry to @advsp, so the sbc gives cnt - n - 1: -1 at the row's last run,
 ; whose sp step is skipped (sp is dead after it: @rowdone steps rc_sp).  Otherwise
 ; C = 1, and the adc #0 puts the 1 back and leaves C = 0.
 ; ----------------------------------------------------------------------------
 @advsp: lda cnt
-        sbc rc_n
+        sbc @run1-RUNXS,x           ; n, by X (the blocks keep it)
         bmi @rowdone                ; the row's last run
         adc #0                      ; C = 1: +1 back, and C = 0
         sta cnt
         lda sp
-        adc @run8-RUNXS,x           ; sp += 8*rc_n (X = rc_n x RUNXS: the blocks keep X)
+        adc @run8-RUNXS,x           ; sp += 8n (X = n x RUNXS: the blocks keep X)
         sta sp
         bcs @advc                   ; a page on: the carry out of line, after @rowdone
         ; ---- the next run: later tiles in the row are whole and start at column 0
@@ -549,7 +549,7 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         sta tp
         lda FLATTAB+1,y
         sta tp+1
-        ; ---- chars in this run: min(rc_lim, cnt) -> rc_n and X
+        ; ---- chars in this run: min(rc_lim, cnt) -> X
 @fillgo:
         RUNN
 @fdisp:
@@ -593,25 +593,28 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         jmp @advsp
 
 ; The dispatch, each group's entries by chars (1..4).  The Model B: a patched branch,
-; the entry's offset from it, right before its blocks (the solid's chain: MTO, zero
-; page); each group's entries share a page with the branch's next byte, so a taken
-; branch costs a jmp's 3 cycles.  The Master: jmp (abs,x), X = 2n, through the
-; entries' addresses.  RUN8: a run's bytes by chars, for @advsp's sp step (X = n x
-; RUNXS: the Master's a byte apart, with the jump tables' spare bytes between).
+; the entry's offset from it, right before its blocks (the solid's chain: @mto); each
+; group's entries share a page with the branch's next byte, so a taken branch costs a
+; jmp's 3 cycles.  The Master: jmp (abs,x), X = 2n, through the entries' addresses.
+; RUN1 and RUN8: a run's chars and bytes, n and 8n, for @advsp (X = n x RUNXS: the
+; Master's a byte apart).
   .if BHW
 @jto:   .byte @b7-(@tj+2), @b15-(@tj+2), @b23-(@tj+2), @b31-(@tj+2)
 @fto:   .byte @f7-(@fj+2), @f15-(@fj+2), @f23-(@fj+2), @f31-(@fj+2)
         .assert @tj+2 = @b31 && @fj+2 = @f31, error, "the branch dispatches must sit right before their blocks"
         .assert @b7-(@tj+2) <= 127 && @f7-(@fj+2) <= 127, error, "a dispatch branch's blocks run past its reach"
         .assert >@b7 = >@b31 && >@f7 = >@f31, error, "a dispatch group straddles a page"
+@mto:   .byte 72, 48, 24, 0         ; the solid chain's: 3 bytes a store, 8n stores
+@run1:  .byte 1, 2, 3, 4
 @run8:  .byte 8, 16, 24, 32
   .else
 @jt:    .word @b7, @b15, @b23, @b31
 @ft:    .word @f7, @f15, @f23, @f31
 @st:    .word @mch+72, @mch+48, @mch+24, @mch
+@run1:  .byte 1, 0, 2, 0, 3, 0, 4
 @run8:  .byte 8, 0, 16, 0, 24, 0, 32
   .endif
-        .assert >@run8 = >(@run8+3*RUNXS), error, "RUN8 straddles a page (@advsp's read)"
+        .assert >@run1 = >(@run8+3*RUNXS), error, "RUN1/RUN8 straddle a page (@advsp's reads)"
 
 ; ---- the loader's patch points in the row loop
 ; HPAIR0/HPAIR1: @hfill's two loads of a half's fill pair, by its colour.  The level's

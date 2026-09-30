@@ -37,14 +37,6 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
         sta $F0,y
 :       dey
         bpl :--
-  .if BHW
-        lda #72                     ; drawrect's solid-chain offsets (engine/vars.s MTO:
-        sta MTO                     ;  MTO+3, the 4-char run's, is the 0 above)
-        lda #48
-        sta MTO+1
-        lda #24
-        sta MTO+2
-  .endif
         .assert __LOWCODE_SIZE__ < 256, error, "the low-RAM image is copied a byte at a time"
 @lc:    lda __LOWCODE_LOAD__,x      ; (X = 0) exactly its length: the bar starts at $0300
         sta __LOWCODE_RUN__,x

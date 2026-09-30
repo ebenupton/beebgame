@@ -31,9 +31,13 @@
   .if BHW
         .segment "ZPHW": zeropage
 jv:       .res 2                  ; jmpx's vector: jmp (abs,x) has no 6502 form (cpu.inc)
-MTO:      .res 4                  ; drawrect's solid-chain offsets, by chars (1..4): 72, 48,
-                                  ;  24, 0 (boot's) -- in zero page, a byte shorter to read
-                                  ;  than a table, which keeps @run's bmi @tile in reach
+crtcbm:   .res 2                  ; the buffer being built: its mirror redirect (base -
+                                  ;  RINGCHARS; its CRTC base, crtcb, is zero page's)
+  .else
+        .segment "ZPHW": zeropage ; (the Master's: its interrupt's, hot -- profiled)
+dispD:    .res 1                  ; ACCCON D for the displayed buffer's playfield
+DSECT:    .res 1                  ; the step after the bar's: the one that switches D
+NEXTBUF:  .res 1                  ; the buffer the next flip shows (-> dispD)
   .endif
 
 ; ---------------------------------------------------------------- scratch
@@ -43,6 +47,14 @@ tp:       .res 2                  ; tile/source pointer
 sp:       .res 2                  ; screen pointer
 tmp:      .res 1
 tmp2:     .res 1
+; The flip and the interrupt's hottest (profiled: test/hotvars.mjs).  The frame hands
+; over its chain (NEXTSECT, 0 or 48: SECTAB's offset) and the vsync makes it the
+; displayed one (DISPSECT); the interrupt reads LOADREQ at every step.  Zero page is
+; main RAM, so the interrupt still stores into no bank.
+DISPSECT: .res 1                  ; the displayed buffer's chain (vsync)
+NEXTSECT: .res 1                  ; the chain the next flip shows (the frame)
+LOADREQ:  .res 1                  ; 0 running, 1 stop asked, 2 stopped, 3 resume asked (load_begin)
+SFXDUR:   .res 1                  ; the sound effect's steps to go (sound_tick)
 tmp3:     .res 1
 tmp4:     .res 1
 cnt:      .res 1
@@ -75,7 +87,9 @@ rc_gi:    .res 1
 rc_lim:   .res 1                  ; chars this run may take: 4 - its first char in the tile
 rowoff:   .res 1                  ; byte offset into the tile for this run:
                                   ;  rc_sub | (4 - rc_lim)*8
-rc_n:     .res 1
+  .if TILEMIRROR
+rc_n:     .res 1                  ; the mirror's chars in its run (the others' is X)
+  .endif
 ; per-rect invariants
 rc_tx0:   .res 1                  ; first tile column
 rc_nt:    .res 1                  ; tiles-1 per row
@@ -251,9 +265,6 @@ SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sectio
 BUF_SEC0:  .res 4                   ; each buffer's section 0 (the bar): CRTC address
 BUF_SEC0T1: .res 4                  ; and its T1 count
 SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sections)
-dispD:     .res 1                   ; ACCCON D for the displayed buffer's playfield
-DSECT:     .res 1                   ; the step after the bar's: the one that switches D
-NEXTBUF:   .res 1                   ; the buffer the next flip shows (-> dispD)
     .endif
 
 ; ---------------------------------------------------------------- LOWBSS: the sprite list
@@ -268,7 +279,3 @@ SPR_XL:    .res MAXSPR
 SPR_XH:    .res MAXSPR
 SPR_YL:    .res MAXSPR
 SPR_YH:    .res MAXSPR
-; The flip: the frame hands over its chain (NEXTSECT, 0 or 48: SECTAB's offset) and the
-; vsync makes it the displayed one.  DISPSECT is the interrupt's store, so low RAM.
-DISPSECT:  .res 1                   ; the displayed buffer's chain (vsync)
-NEXTSECT:  .res 1                   ; the chain the next flip shows (the frame)
