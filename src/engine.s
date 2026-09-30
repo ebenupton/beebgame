@@ -52,7 +52,7 @@
 ;
 ;   engine/defs.s      constants: hardware, banks, screen shape, records, keys
 ;   engine/vars.s      zero page and every table, by where it lives
-;   engine/macros.s    the CRTC and ring-wrapping macros
+;   engine/macros.s    the ring-wrapping macros, RUNX
 ;   engine/tiles.s     bank 6: ringaddr, drawrect, scroll_validate, select_backbuf,
 ;                      the bank's entry (drawrect_clip)
 ;   engine/gather.s    bank 5: gather5, a tile row's ids into GATHERL/H
@@ -72,8 +72,8 @@
 ; ---------------------------------------------------------------- editing
 ; - Labels: a normal label ends ca65's cheap-local (@) scope, so one added inside a
 ;   routine breaks its @ references; an anonymous `:` label added or removed
-;   retargets every :+/:- that crosses it.  The ring macros contain one each
-;   (macros.s says how many).
+;   retargets every :+/:- that crosses it.  Some ring macros contain them
+;   (macros.s gives each one's count).
 ; - Page crossings: SAMEPAGE asserts a hot branch at link time; PAD (pads.inc) moves
 ;   code off a boundary.  A size change in a bank moves what follows it: re-find
 ;   bank 7's pads with the Cleo repo's test/padopt.py.

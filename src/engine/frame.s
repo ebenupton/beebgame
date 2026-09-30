@@ -926,8 +926,7 @@ sp_g    = sp_mh                     ; the sprite's shape (NIBSPR: no mask plane,
         lsr
         lsr
         lsr
-        sta sp_r0                   ; sta sets no flags: Z still from the third lsr
-@nopart:
+        sta sp_r0
 
         ; ---- write the record's rectangle: map char column wcx + c0, char row
         ; wcy + r0, width c1 + 1 - c0, height r1 + 1 - r0, bit 7 set when clipped (so
@@ -1311,7 +1310,7 @@ draw_dirty:
         dec lcnt
         bne @l
         ldx curbuf
-        stz DIRTYCNT,x              ; A is dead: both callers reload it at once
+        stz DIRTYCNT,x              ; A is dead: render_core's next call reloads it
 @done:  rts
 
 ; ============================================================================

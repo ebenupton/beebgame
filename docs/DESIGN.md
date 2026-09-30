@@ -327,27 +327,30 @@ as a second `sta ROMSEL` (harmless: A holds the bank) and recorded in the WRFIX 
 (`cpu.inc` `wrsel` for a constant bank, `wrselx` where the bank is in X as well).
 `build.sh` appends the list after BANKFIX and asserts that every entry sits on
 `sta $FE30`.  The boot loader rewrites each by board -- Watford `sta $FF3n` or
-`sta $FF30,x`, Solidisk `sta $FE60` -- and leaves them alone on a plain machine.  A
-switch that only reads (`mapbyte`, `mapstrip`'s way in) needs none.  Setting the write
-bank does not change what is readable, so the companion need not sit beside the switch:
-low RAM is nearly full, so `callbank` has none, and the bank it enters sets its own at
-BANKENTRY -- `ds_entry` in banks 4 and 5, `bank6_entry` in bank 6.  `drawrect` sets it
-again after `mapstrip`.  LDPROG reads PBOARD and does it by hand.  On the Master the
-macros are empty.
+`sta $FF30,x`, Solidisk `sta $FE60` -- and leaves them alone on a plain machine.  The
+write bank is bank 7's always, but in a *window*: a store into another bank sits between
+a `wrsel` to it and a `wrback` that puts 7's back (cpu.inc) -- the sprite banks'
+`ds_entry` (the dispatch patch), `drawrect` (its dispatch patches), `mapput`, `selbb`
+and start-up.  Every other switch only reads and leaves the write bank be, and the
+interrupt stores into no bank (what it keeps is in low RAM), so it neither needs a
+write bank nor sets one.  `wrback`'s store is assembled as `sta $FF30`, a store into
+the MOS's ROM on a plain machine (a second `sta ROMSEL` there would page bank 7 in
+under the code), and build.sh accepts it beside `sta $FE30`.  LDPROG reads PBOARD and
+does it by hand.  On the Master the macros are empty.
 
 **Why bank 6's entry is a segment of its own (TIL6ENT) and banks 4's and 5's are
-not.**  Every bank `callbank` enters must have its entry at $8000, and each entry sets
-the write bank before anything stores into the bank (each of these banks patches its
-own code: the sprite loops their dispatch, the tile blitter its operands).  In banks 4
-and 5 the code is one macro, `SPRITE_LOOPS`, assembled into SPR4CODE and SPR5CODE with
-`ds_entry` its first line, so the entry is at $8000 because nothing comes before it.
+not.**  Every bank `callbank` enters must have its entry at $8000.  In banks 4 and 5
+the code is one macro (`NIB_LOOPS`, or `SPRITE_LOOPS` for the 2-bit format),
+assembled into SPR4CODE and SPR5CODE with `ds_entry` its first line, so the entry is
+at $8000 because nothing comes before it.
 Bank 6's code, TILCODE, is `engine/tiles.s` -- `ringaddr`, the tile blitter,
 `scroll_validate`, `select_backbuf` -- in source order, and `drawrect_clip`, where
 `callbank` must land, is not first in it; so `bank6_entry` (falling into
-`drawrect_clip`) is a segment of its own, placed first in the bank.  Bank 6 is also the one entered other ways -- `selbb` and
-`validate` from low RAM call routines inside it and set the write bank themselves,
-and `mapstrip` returns into it -- which is why its entry is a label of its own and not
-the start of a routine that is called from inside the bank too.
+`drawrect_clip`) is a segment of its own, placed first in the bank.  Bank 6 is also
+the one entered other ways -- `selbb` and `validate` from low RAM call routines inside
+it (`selbb` in a write window), and `mapstrip` returns into it -- which is why its entry
+is a label of its own and not the start of a routine that is called from inside the
+bank too.
 
 The boot loader (`loader.s`) finds the RAM with the test Stuart McConnachie's sideways
 RAM Elite loader used: page each of the 16 banks through $F4 and ROMSEL, flip bit 0 of
@@ -487,12 +490,11 @@ keyboard and runs the sound.
 which puts every other field's vsync half a scanline later (on BeebEm's Model B it
 showed as a band across the picture).
 
-The VS2T constants (defs.inc for the Model B, `engine/kernel.s` for the Master) are the
-vsync-to-bar time less the pulse, less the lead that puts each step ahead of its
-restart (-35 -36), less the step's own entry costs: on the Model B -23 for the stub
-entering bank 7 through `pagelogic` (which also sets the write bank) and -12 for the
-LOADREQ test and the IER-masked entry; on the Master -8 for the LOADREQ test.  +2 ticks
-on both: the vsync loads it as an immediate.
+VS2T (`engine/kernel.s`) is the vsync-to-bar time less the pulse, less the lead that
+puts each step ahead of its restart (-35 -36), less the step's own entry costs:
+STUBLAT -- on the Model B 18 - 22 - 4 ticks, its stub paging bank 7 in (pagelogic
+inlined, a jmp each way, no write bank); on the Master -BARLATE -- and -8 for the
+LOADREQ test.  +2 ticks on both: the vsync loads it as an immediate.
 
 **The Master's ACCCON D.**  D is the memory map the CRTC fetches from, sampled on every
 fetch, so it must change before a section's boundary, not after.  The bar's T1 fires
@@ -599,10 +601,11 @@ tile): a solid costs it one store.
 
 `drawrect` (bank 6) draws a rectangle of map characters into the back buffer: per-rect
 invariants once, one `ringaddr` for the first row, then per tile row one `mapstrip` and
-one or two character rows.  A row spans at most 640 bytes, so it can cross the ring's
-end only if it starts in the last three pages (`ringe3`); only then is each run
-checked, and a crossing run goes a character at a time through `spnext`'s fold.
-Otherwise the copy is unrolled, entered by the run's length.  A fill of a pair stores
+one or two character rows.  A row may straddle the ring's end but a run -- the
+characters of one tile, at most four -- never does (below), so every run is copied by
+an unrolled block entered by its length: on the Model B through a `jmp` whose low
+byte is patched (each group of four entries shares a page, asserted; `drawrect` is a
+write window for it), on the Master through `jmp (abs,x)`.  A fill of a pair stores
 each byte four times a character, every store setting its own Y (70 cycles a character;
 alternating loads down a `dey` chain was 88).
 

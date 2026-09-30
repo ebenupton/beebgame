@@ -1,5 +1,5 @@
 ; ============================================================================
-; engine/macros.s -- the engine's macros: the CRTC write and the ring wrapping
+; engine/macros.s -- the engine's macros: the ring wrapping, and RUNX
 ;
 ; Included by engine.s after defs.s and vars.s; emits nothing by itself.  Each buffer's
 ; screen is a ring of RINGROWS char rows (defs.s): an address that runs off the ring's
@@ -10,14 +10,12 @@
 ; buffer's ringehi (select_backbuf), but its base is at xx80, so the fold also takes
 ; $80 from the low byte (with the borrow into the high byte).
 ;
-;   crtc      write a CRTC register
 ;   ringmod   A = a map char row -> its ring slot (bank 6: the table, or and #31)
 ;   ringmod7  the same, by subtraction on the Model B (bank 7 has no table)
 ;   ringtest  a high byte just moved forward: branch out if it ran off the ring's end
 ;   ringfold  ringtest's out-of-line fold
 ;   ringup    ringtest and ringfold in one, in line
 ;   pagestep  a pointer's high byte one page on after its low byte carried, folded
-;   ringdn    a high byte just moved back: fold it under the ring's base
 ;   spnext    sp on one char (8 bytes), folding at the ring end
 ;   spcold    spnext's page step, out of line
 ;   RUNX      a run's char count -> its dispatch index and byte count
@@ -28,20 +26,6 @@
 ; header gives the count (spnext, which says :++ to jump over pagestep's, is the
 ; example).  ringmod uses .local labels instead and adds none.
 ; ============================================================================
-
-; ----------------------------------------------------------------------------
-; crtc reg, val: write CRTC register reg
-;   reg:  the register number (an immediate is made of it)
-;   val:  the value's operand as lda takes it: #n, or an address
-;   Out:  A = the value;  N, Z from it;  X, Y, C kept
-;   Anonymous labels: none.
-; ----------------------------------------------------------------------------
-.macro crtc reg, val
-        lda #reg
-        sta CRTC_IDX
-        lda val
-        sta CRTC_DAT
-.endmacro
 
 ; ----------------------------------------------------------------------------
 ; ringmod: a map char row -> its ring slot, row mod RINGROWS
@@ -207,20 +191,6 @@ n2:     tax
         .assert <RINGBYTES = 0 && RINGEND = $8000, error, "pagestep: the Master's ring"
 :       clc
   .endif
-.endmacro
-
-; ----------------------------------------------------------------------------
-; ringdn: fold a high byte just moved back under the ring's base
-;   In:   A = the high byte
-;   Out:  A = the high byte, in the ring;  C = 1 if no fold
-;   Anonymous labels: one.
-; The high byte alone: the Master's ring (RINGBASE is defined only there).
-; ----------------------------------------------------------------------------
-.macro ringdn
-        cmp #>RINGBASE
-        bcs :+
-        adc #>RINGBYTES             ; C = 0 from the compare
-:
 .endmacro
 
 ; ----------------------------------------------------------------------------
