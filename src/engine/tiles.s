@@ -347,10 +347,11 @@ drawrect:
         RUNX
 @tdisp:
   .if BHW
-        ; the entry's low byte into the jmp (the blocks share a page: asserted)
-        lda @jtl-1,x
+        ; the entry's offset into the branch, which is taken: C = 0 (RUNX's asl).  The
+        ; blocks follow it in one page (asserted), so the branch costs what a jmp would
+        lda @jto-1,x
         sta @tj+1
-@tj:    jmp @b31
+@tj:    bcc @b31
   .else
         jmpx @jt-2
 @jt:    .word @b7, @b15, @b23, @b31
@@ -556,11 +557,11 @@ drawrect:
         RUNX
 @fdisp:
   .if BHW
-        ; the entry's low byte into the jmp (A is dead: every entry loads tp); the
-        ; blocks share a page
-        lda @ftl-1,x
+        ; the entry's offset into the branch, taken as C = 0 (RUNX's asl); A is dead
+        ; (every entry loads tp).  The blocks follow it in one page (asserted)
+        lda @fto-1,x
         sta @fj+1
-@fj:    jmp @f31
+@fj:    bcc @f31
   .else
         jmpx @ft-2
 @ft:    .word @f7, @f15, @f23, @f31
@@ -624,11 +625,17 @@ drawrect:
         jmp @advsp
 
   .if BHW
-; The Model B's dispatch: each group's entries by chars (1..4), low bytes only -- the
-; jmp's high byte is its group's page.
-@jtl:   .byte <@b7, <@b15, <@b23, <@b31
+; The Model B's dispatch, each group's entries by chars (1..4).  The copies and the pair
+; fills follow their dispatch, so it is a patched branch: the entry's offset from the
+; branch.  The solid fills are too far from theirs (@sol0: placing them in reach would
+; put @run's bmi @tile out of its), so theirs is a patched jmp: the entry's low byte,
+; its high byte the group's page.  Either way each group's entries share a page with
+; what the dispatch lands on, so it costs a jmp's 3 cycles.
+@jto:   .byte @b7-(@tj+2), @b15-(@tj+2), @b23-(@tj+2), @b31-(@tj+2)
+@fto:   .byte @f7-(@fj+2), @f15-(@fj+2), @f23-(@fj+2), @f31-(@fj+2)
 @mtl:   .byte <@m7, <@m15, <@m23, <@m31
-@ftl:   .byte <@f7, <@f15, <@f23, <@f31
+        .assert @tj+2 = @b31 && @fj+2 = @f31, error, "the branch dispatches must sit right before their blocks"
+        .assert @b7-(@tj+2) <= 127 && @f7-(@fj+2) <= 127, error, "a dispatch branch's blocks run past its reach"
         .assert >@b7 = >@b31 && >@m7 = >@m31 && >@f7 = >@f31, error, "a dispatch group straddles a page: pads.inc PADB_M6 (or move it)"
   .endif
 
