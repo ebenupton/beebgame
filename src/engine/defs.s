@@ -50,9 +50,8 @@ ROMSEL_CPY= $F4                   ; the MOS's copy of ROMSEL: the interrupt rest
 
 ; ---------------------------------------------------------------- banks
 ; The same numbers on both machines (the sockets are patched at boot):
-;   4  the sprite row loop (with the mirrored blitter), sprites, SWAPTAB, MASKTAB0-3
-;   5  the sprite row loop (with the copy blitter), gather5, sprites, the map at
-;      $9C00, MASKTAB0-3
+;   4  the sprite row loop and blitters, sprites, the expansion tables and SWAPTAB
+;   5  the same, gather5, sprites, the map at $9C00
 ;   6  bank6_entry/drawrect_clip, the tile blitter and the ring work, the level's
 ;      tiles from $8600
 ;   7  the kernel at the top (resident); below it the game's image -- the level's

@@ -1,17 +1,16 @@
-"""Where the sprites' images and masks go in a bank: the order and the padding that
+"""Where the sprites' images go in a bank: the order and the padding that
 cost the sprite loops least.
 
 The cost is the pointers' page crossings.  A row of a sprite walks its column pointer
 across the image a column (`lines` bytes) at a time, and every page it crosses takes
 the carry path (sprpinc: 9 cycles more than falling through; the mirrored walk's
-borrow about the same); the mask pointer does the same across the mask plane, a
-group of four columns at a time.  The walk of row r starts at base + 8r - lb0, lb0's
+borrow about the same).  The walk of row r starts at base + 8r - lb0, lb0's
 low three bits the sprite's line phase, which is anything: the cost of a placement is
 the carries a draw expects over the eight phases, at the base's offset in its page.
 The reads that cross a page as well (a (zp),Y read whose index runs into the next
 page: 3.5 a draw for each page boundary inside an image) are the rest of it.
 
-A bank's run of sprites is items -- each image and each mask on its own -- in an
+A bank's run of sprites is items -- each image on its own -- in an
 order, with padding before any of them; the search swaps and moves items and moves
 padding, keeping what lowers the draws-weighted cost, within the run's room.  It is
 deterministic (seeded by its inputs) and cached (build/sprpack.cache): the same
@@ -50,16 +49,6 @@ def image_table(W, L, mirrored=False):
         else:
             _tables[k] = [CARRY * _walk(o, W, L, 8, rows, 8) + READ * ((o + n - 1) // 256 - o // 256)
                           for o in range(256)]
-    return _tables[k]
-
-
-def mask_table(W, L):
-    """the same for its mask: groups of four columns, L/2 bytes each, 4 bytes a row"""
-    k = ('mask', W, L)
-    if k not in _tables:
-        g, mh = (W + 3) // 4, L // 2
-        rows = lambda ph: (L + 2 * ph + 7) // 8
-        _tables[k] = [CARRY * _walk(o, g, mh, 4, rows, 4) for o in range(256)]
     return _tables[k]
 
 

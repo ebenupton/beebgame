@@ -8,7 +8,7 @@
 ; changed, draw the new sprite list, and compose the partial row above the window.
 ; Bank 7 drives it all and keeps the records; bank 6 draws the tiles (the rects go to
 ; drawrect_clip through low RAM's callbank), banks 4 and 5 draw the sprites (the row
-; loop, SPRITE_LOOPS, is assembled into each: drawsprite hands over through callbank).
+; loop, NIB_LOOPS, is assembled into each: drawsprite hands over through callbank).
 ;
 ;   draw_sprites   draw the sprite list into the back buffer, writing its records
 ;   erase_old      redraw the tiles under the buffer's records that are not kept
@@ -1031,7 +1031,7 @@ drawsprite:
         sbc sp_c0
         sta sp_ncol                 ; columns-1
         ; The row loop and the inner blocks are assembled into each sprite data bank
-        ; (SPRITE_LOOPS, sprloops.s): call the copy in the bank the directory named,
+        ; (NIB_LOOPS, sprloops.s): call the copy in the bank the directory named,
         ; through low RAM's direct switch (both banks enter at BANKENTRY) and back to
         ; this bank.
         lda sp_dbank

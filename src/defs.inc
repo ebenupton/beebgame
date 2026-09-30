@@ -1,10 +1,10 @@
 ; ============================================================================
 ; The addresses, for both machines (BHW, cpu.inc: the hardware).  The code lives in
 ; four sideways banks, each with the data its inner loops read:
-;   4  the sprite row loop (with the mirrored blitter), most of the sprite images
-;      and masks, SWAPTAB and the mask tables
-;   5  the row loop again (no mirrored blitter), the gather, the rest of the sprites,
-;      the map (a fixed 8K) and the mask tables
+;   4  the sprite row loop and blitters, most of the sprite images, and the
+;      expansion tables (L0TAB, L1TAB, NMASK) and SWAPTAB
+;   5  the row loop again, the gather, the rest of the sprites, the map (a fixed
+;      8K) and the same tables
 ;   6  the tile blitter and the ring work, then the level's tiles from TILES
 ;   7  at the top the kernel, resident: the chain's builders, the palette, the disc
 ;      driver, and on the Model B the interrupt's work, the keys and the sound.

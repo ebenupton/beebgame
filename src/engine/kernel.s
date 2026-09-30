@@ -192,9 +192,7 @@ build_sections:
         cmp #1                      ; C = 1 iff r > 0
         lda #RINGROWS-1
         bcs :+
-        adc #0                      ; r == 0: C is clear here, so this pair adds 1
-        adc #1                      ; (the adc #0 is spare: 2 bytes, 2 cycles a frame,
-                                    ;  kept -- removing it moves bank 7's code)
+        adc #1                      ; r == 0 (C = 0 here): the whole last row fits too
 :       sec
         sbc tmp3
         cmp tmp4

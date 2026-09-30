@@ -15,14 +15,14 @@ whole sectors at the end, so the Model B's loader reads the file short of them.
                               flat=b'...', halves=b'...', hpair=b'...', mir=b'',
                               directory=lf.directory([None | (addr, bank), ...]),
                               page0=b'...', boxid0=103, boxn=15))
-    lf.decode(data)             # the sections back, the map unpacked: for checks
+    lf.decode(data, 103, 15)    # the sections back, the map unpacked: for checks
 """
 from dataclasses import dataclass, field
 import os, re, sys
 
 # ---------------------------------------------------------------- the sections
 SECTIONS = ('hdr', 'objs', 'attr', 'altcls', 'tiles', 'place', 'map', 'flat', 'halves',
-            'hpair', 'mir', 'dir', 'smask', 'page0')
+            'hpair', 'mir', 'dir', 'page0')
 SEC = {n: i for i, n in enumerate(SECTIONS)}
 
 # ---------------------------------------------------------------- the header, 32 bytes (LV_HDR)
@@ -62,8 +62,7 @@ class Shape:
 OBJ_BYTES, OBJ_MAX = 6, 149     # LV_OBJS: 894 bytes, main RAM
                                 # SPR_TABLE: 2 bytes a sprite id, BOXID0 + BOXN of them
                                 # (the game's numbers, from its assets.inc: Level.boxid0,
-                                # boxn).  The smask section is empty (4-bit sprites have
-                                # no mask planes): kept, so the sections keep their numbers
+                                # boxn)
 STAGE_LVL_B = 0x7C00 - 0x5C00   # the Model B's level stage (without LV_PAGE0)
 STAGE_M = 0x8000 - 0x3000       # the Master's stage
 MASTERONLY = os.environ.get('MASTERONLY') == '1'   # (the build's: no Model B, no limit of its)
@@ -175,7 +174,7 @@ def encode(lv):
     assert unrle(maprle) == lv.map
     body = dict(hdr=header(lv), objs=lv.objects, attr=lv.tile_tables[0], altcls=lv.tile_tables[1],
                 tiles=lv.tiles, place=lv.placement, map=maprle, flat=lv.flat, halves=lv.halves,
-                hpair=lv.hpair, mir=lv.mir, dir=lv.directory, smask=b'', page0=lv.page0)
+                hpair=lv.hpair, mir=lv.mir, dir=lv.directory, page0=lv.page0)
     off = 2 * len(SECTIONS)
     table, data = bytearray(), bytearray()
     for name in SECTIONS:
@@ -191,14 +190,17 @@ def encode(lv):
     return out
 
 
-def decode(data):
-    """the sections by name (the map unpacked, the header's fields as well)"""
+def decode(data, boxid0, boxn):
+    """the sections by name (the map unpacked, the header's fields as well); boxid0 and
+    boxn, the game's, say how long the directory is: the padding to LV_PAGE0's sector
+    follows it, as 'pad'"""
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     ends = offs[1:] + [len(data)]
     sec = {n: data[o:e] for n, o, e in zip(SECTIONS, offs, ends)}
     sec['page0'] = sec['page0'][:PAGE0_LEN]
-    sec['pad'] = sec['smask']                       # (empty smask: to LV_PAGE0's sector)
-    sec['smask'] = b''
+    n = dir_len(boxid0, boxn)
+    sec['pad'] = sec['dir'][n:]                     # (to LV_PAGE0's sector)
+    sec['dir'] = sec['dir'][:n]
     h = sec['hdr']
     sec['map'] = unrle(sec['map'], 1 << (h[HDR_LW] + h[HDR_LH]))
     sec['fields'] = dict(lw=h[HDR_LW], lh=h[HDR_LH], nobj=h[HDR_NOBJ],
@@ -225,7 +227,7 @@ def check(data, boxid0, boxn):
     assert offs[0] == 2 * len(SECTIONS) and offs == sorted(offs), 'the section table'
     assert offs[SEC['page0']] % 256 == 0 and len(data) - offs[SEC['page0']] == PAGE0_LEN, 'LV_PAGE0'
     assert (len(data) - PAGE0_LEN <= STAGE_LVL_B or MASTERONLY) and len(data) <= STAGE_M, 'too big for a stage'
-    sec = decode(data)
+    sec = decode(data, boxid0, boxn)
     f = sec['fields']
     assert len(sec['objs']) == OBJ_BYTES * f['nobj'] and f['nobj'] <= OBJ_MAX, 'the objects'
     assert len(sec['map']) == 1 << (f['lw'] + f['lh']), 'the map'

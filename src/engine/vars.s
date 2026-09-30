@@ -188,9 +188,9 @@ crtcb:     .res 2                   ; build_sections: the buffer's CRTC base
 ; Tables (uninitialised)
 ;
 ; Each table lives in the bank of the code that reads it, and only what more than one
-; bank touches is in low RAM.  The mask tables are static data at a fixed address in
-; both sprite banks (MASKTAB0, SWAPTAB in src/defs.inc); sprmul5 and the row tables
-; are static too.
+; bank touches is in low RAM.  The expansion tables and SWAPTAB are static data at a
+; fixed address in both sprite banks (defs.inc); sprmul5 and the row tables are
+; static too.
 ; ============================================================================
 
 ; ---------------------------------------------------------------- TILBSS: bank 6

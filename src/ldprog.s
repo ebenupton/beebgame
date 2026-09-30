@@ -607,7 +607,7 @@ lv_load:
   .endif
 @sfile: jsr placewalk
 @plend:
-        ; ---- the directory and SPRMASK, as the packer finished them
+        ; ---- the directory's level part, as the packer finished it
         lda #SEC_DIR
         jsr section
         lda #<SPR_TABLE             ; bank 7, beside the prologue that reads it
