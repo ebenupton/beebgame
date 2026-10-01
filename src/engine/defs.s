@@ -102,9 +102,6 @@ RINGROWS  = 32                    ; the whole 20K: the hardware fold IS the ring
 VISROWS   = 30                    ; visible char rows
   .endif
 BUFROWS   = VISROWS + 1           ; rows held: the visible ones plus the bottom partial's
-; The camera follows the player one for one (Cleo's), so her fall speed is also how
-; far the window moves in a frame.  A char row is four game pixels: a play decision.
-MAXDWY    = 8
 ROWBYTES  = ROWCHARS*8
 RINGCHARS = ROWCHARS*RINGROWS
 RINGBYTES = RINGCHARS*8
