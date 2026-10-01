@@ -5,7 +5,9 @@ them from here too (`python3 levelfile.py inc` writes levelfmt.inc, which ldprog
 includes), so the two cannot drift apart.
 
 A level file is a table of section offsets (two bytes each, from the file's start),
-then the sections in order.  The last, LV_PAGE0 (the Master's tile gather), is two
+then the sections in order.  The header may carry a tail of the game's own bytes
+(Level.header_tail): the loader copies the whole section to LV_HDR, so the tail lands
+at LV_HDR + HDR_LEN, where the game keeps memory for it.  The last, LV_PAGE0 (the Master's tile gather), is two
 whole sectors at the end, so the Model B's loader reads the file short of them.
 
     import levelfile as lf
@@ -152,6 +154,8 @@ class Level:
     boxid0: int = 0             # the game's sprite ids: BOXID0 images, then BOXN boxes
     boxn: int = 0               #  (assets.inc)
     game_header: dict = field(default_factory=dict)   # offset -> byte, HDR_GAME only
+    header_tail: bytes = b''    # the game's bytes after the header: the loader copies
+                                # them on to LV_HDR + HDR_LEN (the game's memory there)
 
 
 def header(lv):
@@ -163,7 +167,10 @@ def header(lv):
         assert o in HDR_GAME, 'header byte %d is the engine\'s' % o
         h[o] = v
     h[HDR_SHAPE:] = lv.shape.encode()
-    return bytes(h)
+    # the loader copies the section whole, its length from the section table's low
+    # bytes: under a page
+    assert HDR_LEN + len(lv.header_tail) < 256, 'the header\'s tail is too long'
+    return bytes(h) + lv.header_tail
 
 
 def encode(lv):

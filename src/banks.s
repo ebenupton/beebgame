@@ -71,7 +71,8 @@ lvreset:
 LV_ATTR0:   .res 256                ; objects go to main RAM: LV_OBJS, defs.inc)
 LV_ALTCLS:  .res 256                ; alt class by tile id
 LV_HDR:     .res 32                 ; header: lw, lh, nobj, the tile set's shape, and
-                                    ; the game's own fields (tools/levelfile.py)
+                                    ; the game's own fields (tools/levelfile.py); the
+                                    ; game's header tail follows, in its own memory
         .segment "ENGBSS"           ; the engine's: the sprite directory
 ; The directory's level part, by sprite id: the images' addresses, low bytes then high
 ; bytes -- 0 not in this level, bit 7 clear in bank 5.  The geometry is the game's

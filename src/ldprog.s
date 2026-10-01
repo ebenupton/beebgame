@@ -266,8 +266,10 @@ lv_load:
         jsr readfile
         ; ---- the tables: the section table's offsets are from the file's start
         lda #SEC_HDR
-        jsr section                 ; the header
-        lda #32
+        jsr section                 ; the header, and the game's tail after it: to
+        lda STAGE_LVL+2*SEC_OBJS    ; the objects' section (under a page: levelfile.py)
+        sec
+        sbc STAGE_LVL+2*SEC_HDR
         sta cnt
         sty cnt+1                   ; Y = 0: section 0's index
         .assert <LV_HDR = 0, error, "dst's low byte is Y's 0"
