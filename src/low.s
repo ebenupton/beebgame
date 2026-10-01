@@ -87,6 +87,8 @@ callbank:                           ; A = the bank (the write bank is set by the
 
         .segment "LOWBSS"
 GATHERH:  .res 21                   ; a tile row's gather (gather5): 21 tiles at most
+clipmask: .res 1                    ; $80 when the window has moved since the back buffer
+                                    ;  last drew (select_backbuf; match_sprites)
         .segment "LOWBSS2"          ; the rest of low RAM, above the code
 GATHERL:  .res 21
         .segment "LOWBSS"

@@ -818,6 +818,22 @@ select_backbuf:
 :       sta ACCCON
         plp
   .endif
+        ; ---- has the window moved since this buffer last drew?  Then a record cut at
+        ; its edge is not kept (match_sprites): what more of it the scroll brought into
+        ; view is tiles.  BUF_CX/CY are the window it drew (validate updates them later)
+        lda wcx
+        cmp BUF_CX,x
+        bne @mv
+        lda wcx+1
+        cmp BUF_CXH,x
+        bne @mv
+        lda wcy
+        cmp BUF_CY,x
+        bne @mv
+        lda #0
+        .byte $2C                   ; (bit abs: over the lda #$80)
+@mv:    lda #$80
+        sta clipmask
         ; ---- the sprite records: X = curbuf (0/1)
   .if TIGHTBSS
         lda @rb,x                   ; its first sprite record

@@ -315,6 +315,9 @@ erase_old:
 ;         its screen pixels are already right), 1 = a box star where a box star was
 ;         (a different frame of the same thing, same place), 0 = neither;
 ;         A, X, Y clobbered
+; A sprite drawn cut at the window's edge is not kept once the window has moved since
+; (clipmask, select_backbuf's): the strip that brought more of it into view was drawn
+; as tiles.
 ; Two box-star frames at the same place overwrite each other exactly -- every game
 ; pixel opaque, and each box covers the art of the frame before it -- so a frame
 ; change there needs no erase either: hence KEEP = 1.
@@ -371,6 +374,9 @@ match_sprites:
         lda SPR_YH,x
         cmp REC_YH,y
         bne @next
+        lda REC_H,y                 ; not if it was cut at the window's edge and the
+        and clipmask                ;  window has moved since (select_backbuf): its new
+        bne @next                   ;  part is the scroll's tiles
         lda tmp3
         sta KEEP,x                  ; same screen pixels in the same place: skip the erase
 @next:  iny
@@ -425,7 +431,11 @@ match_sprites:
         iny
         lda SPR_YH,x
         cmp (rp),y
-        beq @next                   ; same screen pixels in the same place: skip the erase
+        bne @zero
+        ldy #REC_H                  ; same screen pixels in the same place: skip the erase
+        lda (rp),y                  ;  -- unless it was cut at the window's edge and the
+        and clipmask                ;  window has moved since (select_backbuf): its new
+        beq @next                   ;  part is the scroll's tiles
 @zero:  stz KEEP,x                  ; not kept
 @next:  lda rp
         clc
