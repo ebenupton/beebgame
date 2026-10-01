@@ -11,10 +11,13 @@
 ; has been written: its writers note the range (drawrect's head and banks.s mirdirty: MIRDIRTY_BODY).
 mirror_copy:
         ldx curbuf
-        lda wcxm
-        cmp mirwcx,x                ; a move left uncovers chars the last copy never
-        bcs :+                      ; reached, so the whole row has to be made again
-        lda #0
+        lda mrow                    ; a new map row in the last slot (the window
+        cmp mirmr,x                 ;  crossed a slot boundary across: wcxm wrapped),
+        bne @all                    ;  or a move left, uncovers chars the last copy
+        lda wcxm                    ;  never reached -- written while they were the
+        cmp mirwcx,x                ;  row above's, left of wcxm, so never noted --
+        bcs :+                      ;  and the whole row has to be made again
+@all:   lda #0
         sta mirlo,x
         lda #ROWCHARS-1
         sta mirhi,x
@@ -38,6 +41,8 @@ mirror_copy:
         sta mirlo,x
         lda wcxm                    ; the chars left of wcxm are not copied
         sta mirwcx,x
+        lda mrow
+        sta mirmr,x
         tya                         ; the chars from the first written to the last
         sec
         sbc tmp4

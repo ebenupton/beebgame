@@ -441,8 +441,12 @@ contiguously: the chain reads P1 up to the ring's end and M from the mirror
 slot aligned no row straddles at all.  The blitters note the columns they write to the
 row the mirror follows (`mirdirty`, and `drawrect`'s own copy in line, the sprite prologue
 and `copy_partial`), and `mirror_copy`, the last step of `render_core`, copies only
-those; a move left uncovers characters the last copy never reached, so it redoes the
-whole row.
+those.  It redoes the whole row when a move left uncovers characters the last copy
+never reached, or when the map row in the last slot (`mrow`) has changed since it: a
+move right across a slot boundary wraps `wcxm` through 0, and the characters now from
+`wcxm` on were written while they were the row above's, left of the old `wcxm`, so no
+blitter noted them.  (Missing that second case showed stale mirror characters in the
+straddling row, a strip of the tile that was there before.)
 
 **Q's first scanline.**  A 6845 always displays the first scanline of a frame whatever
 R6 says, so Q's row 0 line 0 is one more line under the picture.  As the ring row

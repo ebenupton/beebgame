@@ -99,6 +99,7 @@ mirdty:   .res 2                    ; per buffer: the row has been written since
 mirlo:    .res 2                    ; and which chars of it (in slot chars, 0..79)
 mirhi:    .res 2
 mirwcx:   .res 2                    ; the wcxm the copy was made for
+mirmr:    .res 2                    ; and the mrow
         .segment "LOWBSS"
   .endif
 ; (the level's shape, mapshr and MAPSTRIDE, and the tune's MUSON and MUSTICK are
