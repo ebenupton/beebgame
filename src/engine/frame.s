@@ -315,9 +315,13 @@ erase_old:
 ;         its screen pixels are already right), 1 = a box star where a box star was
 ;         (a different frame of the same thing, same place), 0 = neither;
 ;         A, X, Y clobbered
-; A sprite drawn cut at the window's edge is not kept once the window has moved since
-; (clipmask, select_backbuf's): the strip that brought more of it into view was drawn
-; as tiles.
+; Once the window has moved since the buffer last drew (clipmask, select_backbuf's), a
+; record is kept only if it was not cut at the window's edge -- the strip that brought
+; more of it into view was drawn as tiles -- and lies in the rows and columns the old
+; window and the new both hold (krlo..., select_backbuf's): the rest of the buffer is
+; this frame's strips, or ring slots reused while it was out of view (the composed row
+; above the window) -- a record kept on through a move need not fit the window it was
+; kept in.  (TIGHTBSS has only the first test.)
 ; Two box-star frames at the same place overwrite each other exactly -- every game
 ; pixel opaque, and each box covers the art of the frame before it -- so a frame
 ; change there needs no erase either: hence KEEP = 1.
@@ -432,10 +436,9 @@ match_sprites:
         lda SPR_YH,x
         cmp (rp),y
         bne @zero
-        ldy #REC_H                  ; same screen pixels in the same place: skip the erase
-        lda (rp),y                  ;  -- unless it was cut at the window's edge and the
-        and clipmask                ;  window has moved since (select_backbuf): its new
-        beq @next                   ;  part is the scroll's tiles
+        lda clipmask                ; same screen pixels in the same place: skip the erase
+        beq @next                   ;  -- if the window has not moved since (select_backbuf)
+        jmp @moved                  ;  or else if it fits both windows (out of line)
 @zero:  stz KEEP,x                  ; not kept
 @next:  lda rp
         clc
@@ -446,6 +449,45 @@ match_sprites:
 :       inx
         bne @l                      ; always: i+1 <= MAXSPR
 @done:  rts
+        ; ---- the window has moved: kept only if not cut at the window's edge and
+        ; inside the rows and columns both windows hold (the rest of the buffer is the
+        ; scroll's tiles, or slots reused since)
+@moved: ldy #REC_H
+        lda (rp),y
+        bmi @zero2
+        sta tmp3                    ; its height
+        dey
+        dey                         ; REC_CY
+        .assert REC_H - 2 = REC_CY && REC_CY - 2 = REC_CX, error, "match_sprites: the fields' order"
+        lda (rp),y
+        sec
+        sbc wcy                     ; its row in this window
+        cmp krlo
+        bcc @zero2
+        adc tmp3                    ; C = 1: row + height + 1
+        bcs @zero2
+        cmp krhi2
+        bcs @zero2
+        dey
+        dey                         ; REC_CX
+        lda (rp),y
+        sec
+        sbc wcx
+        sta tmp3                    ; its column in this window
+        iny
+        lda (rp),y
+        sbc wcx+1
+        bne @zero2
+        lda tmp3
+        cmp kclo
+        bcc @zero2
+        ldy #REC_W
+        adc (rp),y                  ; C = 1: column + width + 1
+        bcs @zero2
+        cmp kchi2
+        bcs @zero2
+        jmp @next
+@zero2: jmp @zero
   .endif
 
 ; ----------------------------------------------------------------------------

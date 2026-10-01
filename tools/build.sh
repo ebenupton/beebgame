@@ -188,11 +188,11 @@ with open(BD + '/defs_ld.inc', 'w') as f:
             f.write('; %s: not in labels.txt (a constant?)\n' % n)
     for k, (a, n) in img.items():
         f.write('%s_ADDR = $%04X\n%s_LEN = %d\n' % (k, a, k, n))
-    # the image's variables (GAMEBSS then ENGBSS, page aligned), zeroed as it comes in:
-    # below its code
+    # the image's variables (GAMEBSS then ENGBSS, from a page), zeroed as it comes in,
+    # to their last byte: below its code, which may start in their last page
     bss, bssn = addr['__GAMEBSS_RUN__'], addr['__ENGBSS_RUN__'] + addr['__ENGBSS_SIZE__'] - addr['__GAMEBSS_RUN__']
-    assert bss & 255 == 0 and bss + ((bssn + 255) & ~255) <= addr['__B7_START__'], 'the game image\'s variables run into its code'
-    f.write('GAME_BSS = $%04X\nGAME_BSS_PAGES = %d\n' % (bss, (bssn + 255) // 256))
+    assert bss & 255 == 0 and bss + bssn <= addr['__B7_START__'] and bssn >= 256, 'the game image\'s variables run into its code'
+    f.write('GAME_BSS = $%04X\nGAME_BSS_PAGES = %d\nGAME_BSS_REM = %d\n' % (bss, bssn // 256, bssn % 256))
 # each image's own patch lists (bank 7 entries of the linker's, cpu.inc BANKREF and
 # wrsel, that fall in it): image_load applies them after every read, as the boot
 # loader does BANKS's

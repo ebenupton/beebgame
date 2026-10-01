@@ -1444,7 +1444,7 @@ image_load:
         sta dst
         lda #>GAME_BSS
         sta dst+1
-        ldx #GAME_BSS_PAGES
+        ldx #GAME_BSS_PAGES         ; the whole pages (at least one: build.sh)
         tya
 @z:     sta (dst),y                 ; (bank 7 paged, and its write bank: bcopy's pgbank)
         iny
@@ -1452,6 +1452,12 @@ image_load:
         inc dst+1
         dex
         bne @z
+  .if GAME_BSS_REM
+        ldy #GAME_BSS_REM           ; then the last page's bytes, and no further: the
+@zr:    dey                         ;  image's code may start in that page
+        sta (dst),y
+        bne @zr
+  .endif
         sta dst                     ; (A = 0; <BARADDR = 0)
         lda #>BARADDR
         sta dst+1

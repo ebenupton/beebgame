@@ -834,6 +834,53 @@ select_backbuf:
         .byte $2C                   ; (bit abs: over the lda #$80)
 @mv:    lda #$80
         sta clipmask
+        ; ---- and what the buffer's last window and this one both hold, relative to
+        ; this one (match_sprites keeps a record only inside it once the window has
+        ; moved: the rest of the buffer is this frame's strips, or slots reused since):
+        ; rows krlo .. krhi2-2, columns kclo .. kchi2-2; krlo/kclo $FF for none.  With
+        ; d the old window less the new, rows max(0, d) .. min(BUFROWS, BUFROWS + d)-1.
+        lda BUF_CY,x
+        sec
+        sbc wcy                     ; d, rows (an invalid buffer keeps no records)
+        bmi @rneg
+        cmp #BUFROWS
+        bcs @rnone
+        sta krlo                    ; d >= 0: rows d .. BUFROWS-1
+        lda #BUFROWS+2
+        bne @krh                    ; always
+@rneg:  cmp #<(1-BUFROWS)
+        bcc @rnone                  ; d <= -BUFROWS: nothing shared
+        adc #BUFROWS+2-1            ; C = 1: BUFROWS + d + 2
+        ldy #0
+        sty krlo                    ; rows 0 .. BUFROWS+d-1
+@krh:   sta krhi2
+        lda BUF_CX,x                ; d, columns (16 bit)
+        sec
+        sbc wcx
+        tay
+        lda BUF_CXH,x
+        sbc wcx+1
+        beq @cpos
+        cmp #$FF
+        bne @cnone                  ; (an invalid buffer's $80 too)
+        tya
+        cmp #<(1-ROWCHARS)
+        bcc @cnone                  ; d <= -ROWCHARS
+        adc #ROWCHARS+2-1           ; C = 1: ROWCHARS + d + 2
+        sta kchi2
+        lda #0                      ; columns 0 .. ROWCHARS+d-1
+        beq @clo                    ; always
+@rnone: lda #$FF
+        sta krlo
+        bne @krh                    ; always (krhi2 is not read)
+@cpos:  tya
+        cmp #ROWCHARS
+        bcs @cnone
+        ldy #ROWCHARS+2             ; columns d .. ROWCHARS-1
+        sty kchi2
+        bcc @clo                    ; always: C = 0 from the cmp
+@cnone: lda #$FF
+@clo:   sta kclo
         ; ---- the sprite records: X = curbuf (0/1)
   .if TIGHTBSS
         lda @rb,x                   ; its first sprite record
