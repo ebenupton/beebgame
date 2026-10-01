@@ -127,8 +127,11 @@ BARADDR   = $0300
 .assert MIRR_A = BARADDR + BARROWS*ROWBYTES, error, "mirror A must follow the bar"
 ; Q's start (kernel.s build_sections): the 6845 shows a frame's first scanline whatever
 ; R6 says, so Q's line 0 shows under the picture.  The Model B has no spare line of
-; black, so for now it is the bar's first (its palette to blank it, later).
-QBLANK    = BARADDR
+; black, so it is the bar's line 0 from its 45th char (row 0's to 79, row 1's from 0 to
+; 44) and Q's step blacks the palette for it (kernel.s): there its colours first show
+; late enough for the writes -- yellow and magenta from the 9th char (the score's digits,
+; whatever they are), cyan from the 39th (the icon under the lives).
+QBLANK    = BARADDR + 45*8
   .else
 ; ---- Master: the ring, the composed row, the bar
 ; The bar at $2B00 (below the screen, main RAM, single-buffered), then each buffer's

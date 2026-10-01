@@ -71,6 +71,9 @@
 BARLEAD = 0
 BARLATE = 0
 STEPLATE = 0
+QLEAD = 40                          ; Q's step: its palette writes start as the line before
+                                    ; Q's goes into its blanking (crtctime)
+P2EARLY = 0                         ; (a two-line P2's step does Q's kill: @kend)
   .else
 BARLATE = 13
 STEPLATE = 20
@@ -263,24 +266,43 @@ build_sections:
         sta SECTAB+4,x              ; R6 = 0: display off
         lda #QVSYNC
         sta SECTAB+5,x              ; R7: the only entry whose R7 is this
-  .if .not BHW
-        ; ---- the Master: Q's step puts D back to 0 before Q's first scanline (QBLANK is
-        ;      main RAM: under $3000, D = 1 would read HAZEL/ANDY), so like the D step
-        ;      it fires early, by QLEAD: the section before Q -- whose duration the entry
-        ;      before that carries -- runs STEPLATE + QLEAD shorter.  The vsync takes
-        ;      this buffer's Q entry from BUF_QS into QSECT.
+        ; ---- Q's step fires early, by QLEAD: the section before Q -- whose duration the
+        ;      entry before that carries -- runs STEPLATE + QLEAD shorter.  The Master's
+        ;      puts D back to 0 before Q's first scanline (QBLANK is main RAM: under
+        ;      $3000, D = 1 would read HAZEL/ANDY), as the D step does; the Model B's
+        ;      blacks the palette for it, from the line before's blanking.  The vsync
+        ;      takes this buffer's Q entry from BUF_QS into QSECT.
         txa
         ldy curbuf
         beq @q0
         ldy #2
 @q0:    sta BUF_QS,y
+  .if BHW
+        ; the Model B: behind a two-line P2 (f < 3) that P2's step kills the palette
+        ; (KSECT), else Q's (QSECT); $FF, never an entry, is neither.  Q's step then
+        ; fires on time: early, its flag could be set before P2's step clears it
+        lda wfine
+        beq @k1                     ; (f = 0: Q's, after a whole row)
+        cmp #3
+        bcs @k1
+        txa                         ; P2's entry: Q's (X) - 8
+        sbc #7                      ; (C = 0: cmp #3's bcc)
+        sta BUF_KS,y
+        lda #$FF
+        sta BUF_QS,y
+        bne @q3                     ; (always)
+@k1:    lda #$FF
+        sta BUF_KS,y
+  .endif
         lda SECTAB-16+6,x
         sec
         sbc #STEPLATE+QLEAD
         sta SECTAB-16+6,x
         bcs @q1
         dec SECTAB-16+7,x
-@q1:    lda wfine                   ; and a bottom partial's step fires P2EARLY early
+@q1:
+  .if P2EARLY
+        lda wfine                   ; and a bottom partial's step fires P2EARLY early
         beq @q3                     ; (its writes still follow its restart), so the
         lda SECTAB-24+6,x           ; step before Q's is done in time behind a two-line
         sec                         ; one: P ends P2EARLY sooner, P2 runs it longer
@@ -294,8 +316,8 @@ build_sections:
         sta SECTAB-16+6,x
         bcc @q3
         inc SECTAB-16+7,x
-@q3:    clc                         ; (the BARLEAD block's adc wants C = 0)
   .endif
+@q3:    clc                         ; (the BARLEAD block's adc wants C = 0)
   .if BARLEAD
         ; ---- the Master: the T1 that ends the bar fired BARLEAD early, so the section
         ;      after the bar -- whose duration entry 0 carries -- runs BARLEAD longer to
@@ -582,6 +604,22 @@ calc_ring:
 ; ============================================================================
         PLACEH "CODE", "KRNCODE"
   .if BHW
+        ; The Model B's palette kill (Q's first scanline): the three colours, black, in
+        ; the order they can first show on it (defs.s QBLANK) -- 12 writes, 72 cycles
+  .macro KILLPAL
+        .repeat 4, i                ; yellow: indices 10, 11, 14, 15
+        lda #((($A + i .mod 2 + (i / 2) * 4)) << 4) | 7
+        sta ULA_PAL
+        .endrepeat
+        .repeat 4, i                ; magenta: 8, 9, 12, 13
+        lda #((($8 + i .mod 2 + (i / 2) * 4)) << 4) | 7
+        sta ULA_PAL
+        .endrepeat
+        .repeat 4, i                ; cyan: 2, 3, 6, 7
+        lda #((($2 + i .mod 2 + (i / 2) * 4)) << 4) | 7
+        sta ULA_PAL
+        .endrepeat
+  .endmacro
 isr_body:
   .else
 irq_handler:
@@ -631,6 +669,17 @@ irq_handler:
 @qhold: dey
         bne @qhold
 @noQ:
+  .else
+        ; The Model B: Q's step (QSECT) blacks the palette for Q's first scanline, which
+        ; the 6845 shows whatever R6 says: the bar's line 0 from QBLANK.  It fires as the
+        ; line before goes into its blanking, and the last writes land with the beam
+        ; already on the line (defs.s QBLANK: why that is in time).  Behind a two-line
+        ; P2 Q's interrupt waits on P2's step, so that step does it instead (@kend).  The
+        ; vsync puts the colours back (palon).
+        cpx QSECT
+        bne @nok
+        KILLPAL
+@nok:
   .endif
         ; ---- the shape: R9, R4, R6, R7, in that order (the header)
         lda #9
@@ -674,6 +723,11 @@ irq_handler:
         sta CRTC_IDX
         lda SECTAB+1,x
         sta CRTC_DAT
+  .if BHW
+        cpx KSECT                   ; a two-line P2's step: Q's first scanline's
+        bne @xit                    ;  palette too
+        jmp @kend
+  .endif
 @xit:
   .if BHW
         jmp irq_ret                 ; to the stub (low.s)
@@ -817,6 +871,26 @@ irq_handler:
         sta QSECT
         lda #1                      ; the bar is below $3000: it is only main
         trb ACCCON                  ;  RAM to the CRTC while D = 0
+  .else
+        lda BUF_QS,x                ; the step that blacks the palette: Q's, or
+        sta QSECT                   ;  behind a two-line P2 that P2's
+        lda BUF_KS,x
+        sta KSECT
+        lda palon                   ; and the colours it blacked back (Q's display is
+        beq @nopal                  ; off: the bar is the next thing shown)
+        .repeat 4, i
+        lda #((($A + i .mod 2 + (i / 2) * 4)) << 4) | (3 ^ 7)    ; yellow
+        sta ULA_PAL
+        .endrepeat
+        .repeat 4, i
+        lda #((($8 + i .mod 2 + (i / 2) * 4)) << 4) | (5 ^ 7)    ; magenta
+        sta ULA_PAL
+        .endrepeat
+        .repeat 4, i
+        lda #((($2 + i .mod 2 + (i / 2) * 4)) << 4) | (6 ^ 7)    ; cyan
+        sta ULA_PAL
+        .endrepeat
+@nopal:
   .endif
         ; ---- the keys and the sound
 @sk:    jsr scan_keys
@@ -855,6 +929,35 @@ irq_handler:
         ldx irq_x
         lda $FC
         rti
+  .endif
+
+  .if BHW
+        ; ---- a two-line P2's step, its registers written: Q's interrupt can come only
+        ;      after this handler, too late for the palette and for Q's R9/R4/R6 (due
+        ;      before Q's scanline 1).  So this step, on P2's last line, waits for its
+        ;      blanking, blacks the palette and writes Q's shape itself -- Q's step
+        ;      writes it again, the same values, later
+@kend:  ldy #4                      ; (crtctime: the first write at char 80+)
+:       dey
+        bne :-
+        KILLPAL
+        lda #9                      ; Q's shape, R9, R4, R6, R7 (its step's order)
+        sta CRTC_IDX
+        lda SECTAB+8+3,x
+        sta CRTC_DAT
+        lda #4
+        sta CRTC_IDX
+        lda SECTAB+8+2,x
+        sta CRTC_DAT
+        lda #6
+        sta CRTC_IDX
+        lda SECTAB+8+4,x
+        sta CRTC_DAT
+        lda #7
+        sta CRTC_IDX
+        lda SECTAB+8+5,x
+        sta CRTC_DAT
+        jmp irq_ret
   .endif
 
 ; ----------------------------------------------------------------------------
@@ -1039,6 +1142,10 @@ music_stop:
 ; ----------------------------------------------------------------------------
         .segment "KRNCODE"
 set_palette:
+  .if BHW
+        lda #1                      ; lit: the vsync restores what Q's step blacks
+        sta palon
+  .endif
         ldx #15                     ; X = the palette index
 :       txa
         lsr
@@ -1063,6 +1170,10 @@ set_palette:
 ;   Out:  A clobbered, C = 0
 ; ----------------------------------------------------------------------------
 blank_palette:
+  .if BHW
+        lda #0                      ; (Q's step blacks colours; the vsync must not light them)
+        sta palon
+  .endif
         lda #$F7                    ; (i << 4) | 7, i = 15 down to 0
         sec
 :       sta ULA_PAL

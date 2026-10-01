@@ -33,6 +33,12 @@
 jv:       .res 2                  ; jmpx's vector: jmp (abs,x) has no 6502 form (cpu.inc)
 crtcbm:   .res 2                  ; the buffer being built: its mirror redirect (base -
                                   ;  RINGCHARS; its CRTC base, crtcb, is zero page's)
+QSECT:    .res 1                  ; Q's step: the one that blacks the palette for its
+                                  ;  first scanline (kernel.s, the vsync's from BUF_QS)
+KSECT:    .res 1                  ; or, behind a two-line P2, P2's step does, at its end
+                                  ;  (the vsync's from BUF_KS; $FF: neither)
+palon:    .res 1                  ; the palette is lit (set_palette; blank_palette clears
+                                  ;  it): the vsync puts Q's blacked colours back
   .else
         .segment "ZPHW": zeropage ; (the Master's: its interrupt's, hot -- profiled)
 dispD:    .res 1                  ; ACCCON D for the displayed buffer's playfield
@@ -256,6 +262,8 @@ KEEP:      .res MAXREC              ; match_sprites: is sprite i what record i s
 BUF_SEC0:  .res 4                   ; each buffer's section 0 (the bar): CRTC address
 BUF_SEC0T1: .res 4                  ; and its T1 count
 SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sections)
+BUF_QS:    .res 3                   ; each buffer's Q entry (-> QSECT), by 2 x the buffer
+BUF_KS:    .res 3                   ; and its two-line P2's (-> KSECT); $FF for none
     .else
 ; Master: TABLES, main RAM.  The interrupt handler and its chain are in main RAM, and
 ; so is what they keep.

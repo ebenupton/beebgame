@@ -454,7 +454,17 @@ after the playfield it would be the next map line, a repeat of P2's first line u
 a fine scroll, or junk at the map's bottom; so Q always starts at QBLANK (defs.s), a
 line that is always the same.  The Master's is 640 zeros below the bar, in main RAM,
 which Q's step reads with D = 0 (below).  The Model B has no spare 640 bytes, so its
-QBLANK is the bar's own first line, until its palette can blank that scanline.
+QBLANK is the bar's own first line from its 45th character, and the palette blanks
+that scanline: Q's step (QSECT) fires QLEAD early, as the line before Q goes into its
+horizontal blanking, and writes yellow, magenta and cyan black in the order they can
+first show on the line (the 45 puts the lives icon and the early cyan out of it: yellow
+and magenta first show at its 9th character, in the score's digits, cyan at its 39th),
+the last writes landing with the beam already on it.  Behind a two-line P2 Q's
+interrupt waits on P2's step, too late for the palette and for Q's R9/R4/R6, so that
+step (KSECT) does the kill and writes Q's shape itself.  The vsync puts the colours
+back unless the palette is blanked (`palon`).  Measured (crtctime.mjs, register 21):
+the first write at characters 80-92, yellow done before the line, magenta by its 6th
+character, cyan by its 30th.
 
 ### The chain
 
