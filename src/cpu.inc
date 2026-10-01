@@ -57,6 +57,9 @@ DRAWFLAGS = 0                       ; draw flags in the sprite list's x high byt
         .ifndef TIGHTBSS
 TIGHTBSS = 0                        ; 9-byte sprite records, ENGBSS not page aligned
         .endif
+        .ifndef ALLLEVELS
+ALLLEVELS = 0                       ; a test build: every level on the chooser, every bonus
+        .endif                      ;  level taken (the game's)
   .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
         .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
   .endif

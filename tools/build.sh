@@ -45,7 +45,7 @@ mkdir -p build
 if [ "$TILEMIRROR" = 1 ]; then MIRDEF="-D TILEMIRROR=1"; else TILEMIRROR=0; MIRDEF=""; fi
 export TILEMIRROR
 # the options, as the assembler's flags (cpu.inc defaults each to 0)
-for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then MIRDEF="$MIRDEF -D $o=1"; else eval "$o=0"; fi
     export $o
