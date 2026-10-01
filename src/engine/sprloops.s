@@ -79,22 +79,36 @@
 
 ; ---- masked: screen = (screen AND mask) OR line
   .if mirror
-        tay
-        lda SWAPTAB,y               ; the mask, mirrored
+        eor #$FF                    ; the mask, mirrored: NMASK's masks are $CC/$33, swapped
   .endif
         sta sp_msk
-        ldy #k
+  .if (k = 0) .and (.not ::BHW)
+        lda (sp)                    ; line 0 non-indexed
+        and sp_msk
+    .if mirror
+        ldy L0TAB,x                 ; the line's byte, straight into SWAPTAB's index
+        ora SWAPTAB,y
+    .else
+        ora L0TAB,x
+    .endif
+        sta (sp)
+        ldy #1
+  .else
+    .if (k <> 0) .or mirror .or (.not ::BHW)
+        ldy #k                      ; (Model B k = 0 unmirrored: Y = 0 from ldaz)
+    .endif
         lda (sp),y
         and sp_msk
-  .if mirror
+    .if mirror
         ldy L0TAB,x                 ; the line's byte, straight into SWAPTAB's index
         ora SWAPTAB,y
         ldy #k                      ; Y back for the store
-  .else
+    .else
         ora L0TAB,x
-  .endif
+    .endif
         sta (sp),y
         iny
+  .endif
         lda (sp),y
         and sp_msk
   .if mirror
@@ -112,17 +126,29 @@ opq:
   .if mirror
         ldy L0TAB,x
         lda SWAPTAB,y
+    .if (k = 0) .and (.not ::BHW)
+        sta (sp)                    ; line 0 non-indexed
+    .else
         ldy #k
         sta (sp),y
+    .endif
         ldy L1TAB,x
         lda SWAPTAB,y
         ldy #k+1
         sta (sp),y
   .else
-        ldy #k
+    .if (k = 0) .and (.not ::BHW)
+        lda L0TAB,x                 ; line 0 non-indexed
+        sta (sp)
+        ldy #1
+    .else
+      .if (k <> 0) .or (.not ::BHW)
+        ldy #k                      ; (Model B k = 0: Y = 0 from ldaz)
+      .endif
         lda L0TAB,x
         sta (sp),y
         iny
+    .endif
         lda L1TAB,x
         sta (sp),y
   .endif
@@ -159,8 +185,7 @@ pl:     lsr                         ; A = sp_lim on both ways in: the pair's sou
         lda NMASK,x
         beq pop                     ; both opaque: plain stores
   .if mirror
-        tay
-        lda SWAPTAB,y               ; the mask, mirrored
+        eor #$FF                    ; the mask, mirrored: NMASK's masks are $CC/$33, swapped
   .endif
         sta sp_msk
         ldy sp_lim
@@ -206,12 +231,14 @@ pop:                                ; opaque: the two lines stored as they are
         lda L1TAB,x
         sta (sp),y
   .endif
-pnext:  lda sp_lim                  ; the next pair, until past tmp2
-        clc
+pnext:  lda sp_lim                  ; the next pair, until past tmp2 (C = 0: pl's lsr of an even sp_lim)
         adc #2
         sta sp_lim
         cmp tmp2
         bcc pl
+  .if .not mirror
+        clc                         ; sprretP wants C = 0 (the bcc left it 1)
+  .endif
         jmp ret
 .endmacro
 .macro NIBCELLS name, mirror, ret, fall
@@ -262,6 +289,7 @@ pl:     lda (ptr),y
         cpy tmp2                    ; C = 1 at the last line (iny keeps C)
         iny
         bcc pl
+        clc                         ; sprretP wants C = 0 (the bcc left it 1)
         jmp ret
 .endmacro
 ; ============================================================================
@@ -284,14 +312,19 @@ ds_entry:                           ; BANKENTRY
         NIBCELLS sprFN, 0, sprretP, fall
 
 ; ---- the column steps: ptr to the next image column, then sp to the next char
+; C = 0 on arrival: every column entry has it (ds_rowloop's adc, the step below,
+; spcold), the cells and NIBCOPY's unrolled lines keep it, the partial loops clear it
 sprretP:                            ; next column: source pointer + rows
         lda ptr
-        clc
         adc sp_lines
         sta ptr
         bcs sprpinc                 ; carry out of line: the common case falls through
-sprnext:
-        spnext sprscold
+sprnext:                            ; C = 0: spnext, its clc known
+        lda sp
+        adc #8
+sprssta:
+        sta sp
+        bcs sprscold
 sprsback:
         dec sp_cnt
         bmi ds_rowdone
@@ -301,16 +334,26 @@ ds_colloop:
 ; ---- out of line, in its branches' reach: the source pointer's carry, the screen's
 ; page step, and the mirrored column step
 sprpinc: inc ptr+1
-        jmp sprnext
+        clc                         ; (the adc's carry)
+        bcc sprnext                 ; always
 sprscold: jmp sprscold2
 sprretM:                            ; next column, mirrored: source pointer - rows
         lda ptr
         sec
         sbc sp_lines
         sta ptr
-        bcs sprnext
-        dec ptr+1
+        bcc sprmdec
+        lda sp                      ; C = 1: + 7 is + 8
+        adc #7
+  .if ::BHW
+        jmp sprssta
+sprmdec: dec ptr+1                  ; C = 0 (the borrow), kept
         jmp sprnext
+  .else
+        bra sprssta
+sprmdec: dec ptr+1                  ; C = 0 (the borrow), kept
+        bcc sprnext                 ; always: in page, so ds_rowdone is too
+  .endif
 
 ; ---- the row's end: the next row's source (+ sp_rinc) and screen (+ ROWBYTES)
 ds_rowdone:
@@ -370,7 +413,8 @@ ds_rowloop:
         sta ds_colloop+2
         lda sp_ncol
         sta sp_cnt                  ; columns-1 (countdown)
-        jmp ds_colloop
+        jmp (ds_colloop+1)          ; straight to the row's entry (5, not 3+3)
+        .assert <(ds_colloop+1) <> $FF, error, "ds_colloop's operand straddles a page (NMOS jmp (ind))"
 ds_done:
         wrback bank                 ; the write window's end
         rts

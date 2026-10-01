@@ -77,12 +77,12 @@ gather5:
 
         ; ---- a full tile: slot id + TOFF, so the first tile (id 1) is TOFF+1 slots
         ; up from TILES, past the code (assets.inc)
-        adc #TOFF                   ; C = 0 from the cmp
-        tax
+        adc #TOFF+4*(>TILES-$80)    ; C = 0 from the cmp: the slot + (TILES's page less
+        tax                         ;  $80) * 4, < $100 while the tile is below $C000
         lsr
         lsr
-        clc
-        adc #>TILES                 ; slot >> 2: 4 slots a page
+        ora #$80                    ; slot >> 2 + >TILES: 4 slots a page
+        .assert >TILES >= $80 && <TILES = 0, error, "gather5: TILES in the bank, page aligned"
         sta GATHERH,y
         txa
         and #3
@@ -92,13 +92,13 @@ gather5:
         sta GATHERL,y
         dey
         bpl @gl
-        bmi @gdone
+        rts
 
         ; ---- the solid: a zero high byte (GATHERL unread)
 @gsol:  sta GATHERH,y
         dey
         bpl @gl
-        bmi @gdone
+        rts
 
         ; ---- a flat tile: its pair's index in FLATTAB
 @gflat: sbc #FLAT0                  ; C is set, from the cmp
@@ -108,7 +108,7 @@ gather5:
         sta GATHERH,y
         dey
         bpl @gl
-        bmi @gdone
+        rts
 
         ; ---- a half tile (or, with TILEMIRROR, a mirrored one)
         ; k = its slot from the halves' page.  C is clear after the mirror test, so the
@@ -137,7 +137,7 @@ gather5:
         sta GATHERL,y
         dey
         bpl @gl
-        bmi @gdone
+        rts
   .if TILEMIRROR
         ; ---- a mirrored tile: its source's slot, addressed as a full tile's, kind 3
 @gmir:  sbc mir0                    ; C is set, from the cmp

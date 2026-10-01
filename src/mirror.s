@@ -49,7 +49,7 @@ mirror_copy:
         bcs :+                      ; nothing of it is in the window
         rts
 :       adc #0                      ; C = 1 from the bcs: +1
-        sta tmp
+        tax                         ; X = the chars to copy (1..80): the loop's count
         ; source: the last slot, base + (RINGROWS-1)*640 + tmp4*8; the mirror is one
         ; whole ring below it
         .assert (RINGEND_A >> 8) - 3 = (RING_A >> 8) + (((RINGROWS-1)*ROWBYTES) >> 8) && (RINGEND_B >> 8) - 3 = (RING_B >> 8) + (((RINGROWS-1)*ROWBYTES) >> 8), error, "ringe3 is the last slot's page less the base's"
@@ -61,10 +61,10 @@ mirror_copy:
         lsr
         lsr
         lsr
-        tax
+        tay
         adc ringe3                  ; ringbhi + >((RINGROWS-1)*ROWBYTES); C = 0 after
         sta w16+1
-        txa
+        tya
         adc ringbhi                 ; C = 0 in and out
         sbc #1                      ; C = 0: -2, the mirror's page
         sta w16b+1
@@ -91,7 +91,7 @@ mirror_copy:
         iny
         .endrepeat
         beq @pg                     ; Z: Y = 0, a page done (out of line: 1 char in 32)
-@cb:    dec tmp
+@cb:    dex
         bne @c
         rts
 @pg:    inc w16+1

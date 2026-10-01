@@ -26,8 +26,12 @@
 ; so no table has to be paged in.
 ; ----------------------------------------------------------------------------
 maprow:
+  .if BHW
         ldy #0
         sty mapptr                  ; row << 8 has no low byte
+  .else
+        stz mapptr                  ; row << 8 has no low byte (Y = 0 out: the loop or mapshr's 0)
+  .endif
         ldy mapshr                  ; then 8 - lw shifts right
         beq :++
 :       lsr
@@ -73,8 +77,6 @@ mapcol: lda mapptr                  ; tp = the row above
         sta ROMSEL
         lda (tp),y
         tax                         ; above
-        lda (mapptr),y
-        sta mtmp                    ; this row's
         lda mapptr                  ; tp = the row below
         clc
         adc MAPSTRIDE
@@ -85,8 +87,13 @@ mapcol: lda mapptr                  ; tp = the row above
         lda (tp),y
         sta tp+1                    ; below
         stx tp                      ; above
-        lda mtmp
-        jmp pagelogic
+        lda (mapptr),y              ; this row's, last: no staging through mtmp
+        tax
+        bankimm lda, BANK_LVL, 0    ; bank 7 back (pagelogic's, inline)
+        sta ROMSEL_CPY
+        sta ROMSEL
+        txa
+        rts
 
 ; ----------------------------------------------------------------------------
 ; mapput: write the map

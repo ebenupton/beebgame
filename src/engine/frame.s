@@ -125,20 +125,18 @@ draw_sprites:
 
   .else
         ; ---- the 10-byte records, walked through (rp)
-@pass:  stz spi                     ; A dead: lda recp next
-        lda recp
+@pass:  lda recp
         sta rp
         lda recp+1
         sta rp+1
-@l:     ldx spi                     ; X = the sprite's number: every field is ,x
-        cpx NSPR
-        bcs @endpass
+        ldx #0                      ; X = spi = 0, tested at @chk
+        beq @chk                    ; always
         ; ---- this pass's kind only: A = dpass + $FF + C is 0 to skip
-        ldy SPR_ID,x                ; Y = id for both compares
+@l:     ldy SPR_ID,x                ; Y = id for both compares (X = spi: every field is ,x)
         cpy #BOXID0                 ; C = 1: a box
         lda dpass
         adc #$FF
-        beq @next
+        beq @next                   ; (C = 1, X = spi)
         ; ---- a still box, kept identical and not clipped, is left alone
         cpy #BOXID0+BOXN
         bcc @write                  ; not a still alias: draw it
@@ -147,7 +145,7 @@ draw_sprites:
         bne @write                  ; not the same frame in the same place
         ldy #REC_H
         lda (rp),y
-        bpl @next                   ; not clipped: all of it on screen and intact
+        bpl @next                   ; not clipped: all of it on screen and intact (C = 1 from the cmp)
         ; ---- write the record's id and position, and set up spx/spy
 @write: ldy #1
         lda SPR_XL,x
@@ -187,14 +185,17 @@ draw_sprites:
         lda SPR_ID,x
         staz rp                     ; sta (rp) - offset 0 needs no index
         jsr drawsprite
-        ; ---- next record: rp += RECSZ
+        ldx spi                     ; X = the sprite's number again (the skips kept it)
+        sec                         ; C = 1, as at the skips' arrivals
+        ; ---- next record: rp += RECSZ (C = 1 at every arrival)
 @next:  lda rp
-        clc
-        adc #RECSZ
+        adc #RECSZ-1
         sta rp
         bcs @rpc                    ; (the carry out of line, after the rts)
-@rpb:   inc spi
-        bne @l                      ; spi <= NSPR: never wraps to 0
+@rpb:   inx
+@chk:   stx spi
+        cpx NSPR
+        bcc @l
 @endpass:
         dec dpass
         bpl @pass                   ; (in range on both machines)
@@ -255,13 +256,12 @@ erase_old:
         sta rc_y
   .else
         ; ---- the 10-byte records, walked through (rp)
-        stz lidx
+        ldx #0                      ; X = the record index (lcnt = RECCNT: the end)
         lda recp
         sta rp
         lda recp+1
         sta rp+1
-@l:     ldx lidx
-        cpx NSPR
+@l:     cpx NSPR
         bcs @erase                  ; past the new list: never kept
         lda KEEP,x
         bne @next                   ; kept: leave it
@@ -282,6 +282,7 @@ erase_old:
         iny                         ; REC_CY
         lda (rp),y
         sta rc_y
+        stx lidx                    ; (callbank clobbers X)
   .endif
 
         ; ---- redraw the rect's tiles, then the next record
@@ -289,18 +290,21 @@ erase_old:
         jsr callbank
   .if TIGHTBSS
 @next:  inc rq
+        inc lidx
+        dec lcnt
+        bne @l
   .else
+        ldx lidx
 @next:  lda rp
         clc
         adc #RECSZ
         sta rp
         bcc :+
         inc rp+1
-:
-  .endif
-        inc lidx
-        dec lcnt
+:       inx
+        cpx lcnt                    ; X = RECCNT: done
         bne @l
+  .endif
 @done:  rts
 
 ; ============================================================================
@@ -375,35 +379,33 @@ match_sprites:
 @done:  rts
 
   .else
-        ; ---- the 10-byte records, walked through (rp); tmp4 = i
-        stz tmp4
+        ; ---- the 10-byte records, walked through (rp); X = i throughout
+        ldx #0
         lda recp
         sta rp
         lda recp+1
         sta rp+1
-@l:     ldx tmp4
-        cpx NSPR
+@l:     cpx NSPR
         bcs @done
-        stz KEEP,x
         cpx cnt
-        bcs @next                   ; no record i: not kept
+        bcs @zero                   ; no record i: not kept
         lda SPR_ID,x
         cmpz rp                     ; (zp): offset 0 needs no index register
         beq @same
         cmp #BOXID0                 ; different ids: are both box stars?
-        bcc @next
+        bcc @zero
   .if BHW
         lda (rp),y                  ; Y = 0 from the cmpz above
   .else
         lda (rp)
   .endif
         cmp #BOXID0
-        bcc @next
+        bcc @zero
         lda #1                      ; 1 = a different frame of the same thing
         bne @pos
 @same:  lda #2                      ; 2 = identical, so its screen pixels are already right
-        ; ---- and the same place: record bytes 1-4
-@pos:   sta tmp3
+        ; ---- kept if the same place too: record bytes 1-4
+@pos:   sta KEEP,x                  ; (undone at @zero if the place differs)
   .if BHW
         iny                         ; Y = 0 on both ways in (cmpz, ldaz)
   .else
@@ -411,28 +413,27 @@ match_sprites:
   .endif
         lda SPR_XL,x
         cmp (rp),y
-        bne @next
+        bne @zero
         iny
         lda SPR_XH,x
         cmp (rp),y
-        bne @next
+        bne @zero
         iny
         lda SPR_YL,x
         cmp (rp),y
-        bne @next
+        bne @zero
         iny
         lda SPR_YH,x
         cmp (rp),y
-        bne @next
-        lda tmp3                    ; (X is still the sprite's number)
-        sta KEEP,x                  ; same screen pixels in the same place: skip the erase
+        beq @next                   ; same screen pixels in the same place: skip the erase
+@zero:  stz KEEP,x                  ; not kept
 @next:  lda rp
         clc
         adc #RECSZ
         sta rp
         bcc :+
         inc rp+1
-:       inc tmp4
+:       inx
         bne @l                      ; always: i+1 <= MAXSPR
 @done:  rts
   .endif
@@ -483,14 +484,12 @@ copy_partial:
         ; ---- the run: cnt columns from column tmp4; w16 = its map column
         lda #ROWCHARS
         sta cnt
-        lda #0
-        sta tmp4                    ; first column to copy
-        clc
-        adc wcx
+        stz tmp4                    ; first column to copy
+        lda wcx                     ; w16 = wcx + tmp4 (0)
         sta w16
         lda wcx+1
-        adc #0
         sta w16+1
+        clc                         ; C = 0 for mirdirty's add and ringaddr7
 
   .if BHW
         ; ---- Model B: the composed row is the ring row above the window, the last
@@ -589,22 +588,23 @@ copy_partial:
         sta (ptr),y
         ; ---- next char, both with the ring fold on the page crossing: the composed
         ; row can straddle the ring end like any other row (the page steps out of line)
-        spnext @sfold
+        lda sp                      ; spnext @sfold without its clc: C = 0 at every
+        adc #8                      ; arrival (the copy is entered by a taken bcc and
+        sta sp                      ; lda/sta/ldy/dey keep C)
+        bcs @sfold
 @sback: dex
         beq @done
-        lda ptr
-        clc
+        lda ptr                     ; C = 0: spnext's bcs not taken, or spcold's clc
         adc #8
         sta ptr
-        bcs @pfold
-@back:  bcc @g4                     ; patched (@ftab): C = 0 at every arrival
+@back:  bcc @g4                     ; patched (@ftab): C = 1 falls into the page step
         SAMEPAGE *, @g4
         SAMEPAGE *, @g0
-@done:  rts
-        ; ---- the page steps, out of line
-@sfold: spcold @sback
-@pfold: pagestep ptr, @back
+        pagestep ptr, @back         ; ptr's page step (needs no C in)
         bcc @back                   ; (C = 0: pagestep's)
+@done:  rts
+        ; ---- the page step, out of line
+@sfold: spcold @sback
 
 ; ============================================================================
 ; drawsprite: the sprite prologue -- draw one sprite
@@ -675,18 +675,17 @@ drawsprite:
         lda #0
     .endif
         sta sp_flags
+        lsr a
+        lsr a                       ; C = flags bit 1 (every scanline stored), kept past the lda/sta
         lda SPRG_W,y
         sta sp_w
         lda SPRG_LN,y
         sta sp_lines
-        sta sp_ext
         ; every scanline stored (a box's screen bytes): the lines are scanlines;
         ; else two scanlines a stored row
-        lda sp_flags
-        and #2
-        bne :+
-        asl sp_ext
-:
+        bcs :+
+        asl a
+:       sta sp_ext
         ; ---- horizontal: sx = spx - refx - wx ; c0 = sx >> 1
         lda SPRG_RX,y               ; tmp3 = refx's sign
         and #$80
@@ -699,21 +698,20 @@ drawsprite:
 
 
         ; ---- (both) finish sx = spx - refx - wx, and c0 = sx >> 1 in w16
-        tax
+        sta w16                     ; low of spx - refx (Y = sp_g kept for @vert)
         lda spx+1
         sbc tmp3
-        tay
-        txa
+        tax
+        lda w16
         sec
         sbc wx
         sta w16
-        tya
+        txa
         sbc wx+1
         cmp #$80
-        ror a                       ; sign into bit 7, old bit 0 out to C
+        ror a                       ; sign into bit 7, old bit 0 out to C; N,Z of the high byte
+        beq @cpos                   ; (C kept for the low byte's ror at @cpos)
         ror w16                     ; arithmetic shift right 1 -> c0 (16 bit)
-        tax                         ; A still holds w16+1: just restore N,Z (X is dead)
-        beq @cpos
         cmp #$FF
         bne @out0                   ; c0 < -128 or >= 256: off the window
 
@@ -733,7 +731,12 @@ drawsprite:
 
         ; ---- c0 >= 0: off the window at 80 on; else sp_c0 = c0, sp_c = 0,
         ; sp_c1 = c0 + W - 1 cut at 79 (the right edge)
-@cpos:  lda w16
+@cpos:
+  .if BHW
+        sta sp_c                    ; A = 0 (the beq): sp_c = 0, early (dead if @out0)
+  .endif
+        lda w16
+        ror a                       ; c0 = the low byte >> 1, C from the high byte's ror
         cmp #ROWCHARS
         bcs @out0                   ; not taken: C = 0 for the adc below
         sta sp_c0
@@ -744,14 +747,15 @@ drawsprite:
         inc spclip                  ; and at the right
         lda #(ROWCHARS-1)
 :       sta sp_c1
+  .if .not BHW
         stz sp_c                    ; A is dead at @vert
+  .endif
         jmp @vert
 @out0:  rts
 
         ; ---- vertical: sy = spy - refy - wy ; lb0 = 2*sy + wfine, the sprite's
         ; first scanline below the window's top (16 bit signed)
 @vert:
-        ldy sp_g
         lda SPRG_RY,y
         and #$80                    ; tmp3 = refy's sign
         beq @rpos
@@ -783,35 +787,33 @@ drawsprite:
 @nc:
         ; ---- w16 = lb1, the last scanline: lb0 + ext - 1 (C = 0 here)
   .if BHW
-        ldx sp_ext                  ; X is dead here: ext - 1, carry kept
-        dex
-        txa
+        lda sp_ext                  ; C = 0: ext - 2, and C = 1 (ext >= 2) adds the 1 back
+        sbc #1
   .else
         lda sp_ext
         dec a
   .endif
         adc sp_lb0
-        sta w16
+        tay                         ; Y = lb1 low (Y dead: ldy rq / #REC_CX below)
         lda sp_lb0+1
         adc #0
-        sta w16+1                   ; w16 = lb1
+        tax                         ; X = lb1 high (X dead until the tax below)
 
         ; ---- clip: lstart = max(lb0, 0) in tmp ; lend = min(lb1, BUFROWS*8-1) in X
         lda sp_lb0+1
-        bmi @top
-        bne @out0                   ; lb0 >= 256 -> below
+        bpl @pos
+        txa                         ; lb0 < 0: cut at the top, if lb1 >= 0
+        bmi @out0                   ; lb1 < 0
+        inc spclip                  ; cut off at the top
+        bne @st                     ; always: spclip is 1..2 now; A = lb1 high = 0
+@pos:   bne @out0                   ; lb0 >= 256 -> below
         lda sp_lb0
         cmp #BUFROWS*8
         bcs @out0                   ; below the window
-        sta tmp                     ; lstart
-        bcc @ck                     ; C = 0: the bcs above was not taken
-@top:   lda w16+1
-        bmi @out0                   ; lb1 < 0
-        inc spclip                  ; cut off at the top
-        sta tmp                     ; A = w16+1 = 0 here: lb0 < 0 <= lb1 < 256
-@ck:    lda w16+1
+@st:    sta tmp                     ; lstart
+        txa
         bne @clampend
-        lda w16
+        tya
         cmp #BUFROWS*8
         bcc :+
 @clampend:
@@ -1054,11 +1056,11 @@ render_core:
         jsr validate                ; scroll_validate (bank 6: it draws the new strips)
         jsr draw_dirty              ; (bank 7 from here: the rects through callbank)
         jsr draw_sprites
-        jsr copy_partial
     .if BHW
+        jsr copy_partial
         jmp mirror_copy             ; the straddling row's copy (mirror.s)
     .else
-        rts                         ; (the hardware folds the straddling row)
+        jmp copy_partial            ; tail call (the hardware folds the straddling row)
     .endif
 
 ; ============================================================================
@@ -1189,7 +1191,9 @@ draw_dirty:
         .segment "ENGCODE"          ; bank 7, with the game loop
 render_frame:
         ; the previous frame's flip must land before this buffer is touched
-        jsr wait_flip
+wait_flip:                          ; (inline, its one caller) spin until any pending
+        lda flipreq                 ; flip has been taken by the vsync ISR: A = 0 out
+        bne wait_flip
 
         ; ---- the bar first.  It is single buffered and drawn where it is displayed,
         ; so it has to be finished before the CRTC reaches it: T starts QROWS-QVSYNC
@@ -1253,13 +1257,4 @@ render_done:                        ; (label for the phase timer harness)
         ; the next render_frame waits for it before touching the buffer
         eor curbuf                  ; A = 1: curbuf ^ 1
         sta curbuf
-        rts
-
-; ----------------------------------------------------------------------------
-; wait_flip: spin until any pending flip has been taken by the vsync ISR
-;   Out:  A = 0 (flipreq);  X, Y kept
-; ----------------------------------------------------------------------------
-wait_flip:
-        lda flipreq
-        bne wait_flip
         rts

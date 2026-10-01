@@ -142,7 +142,9 @@ build_sections:
         lda wfine
         eor #7                      ; 7 - f: A's R9
         sta SECTAB+8+3,x
-        clc
+  .if BHW
+        clc                         ; (the Master's @addr leaves C = 0; the B's mirror add can carry)
+  .endif
         adc #1                      ; 8-f lines of it
         jsr @dur                    ; A's duration into entry 0; X = A's entry
         stz SECTAB+2,x              ; R4 = 0: one row
@@ -230,7 +232,9 @@ build_sections:
         sta SECTAB+3,x              ; R9
         lda #VISROWS
         sta SECTAB+4,x              ; R6
+  .if VISROWS <> 30
         lda #30
+  .endif
         sta SECTAB+5,x              ; R7
 
         ; ---- Q: blanking and the vsync; it hands the chain back to the bar.  Its
@@ -244,35 +248,33 @@ build_sections:
         sta SECTAB,x
         lda #<(QBLANK / 8)
         sta SECTAB+1,x
-        txa                         ; X = Q's entry
-        clc
-        adc #8
-        tax
+        ; X stays the entry before Q; Q's entry is X + 8
         lda #<(40*LINE-2)           ; the previous section's T1 and Q's
-        sta SECTAB-8+6,x
         sta SECTAB+6,x
+        sta SECTAB+8+6,x
         lda #>(40*LINE-2)
-        sta SECTAB-8+7,x
         sta SECTAB+7,x
+        sta SECTAB+8+7,x
         lda #>BARCRTC               ; Q hands the chain back to the bar
-        sta SECTAB,x
+        sta SECTAB+8,x
         lda #<BARCRTC
-        sta SECTAB+1,x
+        sta SECTAB+8+1,x
         lda #QROWS-1
-        sta SECTAB+2,x              ; R4
+        sta SECTAB+8+2,x            ; R4
         lda #7
-        sta SECTAB+3,x              ; R9
-        lda #0
-        sta SECTAB+4,x              ; R6 = 0: display off
+        sta SECTAB+8+3,x            ; R9
+        stz SECTAB+8+4,x            ; R6 = 0: display off (A dead: reloaded next)
         lda #QVSYNC
-        sta SECTAB+5,x              ; R7: the only entry whose R7 is this
+        sta SECTAB+8+5,x            ; R7: the only entry whose R7 is this
         ; ---- Q's step fires early, by QLEAD: the section before Q -- whose duration the
         ;      entry before that carries -- runs STEPLATE + QLEAD shorter.  The Master's
         ;      puts D back to 0 before Q's first scanline (QBLANK is main RAM: under
         ;      $3000, D = 1 would read HAZEL/ANDY), as the D step does; the Model B's
         ;      blacks the palette for it, from the line before's blanking.  The vsync
         ;      takes this buffer's Q entry from BUF_QS into QSECT.
-        txa
+        txa                         ; Q's entry: X + 8 (C = 0 out: X <= 80)
+        clc
+        adc #8
         ldy curbuf
         beq @q0
         ldy #2
@@ -285,8 +287,7 @@ build_sections:
         beq @k1                     ; (f = 0: Q's, after a whole row)
         cmp #3
         bcs @k1
-        txa                         ; P2's entry: Q's (X) - 8
-        sbc #7                      ; (C = 0: cmp #3's bcc)
+        txa                         ; P2's entry: X
         sta BUF_KS,y
         lda #$FF
         sta BUF_QS,y
@@ -294,28 +295,32 @@ build_sections:
 @k1:    lda #$FF
         sta BUF_KS,y
   .endif
-        lda SECTAB-16+6,x
+        lda SECTAB-8+6,x
+  .if BHW
         sec
         sbc #STEPLATE+QLEAD
-        sta SECTAB-16+6,x
+  .else
+        sbc #STEPLATE+QLEAD-1       ; C = 0 (the adc #8 above): - (STEPLATE+QLEAD)
+  .endif
+        sta SECTAB-8+6,x
         bcs @q1
-        dec SECTAB-16+7,x
+        dec SECTAB-8+7,x
 @q1:
   .if P2EARLY
         lda wfine                   ; and a bottom partial's step fires P2EARLY early
         beq @q3                     ; (its writes still follow its restart), so the
-        lda SECTAB-24+6,x           ; step before Q's is done in time behind a two-line
+        lda SECTAB-16+6,x           ; step before Q's is done in time behind a two-line
         sec                         ; one: P ends P2EARLY sooner, P2 runs it longer
         sbc #P2EARLY
-        sta SECTAB-24+6,x
+        sta SECTAB-16+6,x
         bcs @q2
-        dec SECTAB-24+7,x
-@q2:    lda SECTAB-16+6,x
+        dec SECTAB-16+7,x
+@q2:    lda SECTAB-8+6,x
         clc
         adc #P2EARLY
-        sta SECTAB-16+6,x
+        sta SECTAB-8+6,x
         bcc @q3
-        inc SECTAB-16+7,x
+        inc SECTAB-8+7,x
   .endif
 @q3:    clc                         ; (the BARLEAD block's adc wants C = 0)
   .if BARLEAD
@@ -387,12 +392,6 @@ build_sections:
         sta SECTAB,x
         rts
 
-        ; ---- @lines: A = rows -> entry X's T1 = that many rows of lines (as @dur)
-@lines: asl
-        asl
-        asl
-        jmp @dur
-
         ; ---- @advance: A = rows: advance w16 by that many rows, folding into
         ;      0..RINGCHARS (@wrap: the fold alone)
 @advance:
@@ -419,9 +418,14 @@ build_sections:
         sta w16+1
 :       rts
 
+        ; ---- @lines: A = rows -> entry X's T1 = that many rows of lines (as @dur,
+        ;      into which it falls)
         ; ---- @dur: A = lines, X = an entry -> its T1lo/T1hi (SECTAB+6/7,x) = the T1
         ;      count that lasts that long (tmp3 = the high byte); then X = the next
         ;      entry (C = 0).  A line is 64 T1 ticks; the count is lines*64 - 2.
+@lines: asl
+        asl
+        asl
 @dur:   lsr                         ; n*64 == (n*256)>>2
         sta tmp3
         lda #0
@@ -514,7 +518,9 @@ calc_ring:
         ringmod7
         tax
         lda mulrowlo,x
-        clc
+  .if .not BHW
+        clc                         ; (the Model B's ringmod7 leaves C = 0 by its bcc)
+  .endif
         adc wcx
         sta ringS
         lda mulrowhi,x
@@ -543,9 +549,17 @@ calc_ring:
 @div:   inx
         sbc #ROWCHARS
         bcs @div                    ; no borrow: high byte unchanged, value >= 0
+  .if BHW
         sec                         ; (dey does not touch the carry)
         dey
         bpl @div                    ; the borrow absorbed by the high byte
+  .else
+        dey                         ; a borrow: C = 0
+        bmi @dd                     ; high byte went negative: done
+        inx
+        sbc #ROWCHARS-1             ; C = 0: takes 80; A >= 176, so no borrow
+        bcs @div                    ; always
+  .endif
 @dd:    stx barq                    ; high byte went negative: X is the quotient
   .if BHW
         adc #ROWCHARS-1             ; C = 1 (the sec before dey): A + 80,
@@ -907,12 +921,53 @@ irq_handler:
         jsr sound_tick
         jmp irq_vret                ; (the stub steps the tune)
   .else
-        jsr sound_tick
+        ; sound_tick inlined (the Master: room in main RAM; its only caller)
+        lda SFXREQ
+        beq @sfplay
+        ; ---- start a new sfx
+        asl
+        tax
+        stz SFXREQ
+        lda sfxtab-2,x
+        sta SFXPTR
+        lda sfxtab-1,x
+        sta SFXPTR+1
+        bne @sfgo                   ; an sfx is never in page 0: to its first step
+        ; ---- one playing: its next step when this one's frames are up
+@sfplay: lda SFXPTR+1
+        beq @sfmus
+        dec SFXDUR
+        bne @sfmus
+@sfgo:  lda (SFXPTR)                ; (zp): the first byte needs no index
+        cmp #$FF
+        beq @sfend
+        jsr sndwrite                ; (C = 0 from the cmp: sndwrite keeps it)
+        ldy #1
+        lda (SFXPTR),y
+        jsr sndwrite
+        iny
+        lda (SFXPTR),y
+        jsr sndwrite
+        iny
+        lda (SFXPTR),y
+        sta SFXDUR
+        lda SFXPTR                  ; the next step (C = 0 still)
+        adc #4
+        sta SFXPTR
+        bcc @sfmus
+        inc SFXPTR+1
+        bne @sfmus                  ; SFXPTR+1 <> 0 after the inc
+@sfend: jsr sndwrite                ; A = $FF (the end mark): noise off
+        lda #$DF                    ; channel 2 off
+        jsr sndwrite
+        stz SFXPTR+1                ; none playing
+@sfmus: lda MUSON
+        sta MUSTICK
   .endif
   .if .not BHW
         ; ---- the Master: step the menus' tune, as the Model B's interrupt stub does
         ;      (low.s)
-        lda MUSTICK
+        ; (A = MUSTICK and Z with it: the sound step's lda MUSON / sta MUSTICK)
         beq @exit
         dec MUSTICK
         lda ROMSEL_CPY
@@ -1029,9 +1084,18 @@ scan_keys:
 ; ----------------------------------------------------------------------------
 sound_tick:
         lda SFXREQ
-        beq @play
+        bne @start                  ; (rare: the common case falls through)
+        lda SFXPTR+1
+        bne @play                   ; one playing
+        ; ---- the tune is stepped at the interrupt's tail (the Model B's stub in
+        ;      low.s, the Master's handler): its player is in the menus' image.  Only
+        ;      raised here, at the vsync: the T1 steps share that tail.
+@music:
+        lda MUSON
+        sta MUSTICK
+        rts
         ; ---- start a new sfx
-        asl
+@start: asl
         tax
         stz SFXREQ                  ; (Model B: A = 0 -- the index is in X)
         lda sfxtab-2,x
@@ -1040,15 +1104,17 @@ sound_tick:
         sta SFXPTR+1
         bne @go                     ; an sfx is never in page 0: to its first step
         ; ---- one playing: its next step when this one's frames are up
-@play:  lda SFXPTR+1
-        beq @music
-        dec SFXDUR
+@play:  dec SFXDUR
         bne @music
 @go:    ldaz SFXPTR                 ; (zp): the first byte needs no index
         cmp #$FF
         beq @end
         jsr sndwrite                ; (C = 0 from the cmp: sndwrite keeps it)
+  .if BHW
+        iny                         ; Y = 0 from ldaz (sndwrite keeps it)
+  .else
         ldy #1
+  .endif
         lda (SFXPTR),y
         jsr sndwrite
         iny
@@ -1066,14 +1132,12 @@ sound_tick:
 @end:   jsr sndwrite                ; A = $FF (the end mark): noise off
         lda #$DF                    ; channel 2 off
         jsr sndwrite
+  .if BHW
+        sty SFXPTR+1                ; none playing (Y = 0 from ldaz)
+  .else
         stz SFXPTR+1                ; none playing
-        ; ---- the tune is stepped at the interrupt's tail (the Model B's stub in
-        ;      low.s, the Master's handler): its player is in the menus' image.  Only
-        ;      raised here, at the vsync: the T1 steps share that tail.
-@music:
-        lda MUSON
-        sta MUSTICK
-        rts
+  .endif
+        bne @music                  ; Z = 0: sndwrite's A = $7F
   .ifdef DBGSND
 @dbgsil: .byte $9F, $BF, $FF, 0
   .endif
@@ -1208,18 +1272,16 @@ ringaddr7:
         rol
         asl sp
         rol                         ; C = 0: bit 13 of the char (< 8192)
-        pha
-        lda sp
   .if BHW
+        tax                         ; the high byte (X out is dead at every caller)
+        lda sp
         adc #<RING_A
         sta sp
-        pla
+        txa
         adc ringbhi
   .else
-        adc #<RINGBASE
-        sta sp
-        pla
-        adc #>RINGBASE
+        .assert (<RINGBASE) = 0, error, "ringaddr7: the Master's base is page aligned"
+        adc #>RINGBASE              ; <RINGBASE = 0: sp stands (C = 0 from the rol)
   .endif
         ringup sp                   ; fold back into the ring
         sta sp+1
