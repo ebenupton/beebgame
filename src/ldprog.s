@@ -802,6 +802,8 @@ bk_col:     .res 1                  ; (the baker's: columns to go, lines, X0 acr
 bk_lines:   .res 1                  ;  the first tile row, the destination's socket,
 bk_x:       .res 2                  ;  the map's width shift, the column's byte and tile,
 bk_ty0:     .res 1                  ;  the tile row, the line, the tile, its modes, the
+bk_skip0:   .res 1                  ;  (the kind's: start the first tile row at its
+bk_skip:    .res 1                  ;   bottom char row; the column's copy)
 bk_sock:    .res 1                  ;  fill pair and where it is, a half's slot, the
 bk_lw:      .res 1                  ;  flats, the backdrop's column and the overlay's)
 bk_bx:      .res 1
@@ -886,7 +888,8 @@ placewalk:                          ; the placement list's items from file fnum,
 ; object's tile (x, y) where an image carries 0; bakekind gives the
 ; slot's kind and bakegeom the kind's shape: bytes wide, lines (every scanline), the
 ; backdrop's origin from (8x, 8y) -- game pixels across (16 bit), whole tile rows down
-; -- and the overlay's offset in SPRX.  A tile is decoded as the Model B's gather
+; -- the overlay's offset in SPRX, and whether the first tile row starts at its bottom
+; char row (4 game pixels down: Cleo's health powerup, whose art does).  A tile is decoded as the Model B's gather
 ; does (engine.s gather5): 0 the solid, from FLAT0 the flats, from half0 the halves
 ; (one char row stored, the other a fill pair or the same row), below it full tiles.
         .assert .not TILEMIRROR, error, "bake: no mirrored tiles (the gather's @gmir)"
@@ -932,6 +935,8 @@ bake:   lda #SEC_FLAT               ; the flats' pairs, in the level's file (mai
         clc
         adc bakegeom+4,x
         sta bk_ty0
+        lda bakegeom+7,x            ; the first tile row: from its bottom char row?
+        sta bk_skip0
         lda bakegeom+5,x            ; the overlay: STAGE + its offset
         clc
         adc #<STAGE
@@ -971,6 +976,8 @@ bake:   lda #SEC_FLAT               ; the flats' pairs, in the level's file (mai
         sta bk_tx                   ; X >> 3
         lda bk_ty0
         sta bk_ty
+        lda bk_skip0
+        sta bk_skip
         ldx #0                      ; X: the line, in bk_bg
 @seg:   jsr bk_tile                 ; a tile row's lines (to bk_lines)
         inc bk_ty
@@ -1167,10 +1174,15 @@ bk_tile:
         sta bk_pb
         rts
 @emit:  ldx bk_line                 ; ---- the two char rows
-        lda bk_mt
+        lda bk_skip                 ; (a kind that starts at the first tile row's
+        beq @top                    ;  bottom char row: just that, once a column)
+        lda #0
+        sta bk_skip
+        beq @bot
+@top:   lda bk_mt
         jsr bk_row
         bcs @done
-        lda ent                     ; the bottom row's bytes
+@bot:   lda ent                     ; the bottom row's bytes
         clc
         adc bk_step
         sta ent
@@ -1460,6 +1472,6 @@ wrhi:   .byte >wr_game, >wr_menu
 ; ---------------------------------------------------------------- the packer's tables
   .ifdef BAKEITEM0
 bakekind: .incbin "bakekind.bin"   ; by baked slot: its kind (the game's)
-bakegeom: .incbin "bakegeom.bin"   ; by kind: bytes, lines, dx (16 bit), dty, overlay offset (16 bit), 0
+bakegeom: .incbin "bakegeom.bin"   ; by kind: bytes, lines, dx (16 bit), dty, overlay offset (16 bit), skip
   .endif
 imgtab: .incbin "imgtab.bin"  ; per item: its file, offset and length (5 bytes)
