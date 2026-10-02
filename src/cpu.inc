@@ -117,7 +117,7 @@ ALLLEVELS = 0                       ; a test build: every level on the chooser, 
         BANKREF .sprintf("%s_%d_%d", .string(op), n, tag), b
   .endif
 .endmacro
-.macro setbank n, b, tag            ; ROMSEL_CPY first: the MOS's own shadow of ROMSEL,
+.macro setbank n, b, tag            ; ROMSEL_CPY first: ROMSEL's copy,
         bankimm lda, n, b, tag      ; which the interrupt restores from (the read bank
         sta ROMSEL_CPY              ; alone: the write bank stays 7's -- below)
         sta ROMSEL

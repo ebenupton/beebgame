@@ -26,7 +26,7 @@ SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)   ; the Master keeps SPRX in HAZEL and A
         .include "files.inc"        ; the disc's sector table (mkdfs.py table)
         .include "levelfmt.inc"     ; the level file's sections and header (tools/levelfile.py)
 ROMSEL     = $FE30
-ROMSEL_CPY = $F4
+ROMSEL_CPY = $FD                    ; (defs.s)
 VIA_IFR    = $FE4D                  ; (the system VIA's: ld_resume)
 ACCCON     = $FE34                  ; (the Master: bit 2, X, puts the CPU's
                                     ;  $3000-$7FFF in shadow RAM -- where STAGE is)

@@ -3,9 +3,10 @@ the same address, and every variable or table (a label in a segment that is not
 code) both builds have must sit at the same address -- the Master's shorter 65C02
 code is padded out to the Model B's, so nothing after it moves.  Code labels may
 differ (a CMOS instruction is shorter); so may the pieces that only run once at
-start-up, and each machine's own data, which the segments ZPHW, LOWHW and KRNHW put
-after the shared (the Master's handler keeps its state in TABLES, main RAM).  Exit 1
-on any difference.
+start-up, and each machine's own data, which the segments LOWHW and KRNHW put after
+the shared (the Master's handler keeps its state in TABLES, main RAM).  Zero page has
+no exception: every zero-page variable must exist on both machines at one address.
+Exit 1 on any difference.
     python3 tools/layoutcheck.py [modelb_dir=build/modelb] [master_dir=build/master]"""
 import os, re, sys
 
@@ -17,7 +18,7 @@ def dbgfile(d):                     # (game.dbg; cleo.dbg before the engine was 
 CODE = {'CODE', 'TILCODE', 'GAMECODE', 'SPR4CODE', 'SPR5CODE', 'MAP5CODE',
         'TIL6ENT', 'MNUCODE', 'LOWCODE', 'D8271C', 'D1770C', 'D8271N', 'D1770N', 'KRNCODE', 'ENGCODE', 'MUSCODE'}
 STARTUP = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX'}      # run once, then overwritten
-OWN = {'ZPHW', 'LOWHW', 'KRNHW', 'TABLES'}              # one machine's own, after the shared
+OWN = {'LOWHW', 'KRNHW', 'TABLES'}                      # one machine's own, after the shared
 
 
 def load(d):
@@ -59,5 +60,15 @@ for sb, ab, n, am in sorted(moved):
     bad += 1
     if bad <= 40:
         print('%-9s %-14s Model B $%04X, Master $%04X' % (sb, n, ab, am))
+ZPSEGS = lambda s: s.startswith(('ZP', 'ZEROPAGE'))
+zb = {n: a for n, (s, a) in bsym.items() if ZPSEGS(s)}
+zm = {n: a for n, (s, a) in msym.items() if ZPSEGS(s)}
+for n in sorted(set(zb) ^ set(zm)):
+    bad += 1
+    print('zero page: %s only on the %s' % (n, 'Model B' if n in zb else 'Master'))
+for n in sorted(set(zb) & set(zm)):
+    if zb[n] != zm[n]:
+        bad += 1
+        print('zero page: %s Model B $%02X, Master $%02X' % (n, zb[n], zm[n]))
 print('layout: %s' % ('the data sits alike on both machines' if not bad else '%d differences' % bad))
 sys.exit(1 if bad else 0)

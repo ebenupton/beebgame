@@ -1030,10 +1030,13 @@ irq_handler:
 ;             the Master's handler holds instead.  On the Master it is -BARLATE: the
 ;             bar's step fires later, with no hold in it.
 ; STUBLAT (Model B): 22 is the stub's pagelogic inlined, jmp for jsr; 4 is its write
-; bank gone, twice.
+; bank gone, twice; +2 its cld (BCD-safe: low.s), which comes before the vsync's T1
+; restart and so shortens the count by as much -- the steps' own writes still come 2
+; cycles later in their lines (test/crtctime.mjs: each on its scanline, well inside its
+; deadline; the palette kills where they were).
 ; ----------------------------------------------------------------------------
   .if BHW
-STUBLAT = 18 - 22 - 4
+STUBLAT = 18 - 22 - 4 + 2
   .else
 STUBLAT = -BARLATE
   .endif

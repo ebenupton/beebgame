@@ -99,4 +99,4 @@ mirror_copy:
         jmp @cb
 
 ; ---------------------------------------------------------------- the CRTC
-; (crtcbm, the buffer being built's mirror redirect, is zero page's: engine/vars.s ZPHW)
+; (crtcbm, the buffer being built's mirror redirect, is zero page's: engine/vars.s)

@@ -96,15 +96,15 @@ export function imgOk(cpu, A, banks, pc) {
 export class Harness {
   constructor(s, A, banks = null) { this.s = s; this.A = A; this.cpu = s._machine.processor; this.banks = banks; }
   // is the CPU at pc, in the bank that label lives in?
-  at(pc, p) { if (p !== pc) return false; const b = this.banks?.byPc.get(pc); return (b === undefined || b < 0 || this.cpu.readmem(0xf4) === b) && imgOk(this.cpu, this.A, this.banks, pc); }
+  at(pc, p) { if (p !== pc) return false; const b = this.banks?.byPc.get(pc); return (b === undefined || b < 0 || this.cpu.readmem((this.A.romsel_cpy ?? 0xf4)) === b) && imgOk(this.cpu, this.A, this.banks, pc); }
   // is the CPU at address a, in the bank the named label lives in? (an address that is
   // no label -- the instruction after a jsr, say -- takes its bank from a neighbour)
-  atIn(a, name, p) { if (p !== a) return false; const b = this.banks?.byName.get(name); return b === undefined || this.cpu.readmem(0xf4) === b; }
+  atIn(a, name, p) { if (p !== a) return false; const b = this.banks?.byName.get(name); return b === undefined || this.cpu.readmem((this.A.romsel_cpy ?? 0xf4)) === b; }
   // f() with the bank a named label lives in paged in (read side only)
   inBank(name, f) {
     const b = this.banks?.byName.get(name);
     if (b === undefined) return f();
-    const was = this.cpu.readmem(0xf4); this.cpu.writemem(0xfe30, b);
+    const was = this.cpu.readmem((this.A.romsel_cpy ?? 0xf4)); this.cpu.writemem(0xfe30, b);
     try { return f(); } finally { this.cpu.writemem(0xfe30, was); }
   }
 
@@ -193,7 +193,9 @@ export class Harness {
     const h = createHash("sha256"), parts = {};
     for (const [name, addr, len, kind] of this.sceneRanges()) {
       const b = Buffer.alloc(len);
-      if (kind === "dirty") {         // each buffer's list up to its count: the capacity
+      if (typeof kind === "function") {  // a game's own reading (its scene's value, not its bytes)
+        kind(this, b);
+      } else if (kind === "dirty") {         // each buffer's list up to its count: the capacity
         const cap = (this.A.DIRTYCNT - this.A.DIRTYLIST) / 4;   // (DIRTYMAX) is a build choice
         const n = cap >= 1 && cap <= 64 && Number.isInteger(cap) ? cap : 16;
         for (let bf = 0; bf < 2; bf++) { const c = Math.min(this.rd(this.A.DIRTYCNT + bf), n);

@@ -45,8 +45,9 @@ VIA_IER   = $FE4E
 VIA_ORANH = $FE4F                 ; port A without handshake
 UVIA_IER  = $FE6E                 ; the user VIA's
 
-IRQ1V     = $0204                 ; the MOS's IRQ vector
-ROMSEL_CPY= $F4                   ; the MOS's copy of ROMSEL: the interrupt restores it
+IRQ1V     = $0204                 ; the ROM's interrupt entry jumps through it
+ROMSEL_CPY= $FD                   ; ROMSEL's copy: the interrupt restores it (zero page's
+                                  ;  last but two; $FC is the ROM's interrupt entry's A)
 
 ; ---------------------------------------------------------------- banks
 ; The same numbers on both machines (the sockets are patched at boot):

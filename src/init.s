@@ -19,24 +19,18 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
         sei
         ldx #$3F                    ; the stack is 64 bytes: $0100-$013F
         txs
-        lda #0                      ; zero page ($F0-$FF is the MOS's: $F4 is the
-        ldx #$F0                    ; bank the loader selected, and the OS IRQ still
-:       sta $FF,x                   ; restores from it until take_over): $00-$EF, zp,x
-        sta $0113,x                 ; wrapping; and $0114-$0203, the low RAM and the
-        dex                         ; stack above $0113 (nothing is on it yet)
+        lda #0                      ; zero page $00-$EF (zp,x wrapping) and $0114-$0203,
+        ldx #$F0                    ; the low RAM and the stack above $0113 (nothing is
+:       sta $FF,x                   ; on it yet); interrupts are off until take_over
+        sta $0113,x
+        dex
         bne :-
-        .import __ZPF0_RUN__, __ZPF5_RUN__, __ZPFD_RUN__   ; (ld65 exports them absolute)
         .import __TILBSS_RUN__, __TILBSS_SIZE__
         .assert __TILBSS_RUN__ + __TILBSS_SIZE__ <= TILES + (TOFF+1)*64, error, "bank 6's code and variables run into the first tile: raise TOFF (the game's packer)"
-        .assert __ZPF0_RUN__ = $F0 && __ZPF5_RUN__ = $F5 && __ZPFD_RUN__ = $FD, error, "the MOS's zero page: $F0-$F3, $F5-$FB, $FD-$FF"
-        ldy #$0F                    ; (A = 0, X = 0) and the MOS's zero page but $F4 and
-:       cpy #$04                    ; $FC: the hot scalars engine.s keeps there
-        beq :+
-        cpy #$0C
-        beq :+
-        sta $F0,y
-:       dey
-        bpl :--
+        ldy #$0F                    ; (A = 0) and zero page $F0-$FF
+:       sta $F0,y
+        dey
+        bpl :-
         .assert __LOWCODE_SIZE__ < 256, error, "the low-RAM image is copied a byte at a time"
 @lc:    lda __LOWCODE_LOAD__,x      ; (X = 0) exactly its length: the bar starts at $0300
         sta __LOWCODE_RUN__,x

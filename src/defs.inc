@@ -50,9 +50,9 @@ LV_PAGE0  = $0400                   ; tile id -> the gather's pair: 256 lo, 256 
   .endif
 
 ; ---------------------------------------------------------------- zero page
-; The engine's first (ZEROPAGE: these, then engine.s's; the Model B's own, ZPHW,
-; after them), then the game's (ZPGAME), $00-$EF (the cfgs).  $F0-$FF is the MOS's, and the engine's (engine.s ZPF0/ZPF5/ZPFD), all but
-; $F4 (ROMSEL_CPY) and $FC (the interrupt entry's A).  Those used before engine.s
+; The engine's first (ZEROPAGE: these, then engine.s's), then the game's (ZPGAME),
+; $00-$FB, alike on both machines; $FC is the ROM's interrupt entry's (it keeps A
+; there), $FD ROMSEL_CPY, $FE-$FF the engine's (ZPTOP).  Those used before engine.s
 ; are here, so every access is assembled as zero page.
         .zeropage
 NSPR:     .res 1                    ; the sprite list's length (the game's addsprite)

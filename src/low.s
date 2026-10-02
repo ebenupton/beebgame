@@ -12,7 +12,7 @@
 ; what bank 7 calls in the others (callbank, selbb, validate) and for the tile
 ; blitter's gather (mapstrip).  No table, no dispatch in any bank.  ROMSEL_CPY is
 ; written before ROMSEL every time, so an interrupt in between puts back the bank
-; being entered: the handler restores from $F4, which is the MOS's own rule.
+; being entered: the handler restores ROMSEL from it.
 
 ; ---------------------------------------------------------------- interrupts
 ; The Model B's: the chain step and the vsync work are in bank 7 with their tables,
@@ -24,6 +24,9 @@
 ; image is in, and the vsync's sound_tick raises MUSTICK.
   .if BHW                           ; (the Master's handler is in main RAM with its
 irq_handler:                        ;  chain: engine.s)
+        cld                         ; the NMOS 6502 keeps D through an interrupt: the
+                                    ;  body's adc/sbc must not see the game's sed (BCD
+                                    ;  score; the 65C02 clears D itself).  RTI puts it back
         stx irq_x
         sty irq_y
         lda ROMSEL_CPY

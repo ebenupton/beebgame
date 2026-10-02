@@ -6,9 +6,7 @@
 ;
 ;   ZEROPAGE   $00-   the shared zero page: scratch, the window, drawrect's and the
 ;                     sprite draw's arguments, the level's geometry, the vsync's counts
-;   ZPHW       after  one machine's own zero page (the Model B's: jv, the gather's
-;                     halves), linked after the shared; the game's ZPGAME follows it
-;   ZPF0/F5/FD $F0-   the MOS's zero page, free once the game has the machine
+;   ZPTOP      $FD-   zero page's last three bytes: ROMSEL_CPY, crtcb ($FC: the ROM's interrupt entry's)
 ;   TILBSS     bank 6 the tile blitter's own (FLATTAB)
 ;   ENGBSS     bank 7 the game loop's and the sprite prologue's (dirty lists, records)
 ;   LOWBSS     $0140- low RAM, visible whatever bank is paged in: what more than one
@@ -26,26 +24,20 @@
 ; Zero page
 ; ============================================================================
 
-; ---------------------------------------------------------------- the Model B's own
-; (ZPHW: one machine's own zero page, linked after the shared)
-  .if BHW
-        .segment "ZPHW": zeropage
-jv:       .res 2                  ; jmpx's vector: jmp (abs,x) has no 6502 form (cpu.inc)
-crtcbm:   .res 2                  ; the buffer being built: its mirror redirect (base -
-                                  ;  RINGCHARS; its CRTC base, crtcb, is zero page's)
-QSECT:    .res 1                  ; Q's step: the one that blacks the palette for its
-                                  ;  first scanline (kernel.s, the vsync's from BUF_QS)
-KSECT:    .res 1                  ; or, behind a two-line P2, P2's step does, at its end
-                                  ;  (the vsync's from BUF_KS; $FF: neither)
-palon:    .res 1                  ; the palette is lit (set_palette; blank_palette clears
-                                  ;  it): the vsync puts Q's blacked colours back
-  .else
-        .segment "ZPHW": zeropage ; (the Master's: its interrupt's, hot -- profiled)
-dispD:    .res 1                  ; ACCCON D for the displayed buffer's playfield
-DSECT:    .res 1                  ; the step after the bar's: the one that switches D
-NEXTBUF:  .res 1                  ; the buffer the next flip shows (-> dispD)
-QSECT:    .res 1                  ; Q's step: the one that puts D back to 0
-  .endif
+; ---------------------------------------------------------------- each machine's own
+; Zero page is laid out alike on both machines (tools/layoutcheck.py fails the build
+; otherwise): what only one machine uses is reserved on the other too.
+        .zeropage
+jv:       .res 2                  ; (Model B) jmpx's vector: jmp (abs,x) has no 6502 form (cpu.inc)
+crtcbm:   .res 2                  ; (Model B) the buffer being built: its mirror redirect
+                                  ;  (base - RINGCHARS; its CRTC base, crtcb, is zero page's)
+QSECT:    .res 1                  ; Q's step: the Model B's blacks the palette for its first
+                                  ;  scanline (kernel.s, the vsync's from BUF_QS); the
+                                  ;  Master's puts D back to 0
+KSECT:    .res 1                  ; (Model B) or, behind a two-line P2, P2's step does, at its
+                                  ;  end (the vsync's from BUF_KS; $FF: neither)
+palon:    .res 1                  ; (Model B) the palette is lit (set_palette; blank_palette
+                                  ;  clears it): the vsync puts Q's blacked colours back
 
 ; ---------------------------------------------------------------- scratch
         .zeropage
@@ -177,31 +169,25 @@ MUSPTR:   .res 2
 ; hottest scalars (the Master's gather is its table, LV_PAGE0).  The level's half
 ; tiles: the first id, the halves' page, and half0 less the first half's slot in it
 ; (their low bits are a table: gather.s HLOW).
-  .if BHW
-        .segment "ZPHW": zeropage
-half0:     .res 1                   ; the first half tile's id
-halfhi5:   .res 1                   ; the halves' page
-halfsub:   .res 1                   ; half0 less the first half's slot in the page
-        .zeropage
-  .endif
+half0:     .res 1                   ; (Model B) the first half tile's id
+halfhi5:   .res 1                   ; (Model B) the halves' page
+halfsub:   .res 1                   ; (Model B) half0 less the first half's slot in the page
 
-; ---------------------------------------------------------------- the MOS's zero page
-; $F0-$FF is the MOS's, but once the game has the machine only $F4 (ROMSEL's copy,
-; which the interrupt restores) and $FC (where the MOS's interrupt entry keeps A) are
-; touched.  The rest holds the hottest scalars that were absolute (the game's
-; hot-variable count -- Cleo's test/hotvars.mjs: a cycle and a byte an access);
-; start-up zeroes it (init.s).  Defined here, ahead of their uses, so every access is
-; assembled as zero page.
-        .segment "ZPF0": zeropage   ; $F0-$F3
+; ---------------------------------------------------------------- the hot scalars
+; (defined here, ahead of their uses, so every access is assembled as zero page)
 MAPSTRIDE: .res 2                   ; bytes per map row (1 << lw): drawrect's row step
 mapshr:    .res 1                   ; 8 - lw (maprow): the loader's, as MAPSTRIDE
 MUSTICK:   .res 1                   ; a frame's tune step is due: the vsync's sound_tick
-        .segment "ZPF5": zeropage   ; $F5-$FB
+dispD:     .res 1                   ; (Master) ACCCON D for the displayed buffer's playfield
+DSECT:     .res 1                   ; (Master) the step after the bar's: the one that switches D
+NEXTBUF:   .res 1                   ; (Master) the buffer the next flip shows (-> dispD)
 rowbit:    .res 1                   ; the char row being drawn, as a half's fill bit (8, 16)
 dpass:     .res 1                   ; draw_sprites' pass
 spclip:    .res 1                   ; set at every window edge a sprite is cut against
-        .segment "ZPFD": zeropage   ; $FD-$FF
 MUSON:     .res 1                   ; the tune plays: the interrupt stub steps it
+        .segment "ZPTOP": zeropage  ; $FD-$FF ($FC: the ROM's interrupt entry keeps A there)
+romsel_cpy: .res 1                  ; ROMSEL_CPY (defs.s: the code's equate, assembled as
+        .assert romsel_cpy = ROMSEL_CPY, error, "ROMSEL_CPY: zero page's $FD"   ;  zero page wherever used; this label is the tools')
 crtcb:     .res 2                   ; build_sections: the buffer's CRTC base
         .zeropage
 
