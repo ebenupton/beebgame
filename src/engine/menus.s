@@ -30,49 +30,45 @@ MUSIC_TAB  = MUSIC_ADDR             ; the player is in the data's bank: no copy 
 ; chip (sndwrite, which keeps X and Y).
 ; ============================================================================
 music_tick:
-        lda MUSON
-        beq @done
+        ; (MUSON is not 0 here: both callers step the tune only on MUSTICK, which the
+        ; vsync has just copied from MUSON in this same interrupt)
         dec MUSDUR
         bne @done
         ; ---- the next record: its frames, or (0) back to the top
-        jsr musbyte
+@rec:   jsr musbyte
         bne :+
         lda #<MUSIC_SEQ
         sta MUSPTR
         lda #>MUSIC_SEQ
         sta MUSPTR+1
-        jsr musbyte
+        bne @rec                    ; (always: the tune is in bank 7; its first record's frames are not 0)
 :       sta MUSDUR
         ; ---- its three notes, X = the voice
         ldx #0
-@v:     jsr musbyte
+@v:     txa                         ; ch << 5, for both latches (musbyte keeps X)
+        asl
+        asl
+        asl
+        asl
+        asl
+        sta ISRT1
+        jsr musbyte
         cmp MUSNOTE,x
         beq :+                      ; the same note: nothing to write
         sta MUSNOTE,x
-        ; set the voice: Y = the note (0 = rest), X = the voice (X is not touched:
-        ; sndwrite keeps it)
+        ; set the voice (X is not touched: sndwrite keeps it).  Notes are 24..95, 0 a
+        ; rest: the table indexed from 2*24, and Z from the doubled note is the rest
+        asl
         tay
-        txa
-        asl
-        asl
-        asl
-        asl
-        asl
-        sta ISRT1                   ; ch << 5
-        cpy #0
-        bne @note
-        ora #$0F                    ; rest: A is still ch<<5; attenuation 15
-        bne @vol                    ; (always)
+        beq @rest
         ; ---- a note: its period, the low 4 bits then the rest, then its volume
-@note:  tya
-        asl                         ; notes are 24..95: the table indexed from 2*24
-        tay
         lda MUSIC_TAB-48,y
+        pha                         ; (the low byte again, for the second write)
         and #15
         ora ISRT1
         ora #$80                    ; the tone latch: %1 cc 0 pppp
         jsr sndwrite
-        lda MUSIC_TAB-48,y
+        pla                         ; (sndwrite's own pha/pla balance)
         lsr
         lsr
         lsr
@@ -86,8 +82,10 @@ music_tick:
         ora ISRT2                   ; the period's upper bits
         jsr sndwrite
         lda musvol,x
+        .byte $2C                   ; (bit abs: over the lda #$0F; V is not used)
+@rest:  lda #$0F                    ; rest: attenuation 15
         ora ISRT1
-@vol:   ora #$90                    ; the volume latch: %1 cc 1 aaaa
+        ora #$90                    ; the volume latch: %1 cc 1 aaaa
         jsr sndwrite
 :       inx
         cpx #3
@@ -112,7 +110,7 @@ musvol: .byte 3, 8, 8
 ; ----------------------------------------------------------------------------
 ; music_start: start the tune from its top
 ;   Out:  MUSPTR = the sequence;  MUSDUR = 1 (the first record read at the next
-;         vsync);  MUSNOTE = rests;  MUSON = 1;  A = 1, X, Y kept
+;         vsync);  MUSNOTE = rests;  MUSON = 1;  A clobbered, X, Y kept
 ; ----------------------------------------------------------------------------
 music_start:
         lda #<MUSIC_SEQ
@@ -122,15 +120,15 @@ music_start:
         lda #1
         sta MUSDUR
   .if BHW
-        lsr                         ; A = 0, C = 1
+        lsr                         ; A = 0
         sta MUSNOTE
         sta MUSNOTE+1
         sta MUSNOTE+2
-        rol                         ; A = 1
+        inc MUSON                   ; 0 -> 1: the only caller calls while it is 0
   .else
         stz MUSNOTE
         stz MUSNOTE+1
         stz MUSNOTE+2
-  .endif
         sta MUSON
+  .endif
         rts

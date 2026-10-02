@@ -83,8 +83,7 @@
   .endif
         sta sp_msk
   .if (k = 0) .and (.not ::BHW)
-        lda (sp)                    ; line 0 non-indexed
-        and sp_msk
+        and (sp)                    ; line 0 non-indexed (A is the mask)
     .if mirror
         ldy L0TAB,x                 ; the line's byte, straight into SWAPTAB's index
         ora SWAPTAB,y
@@ -97,8 +96,7 @@
     .if (k <> 0) .or mirror .or (.not ::BHW)
         ldy #k                      ; (Model B k = 0 unmirrored: Y = 0 from ldaz)
     .endif
-        lda (sp),y
-        and sp_msk
+        and (sp),y                  ; A is still the mask
     .if mirror
         ldy L0TAB,x                 ; the line's byte, straight into SWAPTAB's index
         ora SWAPTAB,y
@@ -111,15 +109,14 @@
   .endif
         lda (sp),y
         and sp_msk
+        .local tail
   .if mirror
         ldy L1TAB,x
         ora SWAPTAB,y
-        ldy #k+1
   .else
         ora L1TAB,x
   .endif
-        sta (sp),y
-        jmp done
+        bcc tail                    ; always (C = 0 through the cells): opq's store of line k+1
 
 ; ---- opaque: the two lines stored as they are
 opq:
@@ -134,7 +131,7 @@ opq:
     .endif
         ldy L1TAB,x
         lda SWAPTAB,y
-        ldy #k+1
+tail:   ldy #k+1                    ; (the masked line joins here, its byte in A)
         sta (sp),y
   .else
     .if (k = 0) .and (.not ::BHW)
@@ -150,7 +147,7 @@ opq:
         iny
     .endif
         lda L1TAB,x
-        sta (sp),y
+tail:   sta (sp),y                  ; (the masked line joins here, its byte in A, Y = k+1)
   .endif
 done:
 .endmacro
@@ -211,7 +208,7 @@ pl:     lsr                         ; A = sp_lim on both ways in: the pair's sou
         ora L1TAB,x
   .endif
         sta (sp),y
-        jmp pnext
+        bcc pnext                   ; always: C = 0 from pl's lsr, which nothing here touches
 pop:                                ; opaque: the two lines stored as they are
   .if mirror
         ldy L0TAB,x
@@ -290,7 +287,7 @@ pl:     lda (ptr),y
         iny
         bcc pl
         clc                         ; sprretP wants C = 0 (the bcc left it 1)
-        jmp ret
+        bcc .ident(.concat(.string(name), "_pt"))-3   ; always: the unrolled cell's jmp ret, just before this entry
 .endmacro
 ; ============================================================================
 ; NIB_LOOPS bank: the row loop and all three blitters, for one bank
@@ -337,6 +334,8 @@ sprpinc: inc ptr+1
         clc                         ; (the adc's carry)
         bcc sprnext                 ; always
 sprscold: jmp sprscold2
+sprmdec: dec ptr+1                  ; C = 0 (sprretM's borrow), kept
+        bcc sprnext                 ; always: ahead of sprretM, so in sprnext's page
 sprretM:                            ; next column, mirrored: source pointer - rows
         lda ptr
         sec
@@ -347,12 +346,8 @@ sprretM:                            ; next column, mirrored: source pointer - ro
         adc #7
   .if ::BHW
         jmp sprssta
-sprmdec: dec ptr+1                  ; C = 0 (the borrow), kept
-        jmp sprnext
   .else
         bra sprssta
-sprmdec: dec ptr+1                  ; C = 0 (the borrow), kept
-        bcc sprnext                 ; always: in page, so ds_rowdone is too
   .endif
 
 ; ---- the row's end: the next row's source (+ sp_rinc) and screen (+ ROWBYTES)
@@ -380,11 +375,10 @@ ds_rowdone:
 ; (sp_ra0), tmp2 7 unless the last (sp_ra1).  To line 7 a cell is the blitter's
 ; unrolled entry for line tmp, otherwise its partial loop (sprrow_tab, from
 ; sp_disp: the prologue's, the blitter's first entry).
+        sta sp+1                    ; sp = sp_rb: A = sp_rb+1, just stored (from ds_entry
+        lda sp_rb                   ;  sp is sp_rb already: the prologue took sp_rb from
+        sta sp                      ;  ringaddr7's sp)
 ds_rowloop:
-        lda sp_rb
-        sta sp
-        lda sp_rb+1
-        sta sp+1
         lda sp_rp
         sta ptr
         lda sp_rp+1

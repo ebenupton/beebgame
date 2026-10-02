@@ -79,20 +79,17 @@ gather5:
         ; up from TILES, past the code (assets.inc)
         adc #TOFF+4*(>TILES-$80)    ; C = 0 from the cmp: the slot + (TILES's page less
         tax                         ;  $80) * 4, < $100 while the tile is below $C000
-        lsr
-        lsr
-        ora #$80                    ; slot >> 2 + >TILES: 4 slots a page
-        .assert >TILES >= $80 && <TILES = 0, error, "gather5: TILES in the bank, page aligned"
-        sta GATHERH,y
-        txa
         and #3
         lsr
         ror
         ror                         ; (id & 3) << 6
         sta GATHERL,y
-        dey
-        bpl @gl
-        rts
+        txa
+        lsr
+        sec                         ; bit 7 (slot >> 2 < $80): ora #$80 a byte shorter
+        ror                         ; slot >> 2 + >TILES: 4 slots a page
+        .assert >TILES >= $80 && <TILES = 0, error, "gather5: TILES in the bank, page aligned"
+        ; on into the solid's store: a full tile's high byte last, so the two share it
 
         ; ---- the solid: a zero high byte (GATHERL unread)
 @gsol:  sta GATHERH,y
@@ -158,7 +155,9 @@ gather5:
         bne @gh2                    ; (always)
   .endif
     .endif
-@gdone: rts
+  .if .not BHW
+        rts                         ; the Master's end (each Model B path ends in its own rts)
+  .endif
 
 ; ----------------------------------------------------------------------------
 ; The level's halves' low bits and mirror shape (the loader's), for the Model B's

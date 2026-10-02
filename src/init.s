@@ -48,15 +48,14 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
         sta ROMSEL
         wrsel BANK_LVL, BANK_LVL
         .assert dsk_board = dsk_banks + 4 && PBOARD = PBANK + 4, error, "the board byte follows the banks"
+        .assert dsk_drv = dsk_type + 1 && dsk_banks = dsk_type + 2 && drv_unit = drv_type + 1 && ld_sec = drv_type + 2 && ld_n = drv_type + 4, error, "boot copies the driver's bytes beside the banks"
         ldx #4                      ; the physical banks and the board, from where the
 @pb:    lda dsk_banks,x             ; loader put them (the loop above has just zeroed
-        sta PBANK,x                 ; the low BSS)
-        dex
+        sta PBANK,x                 ; the low BSS); and the disc driver's own copies
+        lda dsk_type,x              ; (this piece is screen memory once play starts):
+        sta drv_type,x              ; drv_type, drv_unit, then three bytes of ld_sec and
+        dex                         ; ld_n, which every read writes before it reads them
         bpl @pb
-        lda dsk_type                ; the disc driver's own copies (this piece is screen
-        sta drv_type                ; memory once play starts)
-        lda dsk_drv
-        sta drv_unit
         ; (the records and the buffers' state: load_level's lvreset, in the game's image)
         ; MUSON and SFXREQ: the zeros above (both zero page)
         jsr blank_palette           ; nothing on the screen is a picture until the title
@@ -69,14 +68,12 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
         sta __TABLES_RUN__,x
         bne :-
         ldx #0                      ; Q's black row (defs.s QBLANK): 640 zeros (A = 0)
+        .assert ROWBYTES > 512 && ROWBYTES <= 768, error, "QBLANK's zeroing: three overlapping pages"
 @qz:    sta QBLANK,x
         sta QBLANK+256,x
+        sta QBLANK+ROWBYTES-256,x   ; (over the second's end: ROWBYTES in all)
         inx
         bne @qz
-        ldx #ROWBYTES-512-1
-@qz2:   sta QBLANK+512,x
-        dex
-        bpl @qz2
   .endif
         jsr crtc_init
         ; both buffers' chains, for a blank window at the origin (ringS, barq, wfine
@@ -86,9 +83,7 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
         jsr build_sections
         dec curbuf                  ; (1 -> 0: build_sections only reads it)
         ; bank 6's variables (TILBSS: the ring work's) zeroed
-        bankimm lda, BANK_TILES, BANK_LVL
-        sta ROMSEL_CPY
-        sta ROMSEL
+        jsr page6                   ; (low RAM's: A = bank 6 after, as wrsel wants)
         wrsel BANK_TILES, BANK_LVL
         .assert __TILBSS_SIZE__ < 256, error, "boot zeroes TILBSS with an 8-bit index"
         ldx #<__TILBSS_SIZE__

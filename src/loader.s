@@ -75,9 +75,8 @@ start:
         bne :+
         inc fdc                     ; 0 (above) -> 1, Z clear
         bne @fdcdone
-:       lda #$81
-        ldx #$DA                    ; I
-        ldy #$FF
+:       ldx #$DA                    ; I (A = $81 still: OSBYTE keeps A)
+        dey                         ; Y = $FF (0 from OSBYTE: W not held)
         jsr OSBYTE
         inx                         ; X = $FF: I held
         beq @fdcdone                ; 8271, as set
@@ -113,16 +112,11 @@ start:
         jsr OSWRCH                  ; latch, the game reprograms only the CRTC -- and the
         lda #1                      ; main-RAM pieces below land in what is now screen
         jsr OSWRCH                  ; memory, so the palette goes black before they do
-        ldx #15
-:       txa
-        asl
-        asl
-        asl
-        asl
-        ora #7
-        sta $FE21
-        dex
-        bpl :-
+        lda #$F7                    ; logical colour 15 down to 0, each to black
+        sec
+:       sta $FE21
+        sbc #$10
+        bcs :-                      ; ($07 - $10 borrows: the last one written)
         ; ---- the pieces: BANKS is a count, then (bank, address, length) x count, then
         ; the pieces in that order, then the bank patches.  A disc driver's bank has a
         ; controller flag (bit 7 the 8271, bit 6 the 1770) and only the machine's is copied.  A main-RAM piece is filed
@@ -144,13 +138,13 @@ start:
         adc npieces
         adc #<(BUF+1)               ; (+1: C clear, 5n < 256)
         sta zsrc
-        lda #>BUF
+        .assert >BUF = >(BUF+1), error, "the table starts in BUF's page"
+        lda #>BUF                   ; (the table's page too; the stores keep the carry)
+        sta ztab+1
         adc #0
         sta zsrc+1
         lda #<(BUF+1)               ; the table
         sta ztab
-        lda #>(BUF+1)
-        sta ztab+1
 @piece: ldy #4                      ; backwards: A ends as the bank, Y as 0
         lda (ztab),y
         sta plen+1
@@ -227,28 +221,25 @@ start:
         iny
         lda (zsrc),y
         sta zdst+1
-        ldy #0
+        tya                         ; past the entry: Y = 2, and the carry makes it 3
+        sec
+        adc zsrc
+        sta zsrc
+        bcc @fixp
+        inc zsrc+1
+@fixp:  ldy #0
         lda (zdst),y
         tax
         lda map-4,x
         sta (zdst),y
-        lda zsrc
-        clc
-        adc #3
-        sta zsrc
-        bcc @fix
-        inc zsrc+1
-        bne @fix                    ; (zsrc never wraps)
+        bpl @fix                    ; (always: a socket is 0..15)
 @fixdone:
         ; ---- the write-bank stores: (bank, address, kind) x n, $FF, after the $FF above.
         ; Each is a `sta $FE30` in the code, a harmless second write of the bank on a
         ; plain machine and left alone there.  Watford: `sta $FF30+socket` for a constant
         ; bank (kind 4..7 says which), `sta $FF30,x` (opcode $9D) where the code has the
         ; bank in X (kind $FE); Solidisk: `sta $FE60` either way.
-        inc zsrc
-        bne @wfix
-        inc zsrc+1
-@wfix:  ldy #0
+@wfix:  ldy #1                      ; zsrc is on the byte before each entry (first the $FF)
         lda (zsrc),y
         bmi @wfixdone               ; the $FF (a bank is 4..7)
         ldx board
@@ -263,33 +254,24 @@ start:
         iny
         lda (zsrc),y                ; the kind
         tax
-        lda board
-        cmp #BOARD_SOLIDISK
-        beq @wsol
+        bcc @wsol                   ; Solidisk: selbank's wrx left C = the board's bit 0 (1 Watford)
+        .assert <WRSEL_WATFORD <> 0 && >WRSEL_WATFORD <> 0, error, "the Watford branches below are always taken"
         cpx #$FE
         beq @wdyn
         lda map-4,x                 ; Watford, a constant bank: sta $FF30 + its socket
         ora #<WRSEL_WATFORD
-        ldy #1
-        sta (zdst),y
-        lda #>WRSEL_WATFORD
-        iny
-        sta (zdst),y
-        jmp @wnext
+@wwat:  ldx #>WRSEL_WATFORD
+        bne @wadr                   ; (always: $FF)
 @wdyn:  lda #$9D                    ; Watford, the bank in X: sta $FF30,x
         ldy #0
         sta (zdst),y
         lda #<WRSEL_WATFORD
-        iny
-        sta (zdst),y
-        lda #>WRSEL_WATFORD
-        iny
-        sta (zdst),y
-        jmp @wnext
+        bne @wwat                   ; (always: $30)
 @wsol:  lda #<WRSEL_SOLIDISK        ; Solidisk: sta $FE60, the bank being in A
-        ldy #1
+        ldx #>WRSEL_SOLIDISK
+@wadr:  ldy #1                      ; the store's address: A its low byte, X its high
         sta (zdst),y
-        lda #>WRSEL_SOLIDISK
+        txa
         iny
         sta (zdst),y
 @wnext: lda zsrc
@@ -305,10 +287,12 @@ start:
         ; the one stores reach, as the start-up expects)
         ldx map+3
         jsr selwr
-        lda fdc
-        sta dsk_type
-        lda drive
-        sta dsk_drv
+        .assert drive = fdc + 1 && dsk_drv = dsk_type + 1, error, "the controller and drive copied as a pair"
+        ldx #1
+@hdr:   lda fdc,x                   ; fdc, drive: dsk_type, dsk_drv
+        sta dsk_type,x
+        dex
+        bpl @hdr
         ldx #3
 :       lda map,x
         sta dsk_banks,x
@@ -331,14 +315,13 @@ selwr:  stx ROMSELC
 ; X = a socket: make it the one a store reaches, on a board that chooses that apart
 ; from ROMSEL.  A is destroyed.
 wrx:    lda board
-        beq @r
-        .assert BOARD_WATFORD = 1 && BOARD_SOLIDISK = 2, error, "wrx tells the boards by bit 0"
-        lsr
+        .assert BOARD_STD = 0 && BOARD_WATFORD = 1 && BOARD_SOLIDISK = 2, error, "wrx tells the boards by bit 0"
+        lsr                         ; plain: 0, C = 0; Watford: 0, C = 1; Solidisk: 1, C = 0
         bcc @s
         sta WRSEL_WATFORD,x         ; Watford: the address says which, the value nothing
+@s:     beq @r                      ; Z = 1: plain, or Watford (a store leaves the flags)
+        stx WRSEL_SOLIDISK          ; Solidisk: port B bits 0-3 (DDRB was set by findram)
 @r:     rts
-@s:     stx WRSEL_SOLIDISK          ; Solidisk: port B bits 0-3 (DDRB was set by findram)
-        rts
 
 ; ---------------------------------------------------------------- the sideways RAM
 ; Which sockets hold RAM, and which four the game gets.  The test is the one Stuart
@@ -384,8 +367,8 @@ findram:
         bcs @classify               ; Solidisk found the most: board and port B stay
 :       lda bestb
         sta board
-        lda #0                      ; not a Solidisk: give the user port back
-        sta $FE62
+        inx                         ; not a Solidisk: give the user port back (X = 0:
+        stx $FE62                   ; @count leaves X = $FF)
 @classify:
         ldx #15
 @b:     lda #$FF                    ; not RAM until proven
@@ -396,24 +379,20 @@ findram:
         beq :+
         lda #2
         bne @bsc
-:       ldy $8007                   ; a ROM image: 0 "(C)" at the copyright offset
-        lda $8000,y
+@cstr:  .byte 0, "(C)"              ; (after the bne above: never executed)
+:       stx ztmp                    ; a ROM image: 0 "(C)" at the copyright offset
+        ldy $8007
+        ldx #$FC                    ; -4 up to 0, through the four bytes
+@cchk:  lda $8000,y
+        cmp @cstr-$FC,x
         bne @bfree
-        iny
-        lda $8000,y
-        cmp #'('
-        bne @bfree
-        iny
-        lda $8000,y
-        cmp #'C'
-        bne @bfree
-        iny
-        lda $8000,y
-        cmp #')'
-        bne @bfree
+        iny                         ; (wraps in the page, as the unrolled reads did)
+        inx
+        bne @cchk
         lda #1
-        bne @bsc
+        .byte $2C                   ; (bit abs: skips the lda #0)
 @bfree: lda #0
+        ldx ztmp                    ; the socket again, for the store
 @bsc:   sta score,x
 @bnext: dex
         bpl @b
@@ -438,8 +417,8 @@ findram:
         ora #$C0
         cmp $8007
         beq @cnext
-        lda #$FE                    ; another number reached this RAM after us and
-        sta score,x                 ; keeps it (still to be restored: not $FF)
+        sta score,x                 ; another number reached this RAM after us and keeps
+                                    ; it (A = X+$C0: bit 7 set, still to be restored: not $FF)
 @cnext: dex
         bpl @chk
         inx                         ; X = 0 (from $FF): restored in the reverse order of

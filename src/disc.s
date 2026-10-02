@@ -126,12 +126,11 @@ i_idle: lda FDC8271_CMD             ; the 8271 takes a command when not busy
         bmi i_idle
         rts
 i_param:                            ; and a parameter when the register is free
-        pha
+        tay                         ; (Y: nothing after read_sectors reads it)
 :       lda FDC8271_CMD
         and #$20
         bne :-
-        pla
-        sta FDC8271_PAR
+        sty FDC8271_PAR
         rts
 
 ; ---- the 1770
@@ -223,7 +222,7 @@ read_sectors:
         stx ld_trk
         sta ld_sc
 @track: lda #10                     ; sectors to read on this track: min(n, 10 - s)
-        sec
+
         sbc ld_sc
         cmp ld_n
         bcc :+
@@ -232,7 +231,7 @@ read_sectors:
         jsr DRV_TRACK
         bcs @track                  ; (the 8271: the run again)
         lda ld_dst+1
-        clc
+
         adc ld_cnt
         sta ld_dst+1
         lda ld_n
@@ -243,7 +242,7 @@ read_sectors:
         lda #0
         sta ld_sc
         inc ld_trk
-        jmp @track
+        bne @track                  ; (always: the track after one below 80)
 @done:  rts
 
         .segment "KRNBSS"
@@ -269,7 +268,7 @@ disc_init:
 @drvsel: .byte FDC_DRV0, FDC_DRV1, FDC_DRV0|FDC_SIDE1, FDC_DRV1|FDC_SIDE1
         .segment "KRNCODE"
 
-        jmp read_sectors
+
 
 ; ---------------------------------------------------------------- the loads
 ; Every load is LDPROG's: the kernel only stops the tune, parks the chain, copies the
@@ -285,20 +284,21 @@ disc_init:
 ; hook_title); go_game the menus' way out (the game's image and the bar's template,
 ; then hook_image and hook_play, whose first level load goes straight on: ld_open);
 ; go_menu the game's (A = 0 lost, 1 won: the menus' image, then hook_over).
-go_title:
-        ldx #LDOP_TITLE
-        bne ld_go                   ; (always)
-go_game:
-        ldx #LDOP_GAME
-        bne ld_go
-go_menu:
-        ldx #LDOP_OVER
-        bne ld_go
 load_level_b:
         ldy ld_open                 ; straight on from go_game's image load: the chain is
         bne ld_on                   ; parked, LDPROG in place
-ld_go:  sta LDZP                    ; (LDPROG's zero page: free until it runs)
-        stx LDZP+1
+        .byte $2C                   ; (bit abs: skips the ldx, X kept: the level)
+go_title:
+        ldx #LDOP_TITLE
+        .byte $2C                   ; (bit abs: skips the next ldx; LDOP_ is $8x, a read of
+go_game:                            ;  sideways memory, no side effect)
+        ldx #LDOP_GAME
+        .byte $2C
+go_menu:
+        ldx #LDOP_OVER
+ld_go:  pha                         ; A and X across the load, on the stack
+        txa
+        pha
         jsr music_stop              ; (the tune's player is the menus')
         jsr load_begin              ; the chain parks the CRTC in a standard frame first
         sei                         ; (engine.s load_begin)
@@ -317,8 +317,9 @@ ld_go:  sta LDZP                    ; (LDPROG's zero page: free until it runs)
         stx ld_dst
         .assert >F_LDPROG_SEC = 0 && <LDPROG = 0, error, "ld_go: a zero assumed"
         jsr read_sectors
-        ldx LDZP+1
-        lda LDZP
+        pla
+        tax
+        pla
 ld_on:  jmp LDPROG                  ; ld_entry: a level returns, an image goes on
 game_in:                            ; (LDPROG's way to hook_play: a label for the test
         jmp hook_play               ;  harness, the game's image in, its entry not yet run)

@@ -26,13 +26,9 @@
 ; so no table has to be paged in.
 ; ----------------------------------------------------------------------------
 maprow:
-  .if BHW
-        ldy #0
-        sty mapptr                  ; row << 8 has no low byte
-  .else
-        stz mapptr                  ; row << 8 has no low byte (Y = 0 out: the loop or mapshr's 0)
-  .endif
-        ldy mapshr                  ; then 8 - lw shifts right
+        ldy mapshr                  ; then 8 - lw shifts right; row << 8 has no low byte:
+        sty mapptr                  ;  mapshr's own bits there all go out in its shifts
+                                    ;  (k >> k = 0), and 0 is 0 (Y = 0 out either way)
         beq :++
 :       lsr
         ror mapptr
@@ -42,18 +38,6 @@ maprow:
         adc #>LV_MAP
         sta mapptr+1
         rts
-
-; ----------------------------------------------------------------------------
-; mapbyte: read the map
-;   In:   mapptr, Y
-;   Out:  A = (mapptr),Y;  X, Y kept
-; ----------------------------------------------------------------------------
-mapbyte:
-        bankimm lda, BANK_MAP, 0
-        sta ROMSEL_CPY
-        sta ROMSEL
-        lda (mapptr),y
-        jmp pagelogic
 
 ; ----------------------------------------------------------------------------
 ; mapcol: a map byte and its column's neighbours, in one visit to bank 5
@@ -88,11 +72,9 @@ mapcol: lda mapptr                  ; tp = the row above
         sta tp+1                    ; below
         stx tp                      ; above
         lda (mapptr),y              ; this row's, last: no staging through mtmp
-        tax
-        bankimm lda, BANK_LVL, 0    ; bank 7 back (pagelogic's, inline)
-        sta ROMSEL_CPY
-        sta ROMSEL
-        txa
+        bankimm ldx, BANK_LVL, 0    ; bank 7 back (pagelogic's, inline), through X: A kept
+        stx ROMSEL_CPY
+        stx ROMSEL
         rts
 
 ; ----------------------------------------------------------------------------
@@ -100,7 +82,8 @@ mapcol: lda mapptr                  ; tp = the row above
 ;   In:   A = the byte, mapptr, Y
 ;   Out:  A, X, Y kept
 ; The store is a write window (cpu.inc): the write bank is 5 for it, and 7 again
-; before bank 7 is paged back in.  Falls into pagelogic.
+; before bank 7 is paged back in.  Falls into mapbyte, which reads the byte back
+; from bank 5 into A, then into pagelogic.
 ; ----------------------------------------------------------------------------
 mapput: pha
         bankimm lda, BANK_MAP, 0
@@ -109,10 +92,20 @@ mapput: pha
         wrsel BANK_MAP, 0           ; open the write window
         pla
         sta (mapptr),y
-        pha
-        wrback 0, 2                 ; close it
-        pla
-        .assert * = pagelogic, error, "mapput falls into pagelogic"
+        wrback 0, 2                 ; close it (A lost: mapbyte reads the byte back)
+
+; ----------------------------------------------------------------------------
+; mapbyte: read the map
+;   In:   mapptr, Y
+;   Out:  A = (mapptr),Y;  X, Y kept
+; Falls into pagelogic.
+; ----------------------------------------------------------------------------
+mapbyte:
+        bankimm lda, BANK_MAP, 0
+        sta ROMSEL_CPY
+        sta ROMSEL
+        lda (mapptr),y
+        .assert * = pagelogic, error, "mapbyte falls into pagelogic"
 
 ; ----------------------------------------------------------------------------
 ; pagelogic: page bank 7 back in, for reading

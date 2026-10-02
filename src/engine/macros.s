@@ -111,8 +111,7 @@ n2:     tax
         pla
         sbc #0                      ; the low byte's borrow
   .else                             ; Master: the high byte alone
-        sec
-        sbc #>RINGBYTES
+        sbc #(>RINGBYTES)-1         ; C = 0: the caller's adc #>ROWBYTES set N, so no carry
   .endif
 .endmacro
 
@@ -141,8 +140,7 @@ n2:     tax
 :
   .else                             ; Master
         bpl :+                      ; RINGEND = $8000: N from A
-        sec
-        sbc #>RINGBYTES
+        sbc #(>RINGBYTES)-1         ; C = 0: a positive operand's adc set N, so no carry
 :
   .endif
 .endmacro

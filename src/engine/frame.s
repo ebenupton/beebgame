@@ -52,8 +52,8 @@
         .segment "ENGCODE"          ; bank 7, with the prologue and the records
         PAD ::PADB_SP, ::PADM_SP
 draw_sprites:
-        lda #1
-        sta dpass
+        inc dpass                   ; dpass = 1: it is 0 between calls (start-up zeroes
+                                    ;  it, and the passes' end leaves it 0)
 
   .if TIGHTBSS
         ; ---- TIGHTBSS: the records are arrays, indexed by rq
@@ -116,8 +116,8 @@ draw_sprites:
         inc spi
         bne @l                      ; spi <= NSPR: never wraps to 0
 @endpass:
-        dec dpass
-        bpl @pass                   ; (in range on both machines)
+        lsr dpass                   ; 1 -> 0, C = 1: pass 0; 0 -> 0, C = 0: done,
+        bcs @pass                   ;  and dpass is 0 again for the next call
         ldx curbuf
         lda NSPR
         sta RECCNT,x
@@ -176,14 +176,20 @@ draw_sprites:
         sta (rp),y
         ; Clipped until the prologue says otherwise: a sprite wholly off the window
         ; writes no rectangle, and must not look drawn and intact to the next keep test.
-        ldy #REC_W
-        lda #0
-        sta (rp),y                  ; nothing drawn
-        iny                         ; REC_H
+        ldy #REC_H
         lda #$80
         sta (rp),y                  ; clipped
+        dey                         ; REC_W
+        asl                         ; A = 0
+        sta (rp),y                  ; nothing drawn
+  .if BHW
+        tay                         ; Y = 0: the id's offset
         lda SPR_ID,x
-        staz rp                     ; sta (rp) - offset 0 needs no index
+        sta (rp),y
+  .else
+        lda SPR_ID,x
+        sta (rp)                    ; offset 0 needs no index
+  .endif
         jsr drawsprite
         ldx spi                     ; X = the sprite's number again (the skips kept it)
         sec                         ; C = 1, as at the skips' arrivals
@@ -197,14 +203,14 @@ draw_sprites:
         cpx NSPR
         bcc @l
 @endpass:
-        dec dpass
-        bpl @pass                   ; (in range on both machines)
+        lsr dpass                   ; 1 -> 0, C = 1: pass 0; 0 -> 0, C = 0: done,
+        bcs @pass                   ;  and dpass is 0 again for the next call
         ldx curbuf
         lda NSPR
         sta RECCNT,x
         rts
 @rpc:   inc rp+1
-        jmp @rpb
+        bcs @rpb                    ; always: C = 1, the bcs that came here
   .endif
 
 ; ============================================================================
@@ -336,7 +342,12 @@ match_sprites:
         ldx curbuf
         lda BUF_CXH,x
         bpl @valid
+  .if BHW
+        asl                         ; A = $80, an invalid buffer's (exactly): 0
+        sta RECCNT,x
+  .else
         stz RECCNT,x
+  .endif
         ; ---- cnt = the records to compare, min(RECCNT, NSPR)
 @valid: lda RECCNT,x
         cmp NSPR
@@ -533,27 +544,24 @@ copy_partial:
         bne :+
         rts                         ; fine scroll 0: nothing to compose
 :
-        ; ---- the run: cnt columns from column tmp4; w16 = its map column
-        lda #ROWCHARS
-        sta cnt
-        stz tmp4                    ; first column to copy
-        lda wcx                     ; w16 = wcx + tmp4 (0)
+        ; ---- the run: all ROWCHARS columns from column 0; w16 = its map column, wcx
+        lda wcx
         sta w16
         lda wcx+1
         sta w16+1
-        clc                         ; C = 0 for mirdirty's add and ringaddr7
+  .if .not BHW
+        clc                         ; C = 0 for ringaddr7 (the Master's ringmod keeps C)
+  .endif
 
   .if BHW
         ; ---- Model B: the composed row is the ring row above the window, the last
         ; slot when the window starts at slot 0 -- then the mirror follows it, so
-        ; note the columns (mirdirty: A = first, X = last)
+        ; note the columns (mirdirty: A = first, X = last).  No C needed: mirdirty
+        ; clears it, and ringaddr7's ringmod7 leaves by its bcc with C = 0.
         lda barq
         bne @nomir
-        lda tmp4                    ; C = 0 from the w16+1 adc (wcx < $8000)
-        adc cnt
-        tax
-        dex
-        lda tmp4
+        ldx #ROWCHARS-1             ; the whole row: columns 0..79
+        lda #0
         jsr mirdirty                ; (bank 7's copy)
 @nomir:
   .endif
@@ -572,22 +580,42 @@ copy_partial:
         ; ---- dest: ptr = the same column of the composed row, the row above the
         ; window: ring char (ringS + col - 80) mod RINGCHARS, as a real address in
         ; the ring
-        ; ringS + tmp4 - 80: the low add of -80 cannot carry (tmp4 <= 79)
-        lda tmp4                    ; C = 0: sp was a char (8-aligned) + wfine (< 8)
-        adc #<(-ROWCHARS)
+        ; ringS - 80 for column 0: the low byte of -80 is the first addend
+        lda #<(-ROWCHARS)           ; C = 0: sp was a char (8-aligned) + wfine (< 8)
         adc ringS
+  .if BHW
+        ; Model B: the char's low byte in A and its high byte in ptr+1, so the
+        ; base's low byte ($80) adds straight to A at the end
+        tax
+        lda ringS+1
+        adc #$FF
+        sta ptr+1
+        txa
+        bcs @pnf                    ; C = 1: >= 0, already in the ring
+        ; < 0: + RINGCHARS, 16 bit (23 rows is not whole pages)
+        adc #<RINGCHARS
+        tax
+        lda ptr+1
+        adc #>RINGCHARS
+        sta ptr+1
+        txa
+        ; char -> byte address (ptr+1:A), + the buffer's base.  The rols leave C
+        ; clear: the offset is under $4000.
+@pnf:   asl
+        rol ptr+1
+        asl
+        rol ptr+1
+        asl
+        rol ptr+1
+        adc #<RING_A                ; the base is xx80, and which xx is the buffer's
+        sta ptr
+        lda ptr+1
+        adc ringbhi
+  .else
         sta ptr
         lda ringS+1
         adc #$FF
         bcs @pnf                    ; C = 1: >= 0, already in the ring
-  .if BHW
-        ; < 0: + RINGCHARS, 16 bit (23 rows is not whole pages)
-        tax
-        lda ptr
-        adc #<RINGCHARS
-        sta ptr
-        txa
-  .endif
         adc #>RINGCHARS
         ; char -> byte address (A:ptr), + RINGBASE.  The rols leave C clear: the
         ; offset is under $5000.
@@ -597,14 +625,6 @@ copy_partial:
         rol
         asl ptr
         rol
-  .if BHW
-        tax
-        lda ptr                     ; the base is xx80, and which xx is the buffer's
-        adc #<RING_A
-        sta ptr
-        txa
-        adc ringbhi
-  .else
         adc #>RINGBASE
   .endif
         sta ptr+1
@@ -615,9 +635,8 @@ copy_partial:
         ldx wfine
         lda @ftab-2,x               ; this wfine's entry, as a branch offset
         sta @back+1                 ; patched into the loop's back branch
-        ldx cnt                     ; char counter in X: dex/beq is 3 cycles cheaper
-        clc
-        bcc @back                   ; in at the patched entry (C = 0)
+        ldx #ROWCHARS               ; char counter in X: dex/beq is 3 cycles cheaper
+        bcc @back                   ; in at the patched entry (C = 0: ptr+1's adc cannot carry)
         ; the entries by wfine: 2 -> six lines (@g4), 4 -> four (@g2), 6 -> two (@g0)
 @ftab:  .byte <(@g4-(@back+2)), 0, <(@g2-(@back+2)), 0, <(@g0-(@back+2))
 @g4:    ldy #5
@@ -739,23 +758,19 @@ drawsprite:
         asl a
 :       sta sp_ext
         ; ---- horizontal: sx = spx - refx - wx ; c0 = sx >> 1
-        lda SPRG_RX,y               ; tmp3 = refx's sign
-        and #$80
-        beq @sxp
-        lda #$FF
-@sxp:   sta tmp3
-        lda spx
+        ; X = the high byte of spx - refx: + 1 for a negative refx, - 1 on the low's
+        ; borrow (Y = sp_g kept for @vert)
+        ldx spx+1
+        lda SPRG_RX,y
+        bpl @sxp
+        inx                         ; refx < 0: its sign extension $FF taken off
+@sxp:   eor #$FF
         sec
-        sbc SPRG_RX,y
-
-
+        adc spx                     ; low of spx - refx, C = no borrow, as an sbc
+        bcs @sxb
+        dex
         ; ---- (both) finish sx = spx - refx - wx, and c0 = sx >> 1 in w16
-        sta w16                     ; low of spx - refx (Y = sp_g kept for @vert)
-        lda spx+1
-        sbc tmp3
-        tax
-        lda w16
-        sec
+@sxb:   sec
         sbc wx
         sta w16
         txa
@@ -780,6 +795,7 @@ drawsprite:
         sbc w16                     ; C = 1 (bmi fall-through): A = -c0, 1..128
         sta sp_c                    ; starting image column: the first visible, -c0
         bne @vert                   ; always: -c0 is never 0
+@out0:  rts                         ; between the arms: in reach of every branch to it
 
         ; ---- c0 >= 0: off the window at 80 on; else sp_c0 = c0, sp_c = 0,
         ; sp_c1 = c0 + W - 1 cut at 79 (the right edge)
@@ -802,8 +818,7 @@ drawsprite:
   .if .not BHW
         stz sp_c                    ; A is dead at @vert
   .endif
-        jmp @vert
-@out0:  rts
+        ; on into @vert
 
         ; ---- vertical: sy = spy - refy - wy ; lb0 = 2*sy + wfine, the sprite's
         ; first scanline below the window's top (16 bit signed)
@@ -959,15 +974,18 @@ drawsprite:
         sta (rp),y
         iny
   .if BHW
-        ldx sp_c1                   ; width = c1 + 1 - c0 (X dead: ldx spclip below)
-        inx
-        txa
+        lda sp_c1                   ; columns-1 = c1 - c0: the row loop's sp_ncol, set here
         sec
         sbc sp_c0
+        sta sp_ncol
+        tax                         ; width = c1 + 1 - c0 (X dead: ldx spclip below)
+        inx
+        txa
   .else
         lda sp_c1
         sec
         sbc sp_c0
+        sta sp_ncol                 ; columns-1: the row loop's, set here
         inc a
   .endif
         sta (rp),y
@@ -1052,9 +1070,8 @@ drawsprite:
         and #2
         bne :+                      ; every scanline stored: 8
         lda w16+1
-        asl                         ; C = the sign: an arithmetic >> 1
-        ror w16+1
-        ror w16
+        lsr                         ; w16+1 is 0 or $FF: its bit 0 is the sign, and
+        ror w16                     ;  >> 1 leaves it as it is
         ldx #4
 :       stx sp_rinc
 
@@ -1080,40 +1097,20 @@ drawsprite:
 @mdone: sta sp_rp
 
 
-        ; ---- the columns, and away to the row loop
+        ; ---- the columns (sp_ncol, set with the record's width), and away to the
+        ; row loop
+  .if TIGHTBSS
         lda sp_c1
         sec
         sbc sp_c0
         sta sp_ncol                 ; columns-1
+  .endif
         ; The row loop and the inner blocks are assembled into each sprite data bank
         ; (NIB_LOOPS, sprloops.s): call the copy in the bank the directory named,
         ; through low RAM's direct switch (both banks enter at BANKENTRY) and back to
         ; this bank.
         lda sp_dbank
         jmp callbank
-
-; ============================================================================
-; render_core: the frame's steps, in order, into the back buffer
-;   In:   curbuf; the window (wcx, wcy, wfine); the sprite list; the dirty lists
-;   Out:  the back buffer drawn;  A, X, Y clobbered
-; Bank 7 drives the frame and keeps the records; bank 6 gets two fixed calls a frame
-; (low RAM's selbb and validate) and the rects through callbank.
-; ============================================================================
-        .segment "ENGCODE"
-render_core:
-        jsr selbb                   ; select_backbuf (bank 6: it patches drawrect)
-        jsr calc_ring               ; ringS, barq (Model B: wcxm, mrow)
-        jsr match_sprites
-        jsr erase_old
-        jsr validate                ; scroll_validate (bank 6: it draws the new strips)
-        jsr draw_dirty              ; (bank 7 from here: the rects through callbank)
-        jsr draw_sprites
-    .if BHW
-        jsr copy_partial
-        jmp mirror_copy             ; the straddling row's copy (mirror.s)
-    .else
-        jmp copy_partial            ; tail call (the hardware folds the straddling row)
-    .endif
 
 ; ============================================================================
 ; mark_dirty: queue a changed map tile for redrawing, in both buffers' lists
@@ -1289,8 +1286,21 @@ wait_flip:                          ; (inline, its one caller) spin until any pe
         ror
         sta wcy
 
-        ; ---- draw, and build this buffer's section chain
-        jsr render_core
+        ; ---- draw (the frame's steps, in order, into the back buffer: render_core,
+        ; inlined at its one caller), and build this buffer's section chain.  Bank 7
+        ; drives the frame and keeps the records; bank 6 gets two fixed calls a frame
+        ; (low RAM's selbb and validate) and the rects through callbank.
+        jsr selbb                   ; select_backbuf (bank 6: it patches drawrect)
+        jsr calc_ring               ; ringS, barq (Model B: wcxm, mrow)
+        jsr match_sprites
+        jsr erase_old
+        jsr validate                ; scroll_validate (bank 6: it draws the new strips)
+        jsr draw_dirty              ; (bank 7 from here: the rects through callbank)
+        jsr draw_sprites
+        jsr copy_partial
+    .if BHW
+        jsr mirror_copy             ; the straddling row's copy (mirror.s)
+    .endif
         stz NSPR                    ; A dead: build_sections starts ldx/lda
         jsr build_sections
 
