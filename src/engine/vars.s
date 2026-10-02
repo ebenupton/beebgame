@@ -239,7 +239,6 @@ DIRTY_    = DIRTYLIST+2*DIRTYMAX
 BUF_CY:    .res 2                   ; each buffer's window char row, by curbuf
 BUF_CX:    .res 2                   ; each buffer's window x, by curbuf: low bytes
 BUF_CXH:   .res 2                   ; high bytes (bank 7 invalidates a buffer: $80)
-DIRTYCNT:  .res 2                   ; each buffer's dirty tiles queued (the game loop)
 ; PBANK: the physical bank of each of banks 4..7 (the loader's: cpu.inc -- read by
 ; what the loader cannot patch).  PBOARD: the board, BOARD_STD / WATFORD / SOLIDISK
 ; (defs.inc), right after PBANK: boot copies the five together.
@@ -252,6 +251,18 @@ PBOARD:    .res 1
 SPRREC:    .res 2*MAXREC*RECSZ      ; buffer 0's records, then buffer 1's
 RECCNT:    .res 2                   ; records per buffer
 KEEP:      .res MAXREC              ; match_sprites: is sprite i what record i shows?
+DIRTYCNT:  .res 2                   ; each buffer's dirty tiles queued (the game loop)
+; The sprite draw list, one array per field (index = the sprite's number, so no
+; stride to multiply by): id, x lo/hi, y lo/hi in game pixels (map coordinates).
+; Only bank 7 touches it (addsprite, the sprite prologue).  SPRLIST is a label, not
+; an equate: the tools read labels.txt.
+SPRLIST:
+SPR_ID:    .res MAXSPR
+SPR_XL:    .res MAXSPR
+SPR_XH:    .res MAXSPR
+SPR_YL:    .res MAXSPR
+SPR_YH:    .res MAXSPR
+        .assert >SPR_ID = >(SPR_YH+MAXSPR-1), warning, "the sprite list crosses a page: its indexed reads +1"
 
 ; ---------------------------------------------------------------- the rupture chain
 ; The chain's tables sit with the interrupt that reads them.
@@ -274,15 +285,3 @@ SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sectio
 BUF_QS:    .res 3                   ; each buffer's Q entry (-> QSECT), by 2 x the buffer
     .endif
 
-; ---------------------------------------------------------------- LOWBSS: the sprite list
-; Main RAM: what more than one bank touches.
-        .segment "LOWBSS"
-; The sprite draw list, one array per field (index = the sprite's number, so no
-; stride to multiply by): id, x lo/hi, y lo/hi in game pixels (map coordinates).
-; SPRLIST is a label, not an equate: the tools read labels.txt.
-SPRLIST:
-SPR_ID:    .res MAXSPR
-SPR_XL:    .res MAXSPR
-SPR_XH:    .res MAXSPR
-SPR_YL:    .res MAXSPR
-SPR_YH:    .res MAXSPR
