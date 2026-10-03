@@ -800,6 +800,15 @@ scroll_validate:
         eor #$FF                    ; A = 255 - rc_h, C still 0 from the cmp above
         adc #BUFROWS                ; A = BUFROWS-1-rc_h, C = 1 (rc_h <= BUFROWS-1)
         adc wcy                     ; + wcy + 1 -> wcy + BUFROWS - rc_h
+  .if .not TALLMAP
+        ; Rows are bytes.  A map 256 rows tall (1024 px: 64x128 tiles) has the window's
+        ; last buffer row at 256 when it sits on the bottom; asked for here (dy = 1) that
+        ; row wraps to 0, and drawrect's head puts a rect's FIRST row by its byte -- slot
+        ; 0 on the Model B, which is row 253's (256 mod 23 = 3), a visible row.  (A rect
+        ; that only runs into 256 is safe: @rowdone steps to the next slot.)  The row is
+        ; never shown -- there is no fine scroll on the bottom -- so the strip is dropped.
+        bcs @done                   ; wcy + BUFROWS - rc_h >= 256: nothing to draw
+  .endif
         sta rc_y
         ; ---- rows rc_y.., rc_h of them, the window's full width
 @dorows:
