@@ -86,9 +86,6 @@ rc_gi:    .res 1
 rc_lim:   .res 1                   ; chars this run may take: 4 - its first char in the tile
 row_off:   .res 1                  ; byte offset into the tile for this run:
                                   ;  rc_sub | (4 - rc_lim)*8
-  .if TILEMIRROR
-rc_n:     .res 1                   ; the mirror's chars in its run (the others' is X)
-  .endif
 ; per-rect invariants
 rc_tx0:   .res 1                   ; first tile column
 rc_nt:    .res 1                   ; tiles-1 per row
@@ -133,8 +130,6 @@ sp_c:     .res 1
 sp_lim:   .res 1
 sp_cnt:   .res 1                   ; sprite column countdown
         .assert sp_rp - LDZP >= 17, error, "the loader's zero page runs past the prologue's scratch"
-; Aliases of zero page the blit no longer needs:
-sp_id   = sp_ext                   ; the sprite id, until sp_ext is set a few lines later
 spi:      .res 1                   ; draw_sprites: the sprite's number (X in its loop)
   .if DRAWFLAGS
 sp_dfl:   .res 1                   ; draw_sprites' flags for the sprite: 1 = mirror it

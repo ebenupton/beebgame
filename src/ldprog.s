@@ -15,9 +15,6 @@
         .ifndef BHW                ; (cpu.inc's flag: the Model B's hardware unless the
 BHW = 1                            ;  build says -D BHW=0, the Master's)
         .endif
-        .ifndef TILEMIRROR         ; (cpu.inc's flag: tile mirroring, off by default)
-TILEMIRROR = 0
-        .endif
         .ifndef GAMEHAZEL          ; (cpu.inc's: the game's code in HAZEL -- then SPRX is
 GAMEHAZEL = 0                      ;  staged from the disc every time, as the Model B's)
         .endif
@@ -35,7 +32,6 @@ ACCCON     = $FE34                 ; (the Master: bit 2, X, puts the CPU's
 ; every load, so the loader cannot patch it as it does the banks' code: every switch
 ; here reads the physical bank from PBANK, and the placement lists' bank bytes
 ; (4 or 5, the packer's) go through it too.
-BANK_MAP   = 5                     ; (the placement lists' number for bank 5)
 PB_SPR     = PBANK
 PB_TILES   = PBANK + 2
 PB_MAP     = PBANK + 1
@@ -102,8 +98,6 @@ ld_image: pha                      ; go_menu's A, then the op: on the stack acro
         bcc @title
         jmp hook_over
 @title: jmp hook_title
-ldop:   .res 1
-ldarg:  .res 1
 
 ; ---------------------------------------------------------------- the file table
 ; index -> sector lo, hi, sectors (from files.inc: the disc's own order)
@@ -476,21 +470,13 @@ lv_load:
   .if BHW || .defined(BAKEITEM0)   ; the arithmetic gather's (bank 5): the Master's
         lda LV_HDR+HDR_HALF0       ; gather is its table, LV_PAGE0 (the baker
         sta sv_half0               ; decodes a tile as the Model B's gather does)
-   .if TILEMIRROR
-        clc                        ; half0 - HALFOFF - 1: the gather's borrow (C clear
-   .else                           ; after its mirror test)
-        sec                        ; half0 - HALFOFF (C set: no mirror test)
-   .endif
+        sec                        ; half0 - HALFOFF (gather5 subtracts it with C set)
         sbc LV_HDR+HDR_HALFOFF
         sta sv_halfsub
         lda LV_HDR+HDR_HALF1
         sta sv_half1
         lda LV_HDR+HDR_HALF2
         sta sv_half2
-   .if TILEMIRROR
-        lda LV_HDR+HDR_MIR0
-        sta sv_mir0
-   .endif
   .endif
         lda PB_TILES
         jsr pgbank                 ; (X, Y kept)
@@ -512,28 +498,9 @@ lv_load:
         sta halfhi5
         lda sv_halfsub
         sta half_sub
-   .if TILEMIRROR
-        lda sv_mir0
-        sta mir0
-   .endif
   .endif
         lda PB_LVL
         jsr pgbank
-  .if BHW && TILEMIRROR
-        ; ---- MIRTAB: each mirrored tile's source slot
-        lda #SEC_MIR
-        jsr section
-        lda #<MIRTAB
-        sta dst
-        lda #>MIRTAB
-        sta dst+1
-        lda LV_HDR+HDR_NMIR
-        sta cnt
-        lda #0
-        sta cnt+1
-        ldx PB_MAP
-        jsr bcopy
-  .endif
         ; ---- the sprites.  The resident block (SPRC: Cleo's player, the boomerang, the stars,
         ; the trampoline) goes to its fixed places in banks 4 and 5 once, and stays (the
         ; menus keep to bank 7); the rest (SPRX) is staged and the level's subset copied
@@ -584,11 +551,11 @@ lv_load:
         bne @unkeep
         jsr stage
         inc sprx_ok
-        sec                        ; keep: C set (unkeep+1 is their shared php)
+        sec                        ; keep: C set
         .byte $24                  ; (bit zp: skips the clc)
 @unkeep:
         clc                        ; unkeep: C clear
-        jsr unkeep+1
+        jsr unkeep
   .endif
 @sfile: jsr place_walk
 @plend:
@@ -673,7 +640,7 @@ main_ram:                          ; (A and N, Z not kept: neither caller needs 
         rts
   .endif                           ; (else main_ram is unkeep's tail, below: X and Y clear)
 ; SPRX's residency on the Master: the stage (shadow RAM, $3000) to HAZEL
-; ($C000, ACCCON Y) and ANDY ($8000, ROMSEL bit 7) -- keep -- and back -- unkeep.  Only
+; ($C000, ACCCON Y) and ANDY ($8000, ROMSEL bit 7), or back: unkeep, by C.  Only
 ; under a load: interrupts are off, and the game's code is in bank 7 (ANDY would hide
 ; its bottom 4K).  (HAZEL itself does not hide the interrupt's path: GAMEHAZEL games
 ; run with Y set throughout.)
@@ -681,10 +648,7 @@ main_ram:                          ; (A and N, Z not kept: neither caller needs 
   .if SPRXKEEP
 SPRX_PAGES = (SPRX_LEN + 255) / 256
         .assert SPRX_PAGES <= $30, error, "SPRX outgrows HAZEL and ANDY (12K)"
-keep:   sec
-        .byte $24                  ; (bit zp: skips the clc)
-unkeep: clc
-        php
+unkeep: php                        ; C = 1: the stage to HAZEL and ANDY (keep); 0: back
         .setcpu "65C02"
         lda #$0C                   ; X (the stage) and Y (HAZEL)
         tsb ACCCON
@@ -708,9 +672,9 @@ main_ram:                          ; (every load's start too: SPRXKEEP is GAMEHA
         sta ACCCON
         rts
 kpart:  stx cnt+1                  ; X pages between the stage's page A and page Y:
-        tsx                        ; from the stage (keep: the C its caller pushed is
-        pha                        ; set) or to it
-        lda $0103,x                ; (the P keep/unkeep pushed, under this call's return)
+        tsx                        ; from the stage (keep: the C in the P unkeep
+        pha                        ; pushed is set) or to it
+        lda $0103,x                ; (that P, under this call's return)
         lsr
         pla
         bcc :+
@@ -768,7 +732,6 @@ bk_mb:      .res 1
 bk_step:    .res 1
 bk_pa:      .res 1
 bk_pb:      .res 1
-bk_k:       .res 1
 bk_fp:      .res 2
 BK_BG:      .res 32
   .endif
@@ -780,9 +743,6 @@ sv_half0:   .res 1
 sv_half1:   .res 1
 sv_half2:   .res 1
 sv_halfsub: .res 1
-   .if TILEMIRROR
-sv_mir0:    .res 1
-   .endif
   .endif
 place_walk:                        ; the placement list's items from file fnum, staged
         lda #SEC_PLACE
@@ -844,7 +804,6 @@ place_walk:                        ; the placement list's items from file fnum, 
 ; char row (4 game pixels down: Cleo's health powerup, whose art does).  A tile is decoded as the Model B's gather
 ; does (engine.s gather5): 0 the solid, from FLAT0 the flats, from half0 the halves
 ; (one char row stored, the other a fill pair or the same row), below it full tiles.
-        .assert .not TILEMIRROR, error, "bake: no mirrored tiles (the gather's @gmir)"
 bake:   lda #SEC_FLAT              ; the flats' pairs, in the level's file (main RAM)
         jsr section
         lda src

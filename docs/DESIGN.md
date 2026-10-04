@@ -78,9 +78,6 @@ on both machines: `engine/sprloops.s` and `engine/gather.s` assert that each spr
 shorter code leaves a gap.  `build.sh` checks that the two builds' shared files are
 byte-identical.
 
-`TILEMIRROR=1 sh build.sh` also builds mirrored tiles into the tile blitter (below).
-It is off by default: no level needs it.
-
 ## Main RAM
 
 ### Zero page (both machines)
@@ -573,8 +570,7 @@ is a level tile id:
 | 1 .. half0-1 | full tiles, stored at TILES + 64 x (id + TOFF) |
 | half0 .. half1-1 | half tiles whose top row is a fill |
 | half1 .. half2-1 | half tiles whose bottom row is a fill |
-| half2 .. mir0-1 | half tiles whose two rows are the same |
-| mir0 .. (TILEMIRROR only) | full tiles drawn mirrored from another's slot |
+| half2 .. half0+nhalf-1 | half tiles whose two rows are the same |
 | FLAT0 .. 253 | NFLAT flat tiles: one colour's dither, two bytes alternating down every character |
 | 254, 255 | two more flat tiles: FLATTAB's last pairs, the level's like the rest (Cleo's two solids, cyan and black) |
 
@@ -585,7 +581,7 @@ FLATTAB's two bytes each; the more there are, the fewer ids are left for the til
 
 These ranges are the Model B's arithmetic gather's.  The Master's gather is only its
 table, LV_PAGE0, so on a Master-only build (MASTERONLY) any id below FLAT0 may be any
-stored slot, kind 0 (as stored) or 3 (mirrored, TILEMIRROR), in any order: Commando's
+stored slot, in any order: Commando's
 packer stores each image and its mirror once and gives every drawn (image,
 collision) pair an id, the full ids and the mirrored ones interleaved.
 
@@ -653,13 +649,6 @@ store with Y = 0 (the Model B's branch offsets a table beside the dispatch's); o
 the Model B ringmod_tab and PADB_T6 before `draw_rect` put its two hot stretches each
 in a page, on the Master PADM_T6 the row loop's `bmi`.  Each character row starts with `sp` already set, by `draw_rect`'s head for
 the first and `@rowdone` for the rest.
-
-**Mirrored tiles** (TILEMIRROR=1): another stored tile reversed left to right, drawn a
-character at a time right to left with `((b & $33) << 2) | ((b & $CC) >> 2)`.  The
-packer mirrors only what the bank cannot hold, the least used first; on the Model B
-MIRTAB (each mirrored id's source slot) is in bank 5 beside the gather, on the Master
-LV_PAGE0 names the source's slot.  No level needs it, and the code and tables it
-takes are the room: building it raises TOFF to 4.
 
 **The tile set.**  Every distinct tile any level uses, in three files, TILES0-2, of at
 most 256 tiles each (16K, STAGE's size).  How the tiles are cut between the files is
@@ -907,14 +896,15 @@ A level file starts with a table of 13 section offsets:
 | 7 | FLATTAB's pairs |
 | 8 | the half tiles: index in file, row, file |
 | 9 | the halves' fill palette (8 first bytes, 8 second), then each half's low bits (fill row: 8 top, 16 bottom; colour: 0-7) |
-| 10 | MIRTAB (TILEMIRROR) |
+| 10 | empty (reserved: the removed mirrored tiles' MIRTAB) |
 | 11 | the sprite directory's level part, 2 x (BOXID0 + BOXN): the images' addresses by id, low bytes then high (0: not in this level; bit 7 clear: bank 5) |
 | 12 | LV_PAGE0, 512 bytes, sector aligned at the end |
 
 The header (LV_HDR): the engine's fields are lw and lh (+0, +1: log2 of the map's
 size in tiles), the objects' count (+6) and the tile set's shape (+20..+31,
 `levelfile.Shape`: +21 the tile count, +22 map_shr = 8 - lw, +23 the half count,
-+24-26 half0-2, +27 the halves' page, +28 HALFOFF, +29 mir0, +30 the mirror count,
++24-26 half0-2, +27 the halves' page, +28 HALFOFF, +29 and +30 reserved (the removed
+mirrored tiles' first id, half0 + the half count, and their count, 0),
 +31 the solid's fill byte); +2..+5 and +7..+19 are the game's.  `encode()` refuses a
 game field in the engine's bytes.  `levelfile.check` takes the game's BOXID0 and BOXN
 (the build passes its assets.inc).
@@ -949,10 +939,10 @@ to its tools.  With none set a game builds for both machines.  What each changes
 - **GAMEHAZEL.**  banks.cfg's HAZ area ($C000-$DFFF) takes HAZCODE, HAZDATA and
   HAZBSS into `hazel.bin`, a BANKS piece with bank byte 1, which the loader copies
   with ACCCON Y set and leaves set for good.  `ldprog.s`'s `main_ram` keeps Y, and
-  SPRX is staged from the disc every load (no keep/unkeep).  With Y set throughout,
+  SPRX is staged from the disc every load (no unkeep).  With Y set throughout,
   the interrupt path (the hardware vector, the MOS's entry, IRQ1V) works on the
   Master (MOS 3.20, on jsbeeb: the MOS's entry code is not under HAZEL, whatever
-  ldprog.s's comment on keep/unkeep says).
+  ldprog.s's comment on unkeep says).
 - **GAMESOUND.**  The vsync's `jsr sound_tick` becomes `jsr hook_sound`, followed by
   sound_tick's last act (`mus_on` to `mus_tick`, the tune's step); `sound_tick` and the
   game's `sfx_tab` are not assembled.
@@ -969,9 +959,8 @@ to its tools.  With none set a game builds for both machines.  What each changes
   `draw_sprites` steps and the prologue writes the rectangle at (`tmp3` its scratch); `match_sprites` walks Y with X, `erase_old` steps `rq`.  The
   dirty list likewise: `DIRTYX` then `DIRTYY`, DIRTYMAX a buffer.  build.sh drops
   ENGBSS's `align = $100` from the linked cfg.
-- **MAXSPR.**  build.sh passes `-D MAXSPRDEF=n`; engine/defs.s defaults MAXSPRDEF to 28
-  when neither the build nor assets.inc sets it.
-- **TILEMIRROR** (the oldest): the tile blitter's mirrored tiles, *The tiles*.
+- **MAXSPR.**  build.sh passes `-D MAXSPR=n`, which engine/defs.s takes over assets.inc's
+  MAXSPRDEF; 28 when neither sets it.
 
 ## Timing
 

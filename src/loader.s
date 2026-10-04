@@ -543,7 +543,6 @@ msgm:     .byte " needs a BBC Master 128", 13, 10, 0
 
 old_bank:  .byte 0
 npieces:  .byte 0
-pbank:    .byte 0
 plen:     .word 0
 fdc:      .byte 0
 drive:    .byte 0

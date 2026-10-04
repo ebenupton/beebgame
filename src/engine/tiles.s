@@ -68,15 +68,13 @@ ringmod_tab:
 ; draw_rect: draw map tiles into the current back buffer
 ;   In:   rc_x = first map char column (16 bit), rc_y = first map char row,
 ;         rc_w = chars wide (1..80), rc_h = char rows (0 draws nothing)
-;   Out:  rc_h = 0.  A, X, Y, sp, tp, ptr, tmp (tmp2 under TILEMIRROR) and
-;         the rc_ work bytes clobbered.
+;   Out:  rc_h = 0.  A, X, Y, sp, tp, ptr, tmp and the rc_ work bytes clobbered.
 ;
 ; Per rect: the invariants once (tx0, tiles-1, the first run's limit and char
 ; offset), the first row's screen address, the map row pointer.  Per tile row: one
 ; map_strip (the gather) and one or two char rows (@drawrow).  Per char row: runs --
 ; a run is the chars of one tile in this row, at most four -- dispatched by kind:
-;   GATHERH bit 7 set   a full tile (its page; GATHERL its offset -- or, under
-;                       TILEMIRROR, kind 3 in GATHERL's low bits: a mirror)
+;   GATHERH bit 7 set   a full tile (its page; GATHERL its offset)
 ;   GATHERH = 0         the level's solid (id 0): one byte, SOLIDF, down every line
 ;   GATHERH = $40       a flat tile or the other solid: a pair from FLATTAB
 ;   GATHERH $06-$3F     a half tile: its page less $80 (GATHERL: its row and kind)
@@ -90,7 +88,7 @@ ringmod_tab:
 ;   exactly there, which carries sp into a new page: @advc folds it (pagestep).  So
 ;   the runs have no wrap test.
 ; - C is clear at every entry to @run: @drawrow's clc, and @advsp's sp step on the
-;   loop back.  The mirror's sbc #0 borrows one on it.
+;   loop back.
 ;   @drawrow's exit (@rowdone) does NOT leave C clear.
 ; - rc_lim: the chars the current run may take -- 4 - rc_x&3 for a row's first run
 ;   (rc_sc0, set per rect), 4 for the later ones (@runnext).
@@ -378,13 +376,7 @@ RINGHIOP := * + 1                  ; the buffer's table: select_backbuf patches 
 
         ; ---- a stored tile.  Every tile is in bank 6, selected once per tile row.
 @tile:  sta tp+1                   ; the tile pointer's high byte
-  .if TILEMIRROR
         lda GATHERL,x
-        and #7                     ; the kind: 0 a full tile, 3 a mirror
-        beq @full
-        jmp @mir
-  .endif
-@full:  lda GATHERL,x
         ora row_off                ; a full tile's lo byte is (id&3)<<6: bits 0-5 clear
 @tpsta: sta tp
         ; ---- chars in this run: min(rc_lim, cnt) -> X
@@ -495,70 +487,6 @@ RINGHIOP := * + 1                  ; the buffer's table: select_backbuf patches 
         ; case branches to @runnext itself; the Master's falls to the jmp.)
 @advc:  pagestep sp, @runnext
         jmp @runnext
-
-  .if TILEMIRROR
-; ----------------------------------------------------------------------------
-; @mir: a mirrored full tile (TILEMIRROR, cpu.inc: off by default -- no level needs
-; a mirror).  Its source's chars right to left, each byte's two game pixels swapped:
-; ((b & $33) << 2) | ((b & $CC) >> 2).  The dither is per game pixel, so a game
-; pixel's dots move as one.  A char at a time through spnext, which folds at the ring
-; end: mirrors are rare tiles (the packer mirrors only what the bank cannot hold, the
-; least used first), so there is no unrolled copy.
-;   In:   X = rc_gi;  tp+1 = the source's page (@tile);  C = 0 (as at @run)
-; ----------------------------------------------------------------------------
-@mir:   lda GATHERL,x
-        and #$C0                   ; the source tile's offset in its page
-        ora rc_sub                 ; the char row
-        sta tp
-        ; the first char drawn is the source's rc_lim - 1 (the sbc #0 is the -1:
-        ; C = 0, clear at every entry to @run)
-        lda rc_lim
-        sbc #0
-        asl
-        asl
-        asl
-        ora tp
-        sta tp
-        lda rc_lim
-        cmp cnt
-        bcc :+
-        lda cnt
-:       sta rc_n                   ; min(rc_lim, cnt)
-        sta tmp2                   ; chars to go
-        ; ---- one char: 8 lines, each byte's pixels swapped
-@mc:    ldy #7
-:       lda (tp),y
-        and #$33
-        asl
-        asl
-        sta tmp
-        lda (tp),y
-        and #$CC
-        lsr
-        lsr
-        ora tmp
-        sta (sp),y
-        dey
-        bpl :-
-        ; the source's char to the left: a run stays in its tile's char row, so no
-        ; borrow before the last char, and after it tp is dead
-        lda tp
-        sec
-        sbc #8
-        sta tp
-        spnext
-        dec tmp2
-        bne @mc
-        ; ---- @advsp's count; its sp step is done already (spnext)
-        lda cnt
-        clc
-        sbc rc_n                   ; cnt - rc_n - 1
-        bmi @mdone
-        adc #0                     ; C = 1: +1 back, and C = 0 for @runnext
-        sta cnt
-        jmp @runnext
-@mdone: jmp @rowdone
-  .endif
 
 ; ----------------------------------------------------------------------------
 ; The fills: a half tile's fill row, a flat tile, the other solid -- no source bytes,

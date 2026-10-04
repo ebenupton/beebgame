@@ -1148,9 +1148,6 @@ sound_tick:
         stz sfx_ptr+1              ; none playing
   .endif
         bne @music                 ; Z = 0: snd_write's A = $7F
-  .ifdef DBGSND
-@dbgsil: .byte $9F, $BF, $FF, 0
-  .endif
   .endif
 
 ; ----------------------------------------------------------------------------

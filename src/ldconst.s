@@ -21,7 +21,6 @@
         OUTC FLAT0
         OUTC BOXID0
         OUTC BOXN
-        OUTC NMIPAGE
         OUTC LDPROG
         OUTC STAGE
         OUTC STAGE_LVL

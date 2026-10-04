@@ -34,13 +34,6 @@
         .ifndef BHW
 BHW = 1
         .endif
-; TILEMIRROR: the tile blitter can draw a tile mirrored from another's bytes, and the
-; packer (Cleo's tools/convert.py) mirrors the least-used tiles while a level is short of room
-; in the tile bank.  Off: no level needs it once the tiles start at $8600, and the code
-; and tables it takes are that room (TILEMIRROR=1 sh build.sh to build it).
-        .ifndef TILEMIRROR
-TILEMIRROR = 0
-        .endif
 ; The build's options (tools/build.sh says what each does), 0 unless it sets them.
         .ifndef MASTERONLY
 MASTERONLY = 0                     ; the Master alone: no Model B build

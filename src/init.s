@@ -25,7 +25,6 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
         sta $0113,x
         dex
         bne :-
-        .import __TILBSS_RUN__, __TILBSS_SIZE__
         .assert __TILBSS_RUN__ + __TILBSS_SIZE__ <= TILES + (TOFF+1)*64, error, "bank 6's code and variables run into the first tile: raise TOFF (the game's packer)"
         ldy #$0F                   ; (A = 0) and zero page $F0-$FF
 :       sta $F0,y

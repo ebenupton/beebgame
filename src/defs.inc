@@ -108,7 +108,6 @@ FDC8271_DAT = $FE84
   .if BHW
 FDC1770_CTL = $FE80                ; the Acorn 1770 board: the drive control latch,
 FDC1770_CMD = $FE84                ; then the WD1770 at $FE84-$FE87
-FDC1770_TRK = $FE85
 FDC1770_SEC = $FE86
 FDC1770_DAT = $FE87
 FDC_RESET   = $08                  ; the latch: reset held (bit 5 low), FM
@@ -118,7 +117,6 @@ FDC_SIDE1   = $04                  ;   side 1 (bit 2)
   .else
 FDC1770_CTL = $FE24                ; the Master's: its drive control latch, then the
 FDC1770_CMD = $FE28                ; WD1770 at $FE28-$FE2B
-FDC1770_TRK = $FE29
 FDC1770_SEC = $FE2A
 FDC1770_DAT = $FE2B
 FDC_RESET   = $20                  ; the latch: reset held (bit 2 low)

@@ -489,7 +489,7 @@ Label `frame_top` exactly as Cleo does: the test harness runs frame to frame by 
 - **The sprites.**  Empty the list (`stz nspr`), then for each sprite set `spx`, `spy`
   (game pixels, map coordinates: the sprite's reference point; across, the sprite
   lands on the even game pixel at or left of it) and `lda #id / jsr add_sprite`.  At most
-  `MAXSPR` a frame (your assets.inc's `MAXSPRDEF`, Step 8, or the build's `MAXSPR`, Step 11; 28 when neither sets it).  `render_frame` erases what moved,
+  `MAXSPR` a frame (the build's `MAXSPR`, Step 11, else your assets.inc's `MAXSPRDEF`, Step 8, else 28).  `render_frame` erases what moved,
   keeps what did not and draws the rest.
 - **The map.**  Read and write it through `map_row` (A = a tile row: `map_ptr` = the row),
   `map_byte` and `map_put` (Y = the column); after a change, `lda #tx / ldx #ty / jsr
@@ -571,12 +571,11 @@ checks): build them from the Model B's layout.
 
 | Constant | Meaning |
 |---|---|
-| `TOFF` | tile id k is in slot k + TOFF of bank 6 (2, or 4 with TILEMIRROR) |
+| `TOFF` | tile id k is in slot k + TOFF of bank 6 (the first slot clear of its code: Cleo's is 2) |
 | `FLAT0`, `NFLAT` | the fill ids: NFLAT flat tiles from FLAT0, then the two solids at 254 and 255, so FLAT0 = 254 - NFLAT (asserted) |
-| `MAXMIR` | mirrored tiles at most (TILEMIRROR only; else 0) |
 | `BOXID0`, `BOXN` | the first box id, and how many boxes (*Sprite ids, and boxes*) |
 | `SPRGFL` | 1 when the shapes carry flags, `sprg_fl` (*A sprite's directory*); leave it out otherwise |
-| `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once (optional: 28 if left out; or set `MAXSPR` in your build.sh instead, Step 11) |
+| `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once (optional: 28 if left out; the build's `MAXSPR`, Step 11, overrides it) |
 | `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | the resident and staged sprites (below) |
 | `MAP5` | the map's place in bank 5 ($9C00) |
 | `B4_CODE_END`, `B5_CODE_END` | where the engine's sprite-bank code ends: your sprites start there |
@@ -626,13 +625,11 @@ the blitters' (`DESIGN.md`, *The tiles* and *The sprites*).  In short:
   dither, two bytes alternating down the scanlines), all of them the level's to
   choose: Cleo puts its two solids, cyan and black, in the last two, but to the engine
   they are two more flats.  The rest, 1 to FLAT0 - 1, are full tiles (all 64 bytes
-  stored), half tiles (one character row of the two stored, the other a fill) and, if
-  you need them, mirrored ones.
+  stored) and half tiles (one character row of the two stored, the other a fill).
 - Two limits bind separately: the ids (FLAT0 - 1 for the tiles that are not flat:
   249 with NFLAT = 4), and bank 6's room for the stored tiles, from the first slot
-  clear of the code to $BFFF: ($C000 - $8600) / 64 - 1 - TOFF slots (229, or 227
-  with TILEMIRROR), a half tile taking half a slot.  A mirrored id costs an id but no
-  slot.  Your packer has to meet both, and choose what to give up when a level does
+  clear of the code to $BFFF: ($C000 - $8600) / 64 - 1 - TOFF slots (229), a half
+  tile taking half a slot.  Your packer has to meet both, and choose what to give up when a level does
   not (Commando's drops the flips of its least-used flipped tiles, then draws its
   least-used tiles as their nearest neighbour).  A flat tile costs two
   bytes in bank 6 rather than 64: choose NFLAT for the most flat tiles a level uses
@@ -739,7 +736,7 @@ unless set, and each one the assembler sees too (`cpu.inc`).  With none set a ga
 exactly what it was.  Cleo sets none; Commando sets them all:
 
 ```sh
-export MASTERONLY=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1 TIGHTBSS=1 MAXSPR=24
+export MASTERONLY=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TALLMAP=1 TIGHTBSS=1 MAXSPR=24
 ```
 
 | Option | What it does | What the game does for it |
@@ -750,7 +747,7 @@ export MASTERONLY=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TILEMIRROR=1 TALLMAP=1 T
 | `DRAWFLAGS` | bit 7 of a sprite's x high byte (`spx+1` at `add_sprite`) mirrors it, so one image is drawn either way round | sets the bit; map x stays below 32768 |
 | `TALLMAP` | maps up to 256 tiles tall (the window's character row keeps its high bits for the tile blitter's map row).  The Master alone: its ring is 32 rows | nothing |
 | `TIGHTBSS` | the engine's bank 7 variables packed: a sprite record is 9 bytes (the rectangle's column high bits share the height's byte: a map is at most 1,024 characters wide), kept as arrays a byte of each by record (as the dirty list is), and ENGBSS follows GAMEBSS where it ends instead of at the next page | nothing |
-| `MAXSPR=n` | the sprite slots, the most sprites on screen at once (the list, and a record each a buffer): n in place of assets.inc's `MAXSPRDEF` (set one or the other); 28 when neither is set | adds at most n sprites a frame (Commando: its sort list's 24) |
+| `MAXSPR=n` | the sprite slots, the most sprites on screen at once (the list, and a record each a buffer): n over assets.inc's `MAXSPRDEF`; 28 when neither is set | adds at most n sprites a frame (Commando: its sort list's 24) |
 
 **What else a Master-only game may use.**  Beyond bank 7 and (GAMEHAZEL) HAZEL: the
 objects' area LV_OBJS at $1C00 keeps what the loader put there all through the level

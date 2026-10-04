@@ -26,20 +26,16 @@
 ; ---------------------------------------------------------------- hardware
 CRTC_IDX  = $FE00                  ; 6845: register number
 CRTC_DAT  = $FE01                  ; 6845: register data
-ULA_CTRL  = $FE20                  ; video ULA control
 ULA_PAL   = $FE21                  ; video ULA palette
 ROMSEL    = $FE30                  ; the paged (sideways) bank
 ACCCON    = $FE34                  ; Master: bit D picks the RAM the CRTC displays
 VIA_ORB   = $FE40                  ; the system VIA
-VIA_ORA   = $FE41
-VIA_DDRB  = $FE42
 VIA_DDRA  = $FE43
 VIA_T1CL  = $FE44                  ; T1: the rupture chain's step timer
 VIA_T1CH  = $FE45
 VIA_T1LL  = $FE46
 VIA_T1LH  = $FE47
 VIA_ACR   = $FE4B
-VIA_PCR   = $FE4C
 VIA_IFR   = $FE4D
 VIA_IER   = $FE4E
 VIA_ORANH = $FE4F                  ; port A without handshake
@@ -80,7 +76,7 @@ BANK_MAP  = 5                      ; the map, and the gather that reads it in pl
 ;   $0300-$07FF  bar         2 rows, one for both buffers   BARADDR
 ;   $0800-$0A7F  mirror A    1 row                          MIRR_A   (CLEAR0 from here)
 ;   $0A80-$43FF  ring A      23 rows: buffer 0              RING_A = RING0
-;   $4400-$467F  mirror B    1 row                          MIRR_B
+;   $4400-$467F  mirror B    1 row
 ;   $4680-$7FFF  ring B      23 rows: buffer 1              RING_B
 ;
 ; Master: the ring is the whole 20K the CRTC wraps, in main RAM (buffer 0) and shadow
@@ -116,7 +112,6 @@ RING_B    = $4680
 RING0     = RING_A                 ; buffer 0's ring (the menus' too)
 CLEAR0    = MIRR_A                 ; the menus' clear: mirrors and rings, to $8000
 MIRR_A    = RING_A - ROWBYTES      ; ring A's mirror: the row just under its base
-MIRR_B    = RING_B - ROWBYTES      ; ring B's mirror
 RINGEND_A = RING_A + RINGBYTES
 RINGEND_B = RING_B + RINGBYTES
 .assert RINGEND_B = $8000 && (RINGEND_A & $FF) = 0, error, "the ring ends must be page aligned"
@@ -175,13 +170,16 @@ WINPX     = ROWCHARS*2             ; window width in game pixels
 VISLINES  = VISROWS*8
 
 ; ---------------------------------------------------------------- sprites
-; MAXSPRDEF, the sprite slots: the build's MAXSPR (build.sh), or the game's assets.inc
-; (Cleo sizes it from its levels), else 28.
-  .ifndef MAXSPRDEF
-MAXSPRDEF = 28
-  .endif
-MAXREC    = MAXSPRDEF
+; MAXSPR, the sprite slots: the build's (-D MAXSPR=n, build.sh) over the game's
+; assets.inc MAXSPRDEF (Cleo sizes it from its levels); 28 when neither sets it.
+  .ifndef MAXSPR
+    .ifdef MAXSPRDEF
 MAXSPR    = MAXSPRDEF
+    .else
+MAXSPR    = 28
+    .endif
+  .endif
+MAXREC    = MAXSPR
 
 ; ---- the sprite record (SPRREC)
 ; Each buffer keeps a record for each sprite it drew: id, x (2), y (2), then the screen

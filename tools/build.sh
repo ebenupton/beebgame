@@ -16,8 +16,7 @@
 #   GAME_MUSIC   run once first (may be empty)
 #   DISC_TITLE   the disc's title; DISC_OUT the disc image (build/game.ssd); GAME_NAME
 #                the game's name, for the boot loader's messages (DISC_TITLE)
-#   SKIP_ASSETS=1 skips GAME_MUSIC and GAME_ASSETS; TILEMIRROR=1 builds the tile
-#   blitter's mirrored tiles (cpu.inc; off by default), which move the tiles up a page
+#   SKIP_ASSETS=1 skips GAME_MUSIC and GAME_ASSETS
 #   MASTERONLY=1 builds the Master alone: no Model B assembly, link or files, the
 #                Master linked unpinned, its own layout the level files' (a game too big
 #                for the Model B; the boot loader says so on one)
@@ -33,32 +32,30 @@
 #   TIGHTBSS=1   the engine's bank 7 variables packed: the sprite records 9 bytes (the
 #                rectangle's column high bits in the height's byte) and ENGBSS not
 #                page aligned (after GAMEBSS as it falls)
-#   MAXSPR=n     the sprite slots (the most sprites on screen at once), in place of
-#                the game's assets.inc MAXSPRDEF; 28 when neither sets it
+#   MAXSPR=n     the sprite slots (the most sprites on screen at once), over the
+#                game's assets.inc MAXSPRDEF; 28 when neither sets it
 BG=$(cd "$(dirname "$0")/.." && pwd)
 : "${GAME_MAIN:?}" "${GAME_SRC:?}" "${GAME_ASSETS:?}" "${DISC_TITLE:?}"
 DISC_OUT=${DISC_OUT:-build/game.ssd}
 GAME_NAME=${GAME_NAME:-$DISC_TITLE}
 set -e
 mkdir -p build
-# (TILEMIRROR: the game's converter and packer follow it too; the linker areas here)
-if [ "$TILEMIRROR" = 1 ]; then MIRDEF="-D TILEMIRROR=1"; else TILEMIRROR=0; MIRDEF=""; fi
-export TILEMIRROR
 # the options, as the assembler's flags (cpu.inc defaults each to 0)
+OPTDEFS=""
 for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS; do
     eval "v=\$$o"
-    if [ "$v" = 1 ]; then MIRDEF="$MIRDEF -D $o=1"; else eval "$o=0"; fi
+    if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o
 done
-[ -z "$MAXSPR" ] || MIRDEF="$MIRDEF -D MAXSPRDEF=$MAXSPR"
+[ -z "$MAXSPR" ] || OPTDEFS="$OPTDEFS -D MAXSPR=$MAXSPR"
 [ "$GAMEHAZEL" = 0 ] || [ "$MASTERONLY" = 1 ] || { echo "GAMEHAZEL=1 needs MASTERONLY=1: the Model B has no HAZEL"; exit 1; }
 if [ "$MASTERONLY" = 1 ]; then TARGETS=master; else TARGETS="modelb master"; fi
 settarget() {                       # $1: modelb or master
     TARGET=$1
     if [ "$TARGET" = master ]; then
-        BD=build/master; CPU=65C02; DEFS="-D BHW=0 $MIRDEF"
+        BD=build/master; CPU=65C02; DEFS="-D BHW=0 $OPTDEFS"
     else
-        BD=build/modelb; CPU=6502; DEFS="$MIRDEF"
+        BD=build/modelb; CPU=6502; DEFS="$OPTDEFS"
     fi
     CFG=$BG/cfg/banks.cfg           # (one map: the Master's own areas are empty on the Model B)
     export BD TARGET
@@ -70,7 +67,6 @@ for t in $TARGETS; do
     [ -n "$SKIP_ASSETS" ] || sh -c "$GAME_ASSETS"
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
     [ "$TIGHTBSS" = 1 ] && sed -i.bak '/^ *ENGBSS:/s#, align = \$100##' $BD/game.cfg   # (ENGBSS where GAMEBSS ends)
-    [ "$TILEMIRROR" = 1 ] && sed -i.bak 's#start = \$8000, size = \$0700#start = $8000, size = $0800#' $BD/game.cfg
     for f in BANKS MENU GAME IMG7 LDPROG; do [ -f $BD/$f ] || : > $BD/$f; done
     python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc     # (the loader's: one definition)
 done
@@ -146,7 +142,7 @@ for pass in 1 2 3; do
 import re
 want = ['boot','dsk_type','dsk_drv','read_sectors','ld_sec','ld_n','ld_dst',
         'LV_HDR','LV_OBJS','LV_ATTR0','LV_ALTCLS','TILES','DIR_TABLE','map_shr','map_stride','FLATTAB',
-        'half0','halfhi5','half_sub','HLOW','mir0','MIRTAB','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
+        'half0','halfhi5','half_sub','HLOW','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
         'MAP5','LDZP','BARADDR','STAGE','STAGE_LVL','LDPROG','PBANK','pboard','DSK_BANKS','dsk_board',
         'ld_img','ld_open','load_req','game_in']
 addr = {}

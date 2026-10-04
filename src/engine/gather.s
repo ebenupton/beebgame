@@ -10,7 +10,7 @@
 ;
 ; The Master's gather is a table (LV_PAGE0, the loader's).  The Model B's is
 ; arithmetic on the level's shape, the loader's too: the half shape in zero page
-; (vars.s) and the mirror shape here (MAP5BSS, below).
+; (vars.s) and the halves' low bits here (HLOW, MAP5BSS below).
 ;
 ; Segments: MAP5CODE, MAP5BSS (bank 5).  The bank's code ends at B5_CODE_END (the
 ; game's assets.inc), where its sprites start -- exactly there on the Model B, at
@@ -30,7 +30,7 @@
 ;   GATHERH = 0             id 0, the level's solid (GATHERL unread)
 ;   GATHERH = $40           a flat tile: GATHERL indexes its pair in FLATTAB
 ;   GATHERH bit 7 set       a full tile: GATHERH:GATHERL its address in bank 6 (low
-;                           bits clear); with TILEMIRROR a mirror too, kind 3
+;                           bits clear)
 ;   GATHERH $06-$3F         a half: its row's page less $80 (bit 7 clear marks it, so
 ;                           draw_rect sends it the rare way, at @run), GATHERL the row's
 ;                           offset (bits 5-7), which of its char rows is the fill (bit 3
@@ -46,7 +46,6 @@
 ;                  at the halves' page + k*32; the other a fill (a pair from the level's
 ;                  palette of 8, HPAIR0/HPAIR1) or the same row again.  Their low
 ;                  bits, fill row and colour, are HLOW's, by k (the loader's)
-;   mir0 .. ..     mirrored tiles (TILEMIRROR builds only): their source's slot
 ;   FLAT0 ..       flat tiles: a fill of two bytes alternating down every char, the low
 ;                  byte indexing the pair in FLATTAB (the loader's; the two solids are
 ;                  its last two entries, for a level's other solid)
@@ -107,15 +106,10 @@ gather5:
         bpl @gl
         rts
 
-        ; ---- a half tile (or, with TILEMIRROR, a mirrored one)
-        ; k = its slot from the halves' page.  C is clear after the mirror test, so the
-        ; loader's half_sub is half0 - HALFOFF - 1 with it, half0 - HALFOFF without.
-@ghalf:
-  .if TILEMIRROR
-        cmp mir0
-        bcs @gmir
-  .endif
-        sbc half_sub               ; k
+        ; ---- a half tile
+        ; k = its slot from the halves' page: C is set from the cmp, so the loader's
+        ; half_sub is half0 - HALFOFF.
+@ghalf: sbc half_sub               ; k
         tax
         lsr
         lsr
@@ -135,42 +129,19 @@ gather5:
         dey
         bpl @gl
         rts
-  .if TILEMIRROR
-        ; ---- a mirrored tile: its source's slot, addressed as a full tile's, kind 3
-@gmir:  sbc mir0                   ; C is set, from the cmp
-        tax
-        lda MIRTAB,x
-        tax
-        lsr
-        lsr
-        clc
-        adc #>TILES
-        sta GATHERH,y
-        txa
-        and #3
-        lsr
-        ror
-        ror                        ; (slot & 3) << 6
-        ora #3
-        bne @gh2                   ; (always)
-  .endif
     .endif
   .if .not BHW
         rts                        ; the Master's end (each Model B path ends in its own rts)
   .endif
 
 ; ----------------------------------------------------------------------------
-; The level's halves' low bits and mirror shape (the loader's), for the Model B's
+; The level's halves' low bits (the loader's), for the Model B's
 ; arithmetic gather (the half shape, half0, half_sub, halfhi5, is in zero page: vars.s)
 ; ----------------------------------------------------------------------------
         .segment "MAP5BSS"
   .if BHW
 HLOW:      .res 64                 ; per half, by k (from the halves' page: HALFOFF on):
                                     ;  its GATHERL low bits (the loader's)
-   .if TILEMIRROR
-mir0:      .res 1                  ; the first mirrored tile's id (the loader's)
-MIRTAB:    .res MAXMIR             ; per mirrored id: the slot of the tile it mirrors
-   .endif
   .endif
 
 ; ---- bank 5's code (with MAP5BSS, its last) against where the sprites start

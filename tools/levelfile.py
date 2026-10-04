@@ -42,8 +42,8 @@ HDR = {'HDR_' + f.upper(): HDR_SHAPE + i for i, f in enumerate(SHAPE_FIELDS) if 
 class Shape:
     """the tile set as the blitter and the loader take it: the tile count, the map's row
     shift (8 - lw), the half tiles (count, the three range boundaries, the page they
-    are in and HALFOFF), the mirrored tiles (the first id, the count: TILEMIRROR), and
-    the solid's fill byte (id 0)"""
+    are in and HALFOFF), two bytes the format keeps from the removed mirrored tiles
+    (mir0: the ids the halves end at; nmir: 0), and the solid's fill byte (id 0)"""
     ntiles: int
     map_shr: int
     nhalf: int = 0
@@ -148,7 +148,7 @@ class Level:
     halves: bytes               # the half tiles: index in file, row, file
     hpair: bytes                # the halves' fill palette (8 first bytes, 8 second), then
                                 # each half's low bits (fill row, colour)
-    mir: bytes                  # MIRTAB (TILEMIRROR; else empty)
+    mir: bytes                  # section 10, empty: the format keeps the removed MIRTAB's slot
     directory: bytes            # directory()
     page0: bytes                # LV_PAGE0: the Master's gather table, 512 bytes
     boxid0: int = 0             # the game's sprite ids: BOXID0 images, then BOXN boxes
