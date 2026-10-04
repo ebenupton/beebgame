@@ -74,7 +74,8 @@ BANKENTRY  = ROMBASE               ; banks 4, 5 and 6: the routine bank 7 calls 
 ; and code folds them into immediates), and the linker's map (cfg/banks.cfg) is held
 ; to them here: every area's start and size reaches the link as __NAME_START__ and
 ; __NAME_SIZE__.
-        .import __B4X_START__: absolute, __B5X_START__: absolute, __B6X_START__: absolute, __B6X_SIZE__: absolute
+        .import __B4X_START__: absolute, __B5X_START__: absolute
+        .import __B6X_START__: absolute, __B6X_SIZE__: absolute
         .import __B4T_START__: absolute, __B5T_START__: absolute, __B4T_SIZE__: absolute
         .assert BANKENTRY = __B4X_START__ && BANKENTRY = __B5X_START__ && BANKENTRY = __B6X_START__, error, "BANKENTRY: banks 4, 5 and 6 are entered at their first byte (the cfg's B4X, B5X, B6X)"
         .assert L0TAB = __B4T_START__ && L0TAB = __B5T_START__ && SWAPTAB + $100 = L0TAB + __B4T_SIZE__, error, "L0TAB..SWAPTAB: the cfg's B4T and B5T, the top 1K of the sprite banks"
