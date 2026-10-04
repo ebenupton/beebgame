@@ -1,16 +1,27 @@
-; The constants the loaders and the tests need that the linker does not list
-; (build.sh prints them into defs_ld.inc): assembled with the game's own flags, so
-; defs.inc's hardware conditionals resolve as they do in the game.  The engine's
-; defs.s comes too (constants and asserts alone): the screen's shape for the tests
-; (test/*.mjs read defs_ld.inc beside labels.txt).
+; ============================================================================
+; ldconst.s -- the constants the loaders and the tests need that the linker does
+; not list.  Not a program: build.sh assembles it for its .out lines alone (the
+; object goes to /dev/null) and appends them to defs_ld.inc, which loader.s and
+; ldprog.s include and test/*.mjs read beside labels.txt.  Assembled with the
+; game's own flags (BHW and the rest), so defs.inc's and engine/defs.s's
+; hardware conditionals resolve as they do in the game; the game's assets.inc
+; and pads.inc come in with engine/defs.s.  Both machines, once each.
+;
+; OUTC name: prints `name = $XXXX` if the symbol is defined (the baker's
+; BAKEITEM0, BG_*, the sprite banks' SPRC5_LEN and the like are a game's to
+; define).
+; ============================================================================
         .include "cpu.inc"
         .include "defs.inc"
-        .include "engine/defs.s"    ; (and the game's assets.inc, pads.inc with it)
+        .include "engine/defs.s"
+
 .macro OUTC name
   .ifdef name
         .out .sprintf("%s = $%04X", .string(name), name)
   .endif
 .endmacro
+
+; ---- the load-time program's and the boot loader's (ldprog.s, loader.s)
         OUTC IMG_GAME
         OUTC IMG_MENU
         OUTC LDOP_GAME
@@ -68,7 +79,7 @@
         OUTC BOARD_STD
         OUTC BOARD_WATFORD
         OUTC BOARD_SOLIDISK
-; the screen's shape, for the tests (engine/defs.s)
+; ---- the screen's shape, for the tests (engine/defs.s)
         OUTC BARADDR
         OUTC BARROWS
         OUTC ROWCHARS
