@@ -33,7 +33,7 @@ HDR_LW, HDR_LH = 0, 1           # log2 of the map's width and height in tiles
 HDR_NOBJ = 6                    # the objects' count (the loader copies 6 bytes each)
 HDR_SHAPE = 20                  # the tile set's shape, 12 bytes (Shape)
 HDR_GAME = tuple(range(2, 6)) + tuple(range(7, 20))   # the game's own fields
-SHAPE_FIELDS = ('zero', 'ntiles', 'mapshr', 'nhalf', 'half0', 'half1', 'half2', 'halfpage',
+SHAPE_FIELDS = ('zero', 'ntiles', 'map_shr', 'nhalf', 'half0', 'half1', 'half2', 'halfpage',
                 'halfoff', 'mir0', 'nmir', 'solidfill')
 HDR = {'HDR_' + f.upper(): HDR_SHAPE + i for i, f in enumerate(SHAPE_FIELDS) if f != 'zero'}
 
@@ -45,7 +45,7 @@ class Shape:
     are in and HALFOFF), the mirrored tiles (the first id, the count: TILEMIRROR), and
     the solid's fill byte (id 0)"""
     ntiles: int
-    mapshr: int
+    map_shr: int
     nhalf: int = 0
     half0: int = 0
     half1: int = 0
@@ -62,7 +62,7 @@ class Shape:
 
 # ---------------------------------------------------------------- the limits (src/defs.inc)
 OBJ_BYTES, OBJ_MAX = 6, 149     # LV_OBJS: 894 bytes, main RAM
-                                # SPR_TABLE: 2 bytes a sprite id, BOXID0 + BOXN of them
+                                # DIR_TABLE: 2 bytes a sprite id, BOXID0 + BOXN of them
                                 # (the game's numbers, from its assets.inc: Level.boxid0,
                                 # boxn)
 STAGE_LVL_B = 0x7C00 - 0x5C00   # the Model B's level stage (without LV_PAGE0)
@@ -118,7 +118,7 @@ def placement(items):
 
 
 def directory(entries):
-    """SPR_TABLE, the directory's level part: for every sprite id, None or (address, bank);
+    """DIR_TABLE, the directory's level part: for every sprite id, None or (address, bank);
     the addresses' low bytes, then their high bytes -- 0 for None, bit 7 clear for bank
     5 (the images are all at $8000..$BFFF: bit 7 is always set in the address itself).
     The geometry is the game's own tables (SPRG_*), the same in every level."""
@@ -239,7 +239,7 @@ def check(data, boxid0, boxn):
     f = sec['fields']
     assert len(sec['objs']) == OBJ_BYTES * f['nobj'] and f['nobj'] <= OBJ_MAX, 'the objects'
     assert len(sec['map']) == 1 << (f['lw'] + f['lh']), 'the map'
-    assert f['mapshr'] == 8 - f['lw'], 'mapshr'
+    assert f['map_shr'] == 8 - f['lw'], 'map_shr'
     assert len(sec['attr']) == 256 and len(sec['altcls']) == 256, 'the tile tables'
     assert len(sec['halves']) == 2 * f['nhalf'], 'the half tiles'
     assert len(sec['mir']) == f['nmir'], 'MIRTAB'

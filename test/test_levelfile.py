@@ -13,7 +13,7 @@ NIDS = BOXID0 + BOXN            # the directory: an entry a sprite id, images th
 def level(**kw):
     lw, lh = kw.pop('lw', 5), kw.pop('lh', 4)
     rnd = random.Random(1)
-    d = dict(lw=lw, lh=lh, shape=lf.Shape(ntiles=40, mapshr=8 - lw, nhalf=2, half0=30, half1=31,
+    d = dict(lw=lw, lh=lh, shape=lf.Shape(ntiles=40, map_shr=8 - lw, nhalf=2, half0=30, half1=31,
                                           half2=32, halfpage=0x90, halfoff=3, solidfill=0x0F),
              objects=bytes(rnd.randrange(256) for _ in range(6 * 7)),
              tile_tables=(bytes(range(256)), bytes(255 - i for i in range(256))),

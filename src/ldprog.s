@@ -12,50 +12,50 @@
 ;   LDPROG+0  ld_entry    X = a level 0..15, or an image load (defs.inc LDOP_):
 ;                         the load, the chain's restart, and an image's hook
 ; ============================================================================
-        .ifndef BHW                 ; (cpu.inc's flag: the Model B's hardware unless the
-BHW = 1                             ;  build says -D BHW=0, the Master's)
+        .ifndef BHW                ; (cpu.inc's flag: the Model B's hardware unless the
+BHW = 1                            ;  build says -D BHW=0, the Master's)
         .endif
-        .ifndef TILEMIRROR          ; (cpu.inc's flag: tile mirroring, off by default)
+        .ifndef TILEMIRROR         ; (cpu.inc's flag: tile mirroring, off by default)
 TILEMIRROR = 0
         .endif
-        .ifndef GAMEHAZEL           ; (cpu.inc's: the game's code in HAZEL -- then SPRX is
-GAMEHAZEL = 0                       ;  staged from the disc every time, as the Model B's)
+        .ifndef GAMEHAZEL          ; (cpu.inc's: the game's code in HAZEL -- then SPRX is
+GAMEHAZEL = 0                      ;  staged from the disc every time, as the Model B's)
         .endif
 SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)   ; the Master keeps SPRX in HAZEL and ANDY
         .include "defs_ld.inc"      ; the addresses the game exports (build.sh)
         .include "files.inc"        ; the disc's sector table (mkdfs.py table)
         .include "levelfmt.inc"     ; the level file's sections and header (tools/levelfile.py)
 ROMSEL     = $FE30
-ROMSEL_CPY = $FD                    ; (defs.s)
-VIA_IFR    = $FE4D                  ; (the system VIA's: ld_resume)
-ACCCON     = $FE34                  ; (the Master: bit 2, X, puts the CPU's
+ROMSEL_CPY = $FD                   ; (defs.s)
+VIA_IFR    = $FE4D                 ; (the system VIA's: ld_resume)
+ACCCON     = $FE34                 ; (the Master: bit 2, X, puts the CPU's
                                     ;  $3000-$7FFF in shadow RAM -- where STAGE is)
 ; The banks are whichever sockets the boot loader found RAM in: it left their numbers
 ; in PBANK (low BSS, one byte per bank 4..7).  This program comes off the disc at
 ; every load, so the loader cannot patch it as it does the banks' code: every switch
 ; here reads the physical bank from PBANK, and the placement lists' bank bytes
 ; (4 or 5, the packer's) go through it too.
-BANK_MAP   = 5                      ; (the placement lists' number for bank 5)
+BANK_MAP   = 5                     ; (the placement lists' number for bank 5)
 PB_SPR     = PBANK
 PB_TILES   = PBANK + 2
 PB_MAP     = PBANK + 1
 PB_LVL     = PBANK + 3
 ; A Solidisk or Watford board takes the bank a store goes to from a register of its own
 ; (defs.inc BOARD_*): the game's code was patched for it at boot, this program reads
-; PBOARD and does it by hand -- pgbank pages the bank in A (X, Y kept), wrx sets the
+; pboard and does it by hand -- pgbank pages the bank in A (X, Y kept), wrx sets the
 ; write bank to the socket in X.  Not hot: a load makes a few dozen switches.
 ; zero page: the engine's LDZP, 17 bytes of the sprite prologue's scratch, which
 ; nothing needs across a load (engine.s)
-src   = LDZP                        ; 2
-dst   = LDZP + 2                    ; 2
-cnt   = LDZP + 4                    ; 2
+src   = LDZP                       ; 2
+dst   = LDZP + 2                   ; 2
+cnt   = LDZP + 4                   ; 2
 tmp   = LDZP + 6
 tmp2  = LDZP + 7
-ent   = LDZP + 8                    ; 2: the directory entry / placement entry
-lp    = LDZP + 10                   ; 2: list pointer
+ent   = LDZP + 8                   ; 2: the directory entry / placement entry
+lp    = LDZP + 10                  ; 2: list pointer
 item  = LDZP + 12
-fnum  = LDZP + 13                   ; the shared file being walked
-tbase = LDZP + 14                   ; 2: the level file's section table
+fnum  = LDZP + 13                  ; the shared file being walked
+tbase = LDZP + 14                  ; 2: the level file's section table
 nt    = LDZP + 16
 
         .segment "CODE"
@@ -67,36 +67,36 @@ ld_entry:
         cpx #$80
         bcs ld_image
         jsr lv_load
-ld_resume:                          ; every load ends here (interrupts still off: a flag
-        lda #0                      ; raised during the load is stale)
+ld_resume:                         ; every load ends here (interrupts still off: a flag
+        lda #0                     ; raised during the load is stale)
         sta ld_open
-        lda #3                      ; load_end: resume asked -- the next real vsync arms
-        sta LOADREQ                 ; T1, turns its interrupt on and clears this (curR7
-        lda #$42                    ; holds LDR7 from the switch); until then a T1 flag is
-        sta VIA_IFR                 ; stale.  A vsync flag raised meanwhile is stale too
-        cli                         ; (engine.s load_begin)
+        lda #3                     ; load_end: resume asked -- the next real vsync arms
+        sta load_req               ; T1, turns its interrupt on and clears this (cur_r7
+        lda #$42                   ; holds LDR7 from the switch); until then a T1 flag is
+        sta VIA_IFR                ; stale.  A vsync flag raised meanwhile is stale too
+        cli                        ; (engine.s load_begin)
         rts
-ld_image: pha                       ; go_menu's A, then the op: on the stack across
-        txa                         ;  the image's load
+ld_image: pha                      ; go_menu's A, then the op: on the stack across
+        txa                        ;  the image's load
         pha
-        and #1                      ; the image (defs.inc LDOP_)
-        sta ld_img                  ; (the kernel's: the test harness reads it)
+        and #1                     ; the image (defs.inc LDOP_)
+        sta ld_img                 ; (the kernel's: the test harness reads it)
         tax
         jsr image_load
         .assert (LDOP_GAME & 1) = 0 && (LDOP_TITLE & 1) = 1 && (LDOP_OVER & 1) = 1, error, "ld_image: bit 0 of the op is the menus' image"
         .assert (LDOP_TITLE >> 1) < (LDOP_OVER >> 1), error, "ld_image: go_menu's op above go_title's"
-        pla                         ; the op: C set for the menus' image
+        pla                        ; the op: C set for the menus' image
         lsr
         tay
-        pla                         ; (A: go_menu's, for hook_over)
-        ldx #$3F                    ; (init.s: the stack is 64 bytes; start-up's is this
-        txs                         ;  already -- init.s jumps to go_title at $3F)
+        pla                        ; (A: go_menu's, for hook_over)
+        ldx #$3F                   ; (init.s: the stack is 64 bytes; start-up's is this
+        txs                        ;  already -- init.s jumps to go_title at $3F)
         bcs @menu
-        inc ld_open                 ; (0 -> 1: the level loop's first load goes straight
-        jsr hook_image              ;  on; the game's: Cleo's resets its HUD's cache)
-        jmp game_in                 ; hook_play
-@menu:  cpy #(LDOP_OVER >> 1)       ; C: go_menu's, clear for go_title's
-        tay                         ; (ld_resume keeps Y and C)
+        inc ld_open                ; (0 -> 1: the level loop's first load goes straight
+        jsr hook_image             ;  on; the game's: Cleo's resets its HUD's cache)
+        jmp game_in                ; hook_play
+@menu:  cpy #(LDOP_OVER >> 1)      ; C: go_menu's, clear for go_title's
+        tay                        ; (ld_resume keeps Y and C)
         jsr ld_resume
         tya
         bcc @title
@@ -120,7 +120,7 @@ F_IMG7_N   = F_IMG7B_N
 F_IMG7_SEC = F_IMG7M_SEC
 F_IMG7_N   = F_IMG7M_N
   .endif
-.macro IMG7 name                    ; (the & $FF: build.sh's first pass has no sizes yet)
+.macro IMG7 name                   ; (the & $FF: build.sh's first pass has no sizes yet)
   .if .xmatch(name, "MENU")
         .byte <F_IMG7_SEC, >F_IMG7_SEC, MENU_SECS
   .else
@@ -136,8 +136,8 @@ F_IMG7_N   = F_IMG7M_N
         FILE name
   .endif
 .endmacro
-PAGE0_SECS = LV_PAGE0_SECS          ; (512 bytes: 256 lo, 256 hi)
-ftab:   FILE "SPRX"                 ; 0: the sprites placed per level (imgtab's file 0)
+PAGE0_SECS = LV_PAGE0_SECS         ; (512 bytes: 256 lo, 256 hi)
+ftab:   FILE "SPRX"                 ; 0: the sprites placed per level (img_tab's file 0)
         FILE "SPRC"                 ; 1: the sprites every level draws: banks 4 and 5
         FILE "SPRC"                 ; 2: (unused)
         FILE "TILES0"               ; 3, 4: the tile set's outdoor and shared files
@@ -162,7 +162,7 @@ ftab:   FILE "SPRX"                 ; 0: the sprites placed per level (imgtab's 
         LFILE "L14"
         LFILE "L15"
         FILE "TILES2"               ; 24: and its indoor file
-tfi:    .byte 3, 4, 24              ; the tile set's files by number
+tfi:    .byte 3, 4, 24             ; the tile set's files by number
 FI_SPRX = 0
 FI_SPRC = 1
 FI_MENU = 5
@@ -171,15 +171,15 @@ FI_BAR = 7
 FI_L0 = 8
 
 ; read file A to dst (main RAM)
-readfile:                           ; file A -> dst (page-aligned: its low byte is not read)
+read_file:                         ; file A -> dst (page-aligned: its low byte is not read)
         ldx dst+1
-readpage:                           ; file A -> page X (main RAM)
+read_page:                         ; file A -> page X (main RAM)
         stx ld_dst+1
         sta tmp
         asl
-        adc tmp                     ; * 3
+        adc tmp                    ; * 3
         tax
-        ldy #$FD                    ; the entry's 3 bytes to ld_sec, ld_sec+1, ld_n
+        ldy #$FD                   ; the entry's 3 bytes to ld_sec, ld_sec+1, ld_n
 @f:     lda ftab,x
         sta ld_sec+3-$100,y
         inx
@@ -187,7 +187,7 @@ readpage:                           ; file A -> page X (main RAM)
         bne @f
         .assert ld_n = ld_sec + 2, error, "ld_sec and ld_n are 3 bytes in a row"
         .assert <LDPROG = 0, error, "ld_dst's low byte is 0"
-        jmp read_sectors            ; (ld_dst's low byte: 0 from disc.s ld_go, and never
+        jmp read_sectors           ; (ld_dst's low byte: 0 from disc.s ld_go, and never
                                     ;  changed -- every destination is a page)
 
 ; copy cnt bytes from src (main RAM) to dst in the bank the placement entry (lp) names
@@ -195,12 +195,12 @@ readpage:                           ; file A -> page X (main RAM)
 plcopy: ldy #1
         lda (lp),y
         tay
-        ldx PBANK-4,y               ; (Y: bcopy reloads it)
+        ldx PBANK-4,y              ; (Y: bcopy reloads it)
   .if .not BHW
                                     ; (a placed image comes from the stage: on into scopy)
 ; the Master stages the shared files in shadow RAM: a copy out of the stage
 ; reads with ACCCON X set (X and Y kept, as bcopy leaves them)
-        .pc02                       ; (this program is assembled as the 6502's: the Master's tsb, trb)
+        .pc02                      ; (this program is assembled as the 6502's: the Master's tsb, trb)
 scopy:  lda #4
         tsb ACCCON
         jsr bcopy
@@ -210,7 +210,7 @@ scopy:  lda #4
         .p02
   .endif
 ; copy cnt bytes from src (main RAM) to dst in bank X (a socket); bank 7 back afterwards
-bcopy:  txa                         ; the socket, to read and write (X, Y kept)
+bcopy:  txa                        ; the socket, to read and write (X, Y kept)
         jsr pgbank
         ldy #0
         ldx cnt+1
@@ -230,19 +230,19 @@ bcopy:  txa                         ; the socket, to read and write (X, Y kept)
         iny
         dex
         bne :-
-@done:  lda PB_LVL                  ; bank 7 back (falling into pgbank)
-pgbank: sta ROMSEL_CPY              ; A = the socket to page (and to write to)
+@done:  lda PB_LVL                 ; bank 7 back (falling into pgbank)
+pgbank: sta ROMSEL_CPY             ; A = the socket to page (and to write to)
         sta ROMSEL
         pha
-        stx tmp2                    ; (X kept: tmp2 is pgbank's alone)
+        stx tmp2                   ; (X kept: tmp2 is pgbank's alone)
         tax
-        lda PBOARD                  ; the write bank: X = the socket a store should reach
+        lda pboard                 ; the write bank: X = the socket a store should reach
         beq @r
-        lsr                         ; 1 (Watford) -> C set, 2 (Solidisk) -> C clear
+        lsr                        ; 1 (Watford) -> C set, 2 (Solidisk) -> C clear
         bcc @s
-        sta WRSEL_WATFORD,x         ; Watford: the address is the bank, the value nothing
-        bcs @r                      ; (always: C set)
-@s:     stx WRSEL_SOLIDISK          ; Solidisk: the bank on port B (the loader set DDRB)
+        sta WRSEL_WATFORD,x        ; Watford: the address is the bank, the value nothing
+        bcs @r                     ; (always: C set)
+@s:     stx WRSEL_SOLIDISK         ; Solidisk: the bank on port B (the loader set DDRB)
 @r:     ldx tmp2
         pla
         rts
@@ -251,7 +251,7 @@ pgbank: sta ROMSEL_CPY              ; A = the socket to page (and to write to)
 ; lays them end to end), to page X of bank 7.  dst's low byte is 0 throughout: lv_load
 ; sets it to STAGE_LVL's and bcopy moves only the high bytes
 lvsec:  stx dst+1
-        jsr section                 ; (Y = 2 * the section)
+        jsr section                ; (Y = 2 * the section)
         lda STAGE_LVL+2,y
         sec
         sbc STAGE_LVL,y
@@ -260,12 +260,12 @@ lvsec:  stx dst+1
         sbc STAGE_LVL+1,y
         sta cnt+1
         ldx PB_LVL
-        jmp bcopy                   ; (X = 0 after it)
+        jmp bcopy                  ; (X = 0 after it)
 
 ; ---------------------------------------------------------------- a level
 lv_load:
   .if .not BHW
-        jsr mainram                 ; (X here is whatever buffer the game drew last)
+        jsr main_ram               ; (X here is whatever buffer the game drew last)
   .endif
         txa
         clc
@@ -274,48 +274,48 @@ lv_load:
         stx dst
         ldx #>STAGE_LVL
         stx dst+1
-        jsr readfile
+        jsr read_file
         ; ---- the tables: the section table's offsets are from the file's start
         .assert <STAGE_LVL = 0 && <LV_HDR = 0 && <LV_OBJS = 0 && <LV_ATTR0 = 0, error, "lvsec: dst's low byte is 0"
-        lda #SEC_HDR                ; the header, and the game's tail after it (under
-        ldx #>LV_HDR                ;  a page: levelfile.py)
+        lda #SEC_HDR               ; the header, and the game's tail after it (under
+        ldx #>LV_HDR               ;  a page: levelfile.py)
         jsr lvsec
-        lda #SEC_OBJS               ; the objects, 6 a piece, to main RAM (level_init
-        ldx #>LV_OBJS               ;  reads them once, before the first render)
+        lda #SEC_OBJS              ; the objects, 6 a piece, to main RAM (level_init
+        ldx #>LV_OBJS              ;  reads them once, before the first render)
         jsr lvsec
-:                                   ; (two anonymous labels, unreferenced: the
-:                                   ;  file's count of them kept)
+:                                  ; (two anonymous labels, unreferenced: the
+:                                  ;  file's count of them kept)
         lda #SEC_ATTR
         ldx #>LV_ATTR0
-        jsr lvsec                   ; (src: the copy left it at section 3, which
+        jsr lvsec                  ; (src: the copy left it at section 3, which
                                     ;  follows the 256-byte attr in the file; X = 0)
         .assert LV_ALTCLS = LV_ATTR0 + $100, error, "lvsec's copy leaves dst at LV_ALTCLS"
         jsr copy256
-        ; ---- the shape: maprow's shift, the row stride
-        lda LV_HDR+HDR_MAPSHR
-        sta mapshr
-        stx MAPSTRIDE+1             ; X = 0: copy256 ends in bcopy
-        ldx LV_HDR                  ; lw: stride = 1 << lw
+        ; ---- the shape: map_row's shift, the row stride
+        lda LV_HDR+HDR_MAP_SHR
+        sta map_shr
+        stx map_stride+1           ; X = 0: copy256 ends in bcopy
+        ldx LV_HDR                 ; lw: stride = 1 << lw
         lda #1
 :       asl
-        rol MAPSTRIDE+1
+        rol map_stride+1
         dex
         bne :-
-        sta MAPSTRIDE
+        sta map_stride
         ; ---- the map, run-length coded, into bank 5: exactly its 1 << (lw + lh) bytes
         ; (the stream is not terminated: what follows it in the file is the next section)
-        lda LV_HDR                  ; lw + lh - 8 (at least 2: a map is at least 1K;
+        lda LV_HDR                 ; lw + lh - 8 (at least 2: a map is at least 1K;
                                     ;  C = 0: the stride's last rol shifted out a 0)
         adc LV_HDR+HDR_LH
-        sbc #7                      ; (C = 0: - 8)
-        stx fnum                    ; (X = 0 from the stride's loop: the tiles' first file)
+        sbc #7                     ; (C = 0: - 8)
+        stx fnum                   ; (X = 0 from the stride's loop: the tiles' first file)
         tax
         lda #1
 :       asl
         dex
         bne :-
-        adc #>MAP5                  ; (C = 0: at most 8K) the page after the map
-        sta mapend
+        adc #>MAP5                 ; (C = 0: at most 8K) the page after the map
+        sta map_end
         lda #SEC_MAP
         jsr section
         .assert <MAP5 = 0, error, "dst's low byte is 0 still"
@@ -329,33 +329,33 @@ lv_load:
         ; row | the file's place in the list << 1)
         .assert <TILES = 0, error, "TILES page-aligned"
         lda #<(TILES + (TOFF+1)*64) ; the next full slot: id 1's (id 0 is the solid,
-        sta tbase                   ; filled, never stored)
+        sta tbase                  ; filled, never stored)
         lda #>(TILES + (TOFF+1)*64)
         sta tbase+1
 @file:  lda #SEC_TILES
         jsr section
         lda fnum
-        bne @fn                     ; (the first file: the list's head, once)
+        bne @fn                    ; (the first file: the list's head, once)
         tay
         lda (src),y
         sta nfiles
-        asl                         ; the first index: past the files (C = 0: n < 128)
+        asl                        ; the first index: past the files (C = 0: n < 128)
         sec
         adc src
         sta lp
         lda src+1
         adc #0
         sta lp+1
-        tya                         ; (fnum's 0)
+        tya                        ; (fnum's 0)
 @fn:
         asl
         tay
         iny
-        lda (src),y                 ; the set's file
+        lda (src),y                ; the set's file
         tax
         iny
-        lda (src),y                 ; this file's full tiles (before the stage, which
-        sta nt                      ;  keeps zero page but for dst and tmp)
+        lda (src),y                ; this file's full tiles (before the stage, which
+        sta nt                     ;  keeps zero page but for dst and tmp)
         lda tfi,x
         jsr stage
 @tile:  lda nt
@@ -366,7 +366,7 @@ lv_load:
         sta dst+1
         ldy #0
         lda (lp),y
-        clc                         ; (the whole tile)
+        clc                        ; (the whole tile)
         ldx #64
         jsr tcopy
         lda tbase
@@ -380,32 +380,32 @@ lv_load:
         inc lp+1
 :       dec nt
         jmp @tile
-@halves:                            ; this file's half tiles, to their slots: HALFOFF
-        lda LV_HDR+HDR_HALFOFF               ; slots into the halves' page
+@halves:                           ; this file's half tiles, to their slots: HALFOFF
+        lda LV_HDR+HDR_HALFOFF     ; slots into the halves' page
         asl
         asl
         asl
         asl
         asl
-        sta dst                     ; (the next half's slot is dst itself: section and
-        lda LV_HDR+HDR_HALFPAGE     ;  tcopy leave it alone, a half's copy is under a page)
+        sta dst                    ; (the next half's slot is dst itself: section and
+        lda LV_HDR+HDR_HALFPAGE    ;  tcopy leave it alone, a half's copy is under a page)
         sta dst+1
         lda #0
         sta item
 @half:  lda #SEC_HALVES
-        jsr section                 ; (on the way out too: harmless, src is remade after)
+        jsr section                ; (on the way out too: harmless, src is remade after)
         lda item
         cmp LV_HDR+HDR_NHALF
         beq @nextfile
         asl
         tay
         iny
-        lda (src),y                 ; the row | the file << 1
+        lda (src),y                ; the row | the file << 1
         lsr
-        eor fnum                    ; (eor, not cmp: C keeps the row from the lsr)
+        eor fnum                   ; (eor, not cmp: C keeps the row from the lsr)
         bne @hnext
         dey
-        lda (src),y                 ; the index
+        lda (src),y                ; the index
         ldx #32
         jsr tcopy
 @hnext: lda dst
@@ -415,7 +415,7 @@ lv_load:
         bcc :+
         inc dst+1
 :       inc item
-        bne @half                   ; (always: item <= NHALF <= 255 after the inc)
+        bne @half                  ; (always: item <= NHALF <= 255 after the inc)
 @nextfile:
         inc fnum
         lda fnum
@@ -426,14 +426,14 @@ lv_load:
         ; ---- the halves' fill palette (8 first bytes, then 8 second), where the
         ; halves end (dst, kept in hdst): @hfill's two loads index it by a half's colour
         lda #SEC_HPAIR
-        jsr section                 ; src = the palette, then each half's low bits
+        jsr section                ; src = the palette, then each half's low bits
   .ifdef BAKEITEM0
-        lda src                     ; (the baker's: it reads both from the staged file)
-        sta sv_hpl
+        lda src                    ; (the baker's: it reads both from the staged file)
+        sta sv_hplo
         lda src+1
-        sta sv_hph
+        sta sv_hphi
   .endif
-        lda dst                     ; (dst is the halves' end already: the last file's walk)
+        lda dst                    ; (dst is the halves' end already: the last file's walk)
         sta hdst
         lda dst+1
         sta hdst+1
@@ -442,7 +442,7 @@ lv_load:
         lda #0
         sta cnt+1
         ldx PB_TILES
-        jsr bcopy                   ; (bank 7 back after it; src unmoved: under a page)
+        jsr bcopy                  ; (bank 7 back after it; src unmoved: under a page)
   .if BHW
         ; ---- each half's low bits (its fill row and colour), by k, into bank 5's HLOW
         ; for the gather: from HALFOFF on (k counts from the halves' page)
@@ -460,26 +460,26 @@ lv_load:
         adc #0
         sta dst+1
         lda LV_HDR+HDR_NHALF
-        sta cnt                     ; (cnt+1 is 0 still)
+        sta cnt                    ; (cnt+1 is 0 still)
         ldx PB_MAP
         jsr bcopy
   .endif
         ; ---- the tile shape, into banks 5 and 6 (read here, with bank 7 in)
         lda LV_HDR+HDR_HALFPAGE
         sta sv_halfhi
-        ldx LV_HDR+HDR_SOLIDFILL               ; the solid's fill byte (id 0): X to bank 6
+        ldx LV_HDR+HDR_SOLIDFILL   ; the solid's fill byte (id 0): X to bank 6
         stx sv_solid
-  .ifdef BAKEITEM0                  ; (the baker's: the halves' slot offset and pairs)
+  .ifdef BAKEITEM0                 ; (the baker's: the halves' slot offset and pairs)
         lda LV_HDR+HDR_HALFOFF
         sta sv_halfoff
   .endif
-  .if BHW || .defined(BAKEITEM0)    ; the arithmetic gather's (bank 5): the Master's
-        lda LV_HDR+HDR_HALF0               ; gather is its table, LV_PAGE0 (the baker
-        sta sv_half0                       ; decodes a tile as the Model B's gather does)
+  .if BHW || .defined(BAKEITEM0)   ; the arithmetic gather's (bank 5): the Master's
+        lda LV_HDR+HDR_HALF0       ; gather is its table, LV_PAGE0 (the baker
+        sta sv_half0               ; decodes a tile as the Model B's gather does)
    .if TILEMIRROR
-        clc                         ; half0 - HALFOFF - 1: the gather's borrow (C clear
-   .else                            ; after its mirror test)
-        sec                         ; half0 - HALFOFF (C set: no mirror test)
+        clc                        ; half0 - HALFOFF - 1: the gather's borrow (C clear
+   .else                           ; after its mirror test)
+        sec                        ; half0 - HALFOFF (C set: no mirror test)
    .endif
         sbc LV_HDR+HDR_HALFOFF
         sta sv_halfsub
@@ -493,25 +493,25 @@ lv_load:
    .endif
   .endif
         lda PB_TILES
-        jsr pgbank                  ; (X, Y kept)
-        stx SOLIDF                  ; the row loop's lda #fill for id 0
-        lda hdst                    ; the palette (where the halves end): its first
-        sta HPAIR0                  ; bytes, then its second, 8 on (hdst's low byte is
-        ora #8                      ; a multiple of 32: no carry)
+        jsr pgbank                 ; (X, Y kept)
+        stx SOLIDF                 ; the row loop's lda #fill for id 0
+        lda hdst                   ; the palette (where the halves end): its first
+        sta HPAIR0                 ; bytes, then its second, 8 on (hdst's low byte is
+        ora #8                     ; a multiple of 32: no carry)
         sta HPAIR1
         lda hdst+1
         sta HPAIR0+1
         sta HPAIR1+1
   .if BHW
-        lda PB_MAP                  ; the gather's shape: bank 5, beside it (gather5)
+        lda PB_MAP                 ; the gather's shape: bank 5, beside it (gather5)
         jsr pgbank
         lda sv_half0
         sta half0
         lda sv_halfhi
-        and #$7F                    ; (a half's mark: its page less $80, gather5)
+        and #$7F                   ; (a half's mark: its page less $80, gather5)
         sta halfhi5
         lda sv_halfsub
-        sta halfsub
+        sta half_sub
    .if TILEMIRROR
         lda sv_mir0
         sta mir0
@@ -555,8 +555,8 @@ lv_load:
         lda #>SPRC_LEN
         sta cnt+1
         ldx PB_SPR
-        jsr sccopy                  ; bank 4's part: the mirrored ones, and what fits
-  .if SPRC5_LEN                     ; (the packer's: none when bank 4 holds all of SPRC)
+        jsr sccopy                 ; bank 4's part: the mirrored ones, and what fits
+  .if SPRC5_LEN                    ; (the packer's: none when bank 4 holds all of SPRC)
         lda #<(STAGE + SPRC_LEN)
         sta src
         lda #>(STAGE + SPRC_LEN)
@@ -570,7 +570,7 @@ lv_load:
         lda #>SPRC5_LEN
         sta cnt+1
         ldx PB_MAP
-        jsr sccopy                  ; the rest: bank 5, from its code's end
+        jsr sccopy                 ; the rest: bank 5, from its code's end
   .endif
         inc sprc_ok
 @sprx:  lda #FI_SPRX
@@ -584,23 +584,23 @@ lv_load:
         bne @unkeep
         jsr stage
         inc sprx_ok
-        sec                         ; keep: C set (unkeep+1 is their shared php)
-        .byte $24                   ; (bit zp: skips the clc)
+        sec                        ; keep: C set (unkeep+1 is their shared php)
+        .byte $24                  ; (bit zp: skips the clc)
 @unkeep:
-        clc                         ; unkeep: C clear
+        clc                        ; unkeep: C clear
         jsr unkeep+1
   .endif
-@sfile: jsr placewalk
+@sfile: jsr place_walk
 @plend:
         ; ---- the directory's level part, as the packer finished it
         lda #SEC_DIR
         jsr section
-        lda #<SPR_TABLE             ; bank 7, beside the prologue that reads it
+        lda #<DIR_TABLE            ; bank 7, beside the prologue that reads it
         sta dst
-        lda #>SPR_TABLE
+        lda #>DIR_TABLE
         sta dst+1
-DIRLEN = 2*(BOXID0+BOXN)            ; (the split directory: the addresses alone)
-        lda #<DIRLEN                ; (the directory: an entry a sprite id)
+DIRLEN = 2*(BOXID0+BOXN)           ; (the split directory: the addresses alone)
+        lda #<DIRLEN               ; (the directory: an entry a sprite id)
         sta cnt
         lda #>DIRLEN
         sta cnt+1
@@ -619,7 +619,7 @@ DIRLEN = 2*(BOXID0+BOXN)            ; (the split directory: the addresses alone)
         sta cnt+1
         ldx PB_TILES
   .if BHW
-        jmp bcopy                   ; (the Model B's gather is arithmetic: no table)
+        jmp bcopy                  ; (the Model B's gather is arithmetic: no table)
   .else
         jsr bcopy
         ; ---- the Master: the gather's table, to main RAM, and the screens
@@ -627,7 +627,7 @@ DIRLEN = 2*(BOXID0+BOXN)            ; (the split directory: the addresses alone)
         ; window has not reached yet must not show it
         lda #SEC_PAGE0
         jsr section
-        stx dst                     ; (X = 0: bcopy's exit; <LV_PAGE0 = 0)
+        stx dst                    ; (X = 0: bcopy's exit; <LV_PAGE0 = 0)
         .assert <LV_PAGE0 = 0, error, "LV_PAGE0 page-aligned"
         lda #>LV_PAGE0
         sta dst+1
@@ -639,9 +639,9 @@ DIRLEN = 2*(BOXID0+BOXN)            ; (the split directory: the addresses alone)
         .setcpu "65C02"
         lda #4
         tsb ACCCON
-        jsr @clr                    ; shadow
+        jsr @clr                   ; shadow
         lda #4
-        trb ACCCON                  ; (and main, falling in: X clear on the way out)
+        trb ACCCON                 ; (and main, falling in: X clear on the way out)
         .setcpu "6502"
 @clr:   lda #0
         sta dst
@@ -652,13 +652,13 @@ DIRLEN = 2*(BOXID0+BOXN)            ; (the split directory: the addresses alone)
         iny
         bne @cb
         inx
-        bpl @cp                     ; to $7FFF
+        bpl @cp                    ; to $7FFF
         rts
   .endif
 
 ; ---- helpers
   .if BHW
-sccopy = bcopy                      ; a copy out of the stage, on either machine
+sccopy = bcopy                     ; a copy out of the stage, on either machine
   .else
 sccopy = scopy
   .endif
@@ -666,12 +666,12 @@ sccopy = scopy
 ; the Master: every load starts with the CPU on main RAM -- the game leaves
 ; ACCCON X on the buffer it drew last, and the level's file is main RAM's
   .if GAMEHAZEL
-mainram:                            ; (A and N, Z not kept: neither caller needs them)
+main_ram:                          ; (A and N, Z not kept: neither caller needs them)
         lda ACCCON
-        and #$FB                    ; X clear (Y stays: the game's code is in HAZEL)
+        and #$FB                   ; X clear (Y stays: the game's code is in HAZEL)
         sta ACCCON
         rts
-  .endif                            ; (else mainram is unkeep's tail, below: X and Y clear)
+  .endif                           ; (else main_ram is unkeep's tail, below: X and Y clear)
 ; SPRX's residency on the Master: the stage (shadow RAM, $3000) to HAZEL
 ; ($C000, ACCCON Y) and ANDY ($8000, ROMSEL bit 7) -- keep -- and back -- unkeep.  Only
 ; under a load: interrupts are off, and the game's code is in bank 7 (ANDY would hide
@@ -682,35 +682,35 @@ mainram:                            ; (A and N, Z not kept: neither caller needs
 SPRX_PAGES = (SPRX_LEN + 255) / 256
         .assert SPRX_PAGES <= $30, error, "SPRX outgrows HAZEL and ANDY (12K)"
 keep:   sec
-        .byte $24                   ; (bit zp: skips the clc)
+        .byte $24                  ; (bit zp: skips the clc)
 unkeep: clc
         php
         .setcpu "65C02"
-        lda #$0C                    ; X (the stage) and Y (HAZEL)
+        lda #$0C                   ; X (the stage) and Y (HAZEL)
         tsb ACCCON
         .setcpu "6502"
-        ldx #$20                    ; HAZEL: the stage's first 8K
+        ldx #$20                   ; HAZEL: the stage's first 8K
         lda #>STAGE
         ldy #$C0
         jsr kpart
-        lda #$80                    ; ANDY: the next 4K
+        lda #$80                   ; ANDY: the next 4K
         sta ROMSEL
         ldx #$10
         lda #>STAGE + $20
         ldy #$80
         jsr kpart
-        lda PB_LVL                  ; (bank 7 back, ANDY out)
+        lda PB_LVL                 ; (bank 7 back, ANDY out)
         jsr pgbank
         plp
-mainram:                            ; (every load's start too: SPRXKEEP is GAMEHAZEL = 0)
+main_ram:                          ; (every load's start too: SPRXKEEP is GAMEHAZEL = 0)
         lda ACCCON
         and #$F3
         sta ACCCON
         rts
-kpart:  stx cnt+1                   ; X pages between the stage's page A and page Y:
-        tsx                         ; from the stage (keep: the C its caller pushed is
-        pha                         ; set) or to it
-        lda $0103,x                 ; (the P keep/unkeep pushed, under this call's return)
+kpart:  stx cnt+1                  ; X pages between the stage's page A and page Y:
+        tsx                        ; from the stage (keep: the C its caller pushed is
+        pha                        ; set) or to it
+        lda $0103,x                ; (the P keep/unkeep pushed, under this call's return)
         lsr
         pla
         bcc :+
@@ -722,19 +722,19 @@ kpart:  stx cnt+1                   ; X pages between the stage's page A and pag
 :       lda #0
         sta src
         sta dst
-        sta cnt                     ; (whole pages: no tail)
-        ldx #$80                    ; bcopy's page loop, with ANDY in (HAZEL's part
-        jmp bcopy                   ;  touches no $8000-$BFFF); bank 7 back after
+        sta cnt                    ; (whole pages: no tail)
+        ldx #$80                   ; bcopy's page loop, with ANDY in (HAZEL's part
+        jmp bcopy                  ;  touches no $8000-$BFFF); bank 7 back after
   .endif
-tcopy:                              ; tile A of the staged file, its row C (or all of it:
-        stx cnt                     ; C = 0, X = 64), X bytes to dst in bank 6
+tcopy:                             ; tile A of the staged file, its row C (or all of it:
+        stx cnt                    ; C = 0, X = 64), X bytes to dst in bank 6
         ldx #0
         stx cnt+1
         tax
         ror
         ror
-        ror                         ; (C:A rotated: t1 t0 row in bits 7-5)
-        and #$E0                    ; (t & 3) << 6 | the row's 0 or 32
+        ror                        ; (C:A rotated: t1 t0 row in bits 7-5)
+        and #$E0                   ; (t & 3) << 6 | the row's 0 or 32
         sta src
         txa
         lsr
@@ -743,21 +743,21 @@ tcopy:                              ; tile A of the staged file, its row C (or a
         adc #>STAGE
         sta src+1
         ldx PB_TILES
-        jmp sccopy                  ; (out of the stage: bcopy, or the Master's scopy)
-nfiles: .res 1                      ; (lv_load's: the set's file count,
-hdst:   .res 2                      ;  the next half's slot,
-sv_halfhi:  .res 1                  ;  the tile shape on its way to banks 5 and 6)
+        jmp sccopy                 ; (out of the stage: bcopy, or the Master's scopy)
+nfiles: .res 1                     ; (lv_load's: the set's file count,
+hdst:   .res 2                     ;  the next half's slot,
+sv_halfhi:  .res 1                 ;  the tile shape on its way to banks 5 and 6)
 sv_solid:   .res 1
-sv_halfoff: .res 1                  ; (the baker's)
+sv_halfoff: .res 1                 ; (the baker's)
   .ifdef BAKEITEM0
-bk_col:     .res 1                  ; (the baker's: columns to go, lines, X0 across,
-bk_lines:   .res 1                  ;  the first tile row, the destination's socket,
-bk_x:       .res 2                  ;  the map's width shift, the column's byte and tile,
-bk_ty0:     .res 1                  ;  the tile row, the line, the tile, its modes, the
-bk_skip0:   .res 1                  ;  (the kind's: start the first tile row at its
-bk_skip:    .res 1                  ;   bottom char row; the column's copy)
-bk_sock:    .res 1                  ;  fill pair and where it is, a half's slot, the
-bk_lw:      .res 1                  ;  flats, the backdrop's column and the overlay's)
+bk_col:     .res 1                 ; (the baker's: columns to go, lines, X0 across,
+bk_lines:   .res 1                 ;  the first tile row, the destination's socket,
+bk_x:       .res 2                 ;  the map's width shift, the column's byte and tile,
+bk_ty0:     .res 1                 ;  the tile row, the line, the tile, its modes, the
+bk_skip0:   .res 1                 ;  (the kind's: start the first tile row at its
+bk_skip:    .res 1                 ;   bottom char row; the column's copy)
+bk_sock:    .res 1                 ;  fill pair and where it is, a half's slot, the
+bk_lw:      .res 1                 ;  flats, the backdrop's column and the overlay's)
 bk_bx:      .res 1
 bk_tx:      .res 1
 bk_ty:      .res 1
@@ -770,11 +770,11 @@ bk_pa:      .res 1
 bk_pb:      .res 1
 bk_k:       .res 1
 bk_fp:      .res 2
-bk_bg:      .res 32
+BK_BG:      .res 32
   .endif
-sv_hpl:     .res 1
-sv_hph:     .res 1
-mapend:     .res 1                  ; the page after the level's map (unrle)
+sv_hplo:     .res 1
+sv_hphi:     .res 1
+map_end:     .res 1                ; the page after the level's map (unrle)
   .if BHW || .defined(BAKEITEM0)
 sv_half0:   .res 1
 sv_half1:   .res 1
@@ -784,7 +784,7 @@ sv_halfsub: .res 1
 sv_mir0:    .res 1
    .endif
   .endif
-placewalk:                          ; the placement list's items from file fnum, staged
+place_walk:                        ; the placement list's items from file fnum, staged
         lda #SEC_PLACE
         jsr section
         lda src
@@ -797,29 +797,29 @@ placewalk:                          ; the placement list's items from file fnum,
         beq @pwdone
         sta item
   .ifdef BAKEITEM0
-        cmp #BAKEITEM0              ; a baked box: made here, from SPRX's overlays
-        bcc :+                      ; (bake, below)
-        lda fnum                    ; (FI_SPRX = 0)
+        cmp #BAKEITEM0             ; a baked box: made here, from SPRX's overlays
+        bcc :+                     ; (bake, below)
+        lda fnum                   ; (FI_SPRX = 0)
         bne @plnext
-        .assert FI_SPRX = 0, error, "placewalk: FI_SPRX"
+        .assert FI_SPRX = 0, error, "place_walk: FI_SPRX"
         jsr bake
         jmp @plnext
 :
   .endif
-        jsr imgent                  ; ent -> imgtab's entry for the item
+        jsr img_ent                ; ent -> img_tab's entry for the item
 
         lda (ent),y
         cmp fnum
-        bne @plnext                 ; (in another file)
-        ldy #1                      ; the image: src = STAGE + offset, cnt = length
-        jsr srccnt
+        bne @plnext                ; (in another file)
+        ldy #1                     ; the image: src = STAGE + offset, cnt = length
+        jsr src_cnt
         ldy #2
         lda (lp),y
         sta dst
         iny
         lda (lp),y
         sta dst+1
-        jsr plcopy                  ; to the placement's bank
+        jsr plcopy                 ; to the placement's bank
 @plnext:
         lda lp
         clc
@@ -827,7 +827,7 @@ placewalk:                          ; the placement list's items from file fnum,
         sta lp
         bcc @pl
         inc lp+1
-        bne @pl                     ; (lp+1 is never 0)
+        bne @pl                    ; (lp+1 is never 0)
 @pwdone:
         rts
 
@@ -837,32 +837,32 @@ placewalk:                          ; the placement list's items from file fnum,
 ; stars) is not copied but made here: the level's own tiles where the object stands,
 ; the game's overlay over them -- (backdrop AND mask) OR pixels -- from SPRX, staged:
 ; a column's pixels (lines bytes) then its mask.  The placement entry carries the
-; object's tile (x, y) where an image carries 0; bakekind gives the
-; slot's kind and bakegeom the kind's shape: bytes wide, lines (every scanline), the
+; object's tile (x, y) where an image carries 0; bake_kind gives the
+; slot's kind and bake_geom the kind's shape: bytes wide, lines (every scanline), the
 ; backdrop's origin from (8x, 8y) -- game pixels across (16 bit), whole tile rows down
 ; -- the overlay's offset in SPRX, and whether the first tile row starts at its bottom
 ; char row (4 game pixels down: Cleo's health powerup, whose art does).  A tile is decoded as the Model B's gather
 ; does (engine.s gather5): 0 the solid, from FLAT0 the flats, from half0 the halves
 ; (one char row stored, the other a fill pair or the same row), below it full tiles.
         .assert .not TILEMIRROR, error, "bake: no mirrored tiles (the gather's @gmir)"
-bake:   lda #SEC_FLAT               ; the flats' pairs, in the level's file (main RAM)
+bake:   lda #SEC_FLAT              ; the flats' pairs, in the level's file (main RAM)
         jsr section
         lda src
         sta bk_fp
         lda src+1
         sta bk_fp+1
-        ldx item                    ; the slot: item - BAKEITEM0
-        lda bakekind-BAKEITEM0,x
+        ldx item                   ; the slot: item - BAKEITEM0
+        lda bake_kind-BAKEITEM0,x
         asl
         asl
         asl
-        tax                         ; the kind's shape: bakegeom + kind * 8
-        lda bakegeom,x
+        tax                        ; the kind's shape: bake_geom + kind * 8
+        lda bake_geom,x
         sta bk_col
-        lda bakegeom+1,x
+        lda bake_geom+1,x
         sta bk_lines
-        ldy #4                      ; X0 = 8x + dx: 8x's high byte x >> 5,
-        lda (lp),y                  ; its low byte x << 3
+        ldy #4                     ; X0 = 8x + dx: 8x's high byte x >> 5,
+        lda (lp),y                 ; its low byte x << 3
         lsr
         lsr
         lsr
@@ -874,26 +874,26 @@ bake:   lda #SEC_FLAT               ; the flats' pairs, in the level's file (mai
         asl
         asl
         clc
-        adc bakegeom+2,x
+        adc bake_geom+2,x
         sta bk_x
-        pla                         ; (C kept: the low byte's carry)
-        adc bakegeom+3,x
+        pla                        ; (C kept: the low byte's carry)
+        adc bake_geom+3,x
         sta bk_x+1
-        iny                         ; the first tile row: y + dty
+        iny                        ; the first tile row: y + dty
         lda (lp),y
         clc
-        adc bakegeom+4,x
+        adc bake_geom+4,x
         sta bk_ty0
-        lda bakegeom+7,x            ; the first tile row: from its bottom char row?
+        lda bake_geom+7,x          ; the first tile row: from its bottom char row?
         sta bk_skip0
-        lda bakegeom+5,x            ; the overlay: STAGE + its offset
-        sta src                     ; (<STAGE = 0)
+        lda bake_geom+5,x          ; the overlay: STAGE + its offset
+        sta src                    ; (<STAGE = 0)
         clc
         .assert <STAGE = 0, error, "bake: STAGE's low byte"
-        lda bakegeom+6,x
+        lda bake_geom+6,x
         adc #>STAGE
         sta src+1
-        ldy #3                      ; where it goes: the address and the bank (4 or 5)
+        ldy #3                     ; where it goes: the address and the bank (4 or 5)
         lda (lp),y
         sta dst+1
         dey
@@ -904,14 +904,14 @@ bake:   lda #SEC_FLAT               ; the flats' pairs, in the level's file (mai
         tay
         lda PBANK-4,y
         sta bk_sock
-        lda LV_HDR+HDR_LW           ; (bank 7 is paged here)
+        lda LV_HDR+HDR_LW          ; (bank 7 is paged here)
         sta bk_lw
-@col:   lda bk_x                    ; ---- a column: its byte in the tile, its tile
+@col:   lda bk_x                   ; ---- a column: its byte in the tile, its tile
         tax
         asl
         asl
         and #$18
-        sta bk_bx                   ; ((X >> 1) & 3) * 8, as (X << 2) & $18
+        sta bk_bx                  ; ((X >> 1) & 3) * 8, as (X << 2) & $18
         lda bk_x+1
         sta tmp
         txa
@@ -920,18 +920,18 @@ bake:   lda #SEC_FLAT               ; the flats' pairs, in the level's file (mai
         ror
         dey
         bne @tx
-        sta bk_tx                   ; X >> 3
+        sta bk_tx                  ; X >> 3
         lda bk_ty0
         sta bk_ty
         lda bk_skip0
         sta bk_skip
-        ldx #0                      ; X: the line, in bk_bg
-@seg:   jsr bk_tile                 ; a tile row's lines (to bk_lines)
+        ldx #0                     ; X: the line, in BK_BG
+@seg:   jsr bk_tile                ; a tile row's lines (to bk_lines)
         inc bk_ty
         cpx bk_lines
         bcc @seg
-        txa                         ; ---- the column, made, to its bank: the overlay's
-        clc                         ; pixels at src, its mask (cnt) after them (X = lines)
+        txa                        ; ---- the column, made, to its bank: the overlay's
+        clc                        ; pixels at src, its mask (cnt) after them (X = lines)
         adc src
         sta cnt
         lda src+1
@@ -941,51 +941,51 @@ bake:   lda #SEC_FLAT               ; the flats' pairs, in the level's file (mai
         jsr pgbank
   .if .not BHW
         .setcpu "65C02"
-        lda #4                      ; (the Master: SPRX is in shadow RAM; the backdrop's
-        tsb ACCCON                  ; column below it, the bank above)
+        lda #4                     ; (the Master: SPRX is in shadow RAM; the backdrop's
+        tsb ACCCON                 ; column below it, the bank above)
         .setcpu "6502"
   .endif
         ldy #0
-:       lda bk_bg,y
+:       lda BK_BG,y
         and (cnt),y
         ora (src),y
         sta (dst),y
         iny
-        dex                         ; (X = lines, from @seg: pgbank keeps it)
+        dex                        ; (X = lines, from @seg: pgbank keeps it)
         bne :-
   .if .not BHW
         lda ACCCON
         and #$FB
         sta ACCCON
   .endif
-        tya                         ; ---- the next: dst + lines (Y: the copy ends on it),
-        clc                         ; the overlay + 2 lines, X + 2
+        tya                        ; ---- the next: dst + lines (Y: the copy ends on it),
+        clc                        ; the overlay + 2 lines, X + 2
         adc dst
         sta dst
         bcc :+
         inc dst+1
 :       tya
         asl
-        adc src                     ; (C = 0: lines <= 32)
+        adc src                    ; (C = 0: lines <= 32)
         sta src
         bcc :+
         inc src+1
-:       inc bk_x                    ; X + 2 (X even: 8x + an even dx)
+:       inc bk_x                   ; X + 2 (X even: 8x + an even dx)
         inc bk_x
         bne :+
         inc bk_x+1
 :       dec bk_col
         beq :+
         jmp @col
-:       lda PB_LVL                  ; bank 7 back, once: until here nothing reads it (bk_tile
-        jmp pgbank                  ; pages its own banks and leaves bank 7 paged)
+:       lda PB_LVL                 ; bank 7 back, once: until here nothing reads it (bk_tile
+        jmp pgbank                 ; pages its own banks and leaves bank 7 paged)
 
-; the tile at (bk_tx, bk_ty), its column bk_bx, into bk_bg from line X: sixteen lines,
+; the tile at (bk_tx, bk_ty), its column bk_bx, into BK_BG from line X: sixteen lines,
 ; or to bk_lines (X out)
 bk_tile:
-        lda #0                      ; the map: MAP5 + (ty << lw) + tx, in bank 5
+        lda #0                     ; the map: MAP5 + (ty << lw) + tx, in bank 5
         sta ent+1
-        lda bk_ty                   ; (the low byte shifted in A)
+        lda bk_ty                  ; (the low byte shifted in A)
         ldy bk_lw
         beq :++
 :       asl
@@ -1002,24 +1002,24 @@ bk_tile:
         stx bk_line
         lda PB_MAP
         jsr pgbank
-        lda (ent),y                 ; (Y = 0: the map's shift loop, pgbank keeps it)
+        lda (ent),y                ; (Y = 0: the map's shift loop, pgbank keeps it)
         sta bk_t
-        lda PB_TILES                ; the tiles: bank 6
+        lda PB_TILES               ; the tiles: bank 6
         jsr pgbank
-        lda #1                      ; the modes: 1 = the fill pair (bk_pa, bk_pb), 0 = the
-        sta bk_mt                   ; stored row at (ent), for the top char row and the
-        sta bk_mb                   ; bottom; bk_step, the bottom row's offset from the top's
-        sty bk_step                 ; (Y = 0)
-        lda sv_solid                ; ---- 0: the solid (its pair set for every tile: a flat
-        sta bk_pa                   ; or a half writes its own over it, a full tile reads
-        sta bk_pb                   ; neither)
+        lda #1                     ; the modes: 1 = the fill pair (bk_pa, bk_pb), 0 = the
+        sta bk_mt                  ; stored row at (ent), for the top char row and the
+        sta bk_mb                  ; bottom; bk_step, the bottom row's offset from the top's
+        sty bk_step                ; (Y = 0)
+        lda sv_solid               ; ---- 0: the solid (its pair set for every tile: a flat
+        sta bk_pa                  ; or a half writes its own over it, a full tile reads
+        sta bk_pb                  ; neither)
         lda bk_t
         beq @go
 :       cmp #FLAT0
         bcc :+
-        sbc #FLAT0                  ; ---- a flat: its pair (C set), in the level's file
+        sbc #FLAT0                 ; ---- a flat: its pair (C set), in the level's file
         asl
-        adc bk_fp                   ; (C = 0)
+        adc bk_fp                  ; (C = 0)
         sta cnt
         lda bk_fp+1
         adc #0
@@ -1028,7 +1028,7 @@ bk_tile:
 @go:    jmp @emit
 :       cmp sv_half0
         bcs @half
-        clc                         ; ---- a full tile: TILES + (id + TOFF) * 64 + byte * 8
+        clc                        ; ---- a full tile: TILES + (id + TOFF) * 64 + byte * 8
         adc #TOFF
         sta ent
         lda #0
@@ -1046,16 +1046,16 @@ bk_tile:
         adc #>TILES
         sta ent+1
         .assert <TILES = 0, error, "bk_tile: TILES's low byte"
-        sty bk_mt                   ; (Y = 0)
+        sty bk_mt                  ; (Y = 0)
         sty bk_mb
-        lda #32                     ; the bottom char row, 32 on
+        lda #32                    ; the bottom char row, 32 on
         sta bk_step
-        bne @emit                   ; (always)
-@half:  sbc sv_half0                ; ---- a half (C = 1: the bcs): k = id - half0 + HALFOFF; its row at
-        pha                         ; the halves' page + k * 32 (+ byte * 8), its pair the
-        clc                         ; palette's by its colour (i = id - half0, kept)
+        bne @emit                  ; (always)
+@half:  sbc sv_half0               ; ---- a half (C = 1: the bcs): k = id - half0 + HALFOFF; its row at
+        pha                        ; the halves' page + k * 32 (+ byte * 8), its pair the
+        clc                        ; palette's by its colour (i = id - half0, kept)
         adc sv_halfoff
-        tax                         ; (X: k; @emit reloads X)
+        tax                        ; (X: k; @emit reloads X)
         lsr
         lsr
         lsr
@@ -1070,56 +1070,56 @@ bk_tile:
         asl
         ora bk_bx
         sta ent
-        pla                         ; i: its low bits are the section's 16 + i
-        clc                         ; (the staged file's: after the palette)
+        pla                        ; i: its low bits are the section's 16 + i
+        clc                        ; (the staged file's: after the palette)
         adc #16
         tay
-        lda sv_hpl
+        lda sv_hplo
         sta cnt
-        lda sv_hph
+        lda sv_hphi
         sta cnt+1
         lda (cnt),y
-        and #7                      ; the colour
+        and #7                     ; the colour
         tay
-        lda (cnt),y                 ; the palette's first byte
+        lda (cnt),y                ; the palette's first byte
         sta bk_pa
         tya
-        ora #8                      ; (the colour < 8)
+        ora #8                     ; (the colour < 8)
         tay
-        lda (cnt),y                 ; and its second
+        lda (cnt),y                ; and its second
         sta bk_pb
-        lda bk_t                    ; below half1 the top row fills, below half2 the
-        cmp sv_half1                ; bottom, from it neither (the row twice)
+        lda bk_t                   ; below half1 the top row fills, below half2 the
+        cmp sv_half1               ; bottom, from it neither (the row twice)
         bcs :+
         lda #0
         sta bk_mb
-        beq @emit                   ; (top: the pair, bottom: the row)
+        beq @emit                  ; (top: the pair, bottom: the row)
 :       cmp sv_half2
         bcs :+
         lda #0
         sta bk_mt
-        beq @emit                   ; (top: the row, bottom: the pair)
+        beq @emit                  ; (top: the row, bottom: the pair)
 :       lda #0
         sta bk_mt
         sta bk_mb
-        beq @emit                   ; (always)
-@pair:  ldy #0                      ; the fill pair at (cnt)
+        beq @emit                  ; (always)
+@pair:  ldy #0                     ; the fill pair at (cnt)
         lda (cnt),y
         sta bk_pa
         iny
         lda (cnt),y
         sta bk_pb
         rts
-@emit:  ldx bk_line                 ; ---- the two char rows
-        lda bk_skip                 ; (a kind that starts at the first tile row's
-        beq @top                    ;  bottom char row: just that, once a column)
+@emit:  ldx bk_line                ; ---- the two char rows
+        lda bk_skip                ; (a kind that starts at the first tile row's
+        beq @top                   ;  bottom char row: just that, once a column)
         lda #0
         sta bk_skip
         beq @bot
 @top:   lda bk_mt
         jsr bk_row
         bcs @done
-@bot:   lda ent                     ; the bottom row's bytes
+@bot:   lda ent                    ; the bottom row's bytes
         clc
         adc bk_step
         sta ent
@@ -1128,13 +1128,13 @@ bk_tile:
 :       lda bk_mb
         jsr bk_row
 @done:  lda PB_LVL
-        jmp pgbank                  ; (X kept)
-; eight lines of a char row into bk_bg from X: A = 0 the row at (ent), 1 the pair;
+        jmp pgbank                 ; (X kept)
+; eight lines of a char row into BK_BG from X: A = 0 the row at (ent), 1 the pair;
 ; C = 1 when bk_lines is reached
-bk_row: tay                         ; (A is 0 or 1: Y = 0 for the row, 1 for the pair,
-        bne @pair                   ;  which counts its four pairs from 1)
+bk_row: tay                        ; (A is 0 or 1: Y = 0 for the row, 1 for the pair,
+        bne @pair                  ;  which counts its four pairs from 1)
 @r:     lda (ent),y
-        sta bk_bg,x
+        sta BK_BG,x
         inx
         cpx bk_lines
         bcs @out
@@ -1144,12 +1144,12 @@ bk_row: tay                         ; (A is 0 or 1: Y = 0 for the row, 1 for the
         clc
 @out:   rts
 @pair:  lda bk_pa
-        sta bk_bg,x
+        sta BK_BG,x
         inx
         cpx bk_lines
         bcs @out
         lda bk_pb
-        sta bk_bg,x
+        sta BK_BG,x
         inx
         cpx bk_lines
         bcs @out
@@ -1160,8 +1160,8 @@ bk_row: tay                         ; (A is 0 or 1: Y = 0 for the row, 1 for the
         rts
   .endif
 
-section:                            ; A = a section (SEC_) -> src = its start in the staged file
-        asl                         ; (C = 0: A < 128)
+section:                           ; A = a section (SEC_) -> src = its start in the staged file
+        asl                        ; (C = 0: A < 128)
         tay
         lda STAGE_LVL,y
         sta src
@@ -1170,53 +1170,53 @@ section:                            ; A = a section (SEC_) -> src = its start in
         sta src+1
         rts
         .assert <STAGE_LVL = 0, error, "section: STAGE_LVL page-aligned"
-copy256:                            ; src -> dst (bank 7), 256 bytes
-        stx cnt                     ; (X = 0: bcopy's exit, both callers)
+copy256:                           ; src -> dst (bank 7), 256 bytes
+        stx cnt                    ; (X = 0: bcopy's exit, both callers)
         inx
         stx cnt+1
         ldx PB_LVL
         jmp bcopy
-stage:                              ; file A -> STAGE
-        ldx #>STAGE                 ; (to its page: every caller sets dst before it reads it)
+stage:                             ; file A -> STAGE
+        ldx #>STAGE                ; (to its page: every caller sets dst before it reads it)
   .if BHW
-        jmp readpage
+        jmp read_page
   .else
-        pha                         ; the Master: into shadow RAM
+        pha                        ; the Master: into shadow RAM
         lda ACCCON
         ora #4
         sta ACCCON
         pla
-        jsr readpage
+        jsr read_page
         lda ACCCON
         and #$FB
         sta ACCCON
         rts
   .endif
-imgent:                             ; item -> ent = imgtab + item*5
-        sty ent+1                   ; (Y = 0 and A = item: placewalk's @pl, the one caller)
+img_ent:                           ; item -> ent = img_tab + item*5
+        sty ent+1                  ; (Y = 0 and A = item: place_walk's @pl, the one caller)
         asl
         rol ent+1
         asl
-        rol ent+1                   ; * 4 (C = 0)
-        adc item                    ; * 5
+        rol ent+1                  ; * 4 (C = 0)
+        adc item                   ; * 5
         bcc :+
         inc ent+1
         clc
-:       adc #<imgtab
+:       adc #<img_tab
         sta ent
         lda ent+1
-        adc #>imgtab
+        adc #>img_tab
         sta ent+1
         rts
-srccnt:                             ; (ent),Y = offset lo, hi, length lo, hi -> src, cnt
+src_cnt:                           ; (ent),Y = offset lo, hi, length lo, hi -> src, cnt
         lda (ent),y
-        sta src                     ; (<STAGE = 0)
+        sta src                    ; (<STAGE = 0)
         iny
         lda (ent),y
         clc
         adc #>STAGE
         sta src+1
-        .assert <STAGE = 0, error, "srccnt: STAGE's low byte"
+        .assert <STAGE = 0, error, "src_cnt: STAGE's low byte"
         iny
         lda (ent),y
         sta cnt
@@ -1224,25 +1224,25 @@ srccnt:                             ; (ent),Y = offset lo, hi, length lo, hi -> 
         lda (ent),y
         sta cnt+1
         rts
-unrle:                              ; src (packed) -> dst in bank 5: c < 128 = c+1
+unrle:                             ; src (packed) -> dst in bank 5: c < 128 = c+1
         lda PB_MAP
         jsr pgbank
 @c:     lda dst+1
-        cmp mapend                  ; the map's end: stop there (the stream runs on into
-        bcs @end                    ; the next section)
+        cmp map_end                ; the map's end: stop there (the stream runs on into
+        bcs @end                   ; the next section)
         ldy #0
-        jsr @next                   ; A = the control byte
-        tax                         ; X = c: c+1 literals, the loop running X+1 times
-        bpl @rd                     ; (C = 0 from the bcs: literals)
-        sbc #126                    ; c - 127: c - 126 copies of one byte (C = 1: a run)
+        jsr @next                  ; A = the control byte
+        tax                        ; X = c: c+1 literals, the loop running X+1 times
+        bpl @rd                    ; (C = 0 from the bcs: literals)
+        sbc #126                   ; c - 127: c - 126 copies of one byte (C = 1: a run)
         tax
 @rd:    jsr @next
 @st:    jsr @dnext
         dex
-        bmi @c                      ; (X at most 128: N only at the packet's end)
-        bcs @st                     ; a run: the same byte again
-        bcc @rd                     ; literals: the next byte
-@next:  lda (src),y                 ; (Y = 0) A = the next byte
+        bmi @c                     ; (X at most 128: N only at the packet's end)
+        bcs @st                    ; a run: the same byte again
+        bcc @rd                    ; literals: the next byte
+@next:  lda (src),y                ; (Y = 0) A = the next byte
         inc src
         bne :+
         inc src+1
@@ -1264,45 +1264,45 @@ unrle:                              ; src (packed) -> dst in bank 5: c < 128 = c
 ; touch the bar and a level does not either: engine.s menu_sections)
 image_load:
   .if .not BHW
-        jsr mainram
+        jsr main_ram
   .endif
         stx item
-        lda imgfile,x
+        lda img_file,x
         jsr stage
-        lda #0                      ; <STAGE = 0
+        lda #0                     ; <STAGE = 0
         sta src
         lda #>STAGE
         sta src+1
         ldx item
-        lda imgalo,x
+        lda img_alo,x
         sta dst
-        lda imgahi,x
+        lda img_ahi,x
         sta dst+1
-        lda imgnlo,x
+        lda img_nlo,x
         sta cnt
-        lda imgnhi,x
+        lda img_nhi,x
         sta cnt+1
         ldx PB_LVL
-        jsr sccopy                  ; (bank 7 paged after, and its write bank; the
+        jsr sccopy                 ; (bank 7 paged after, and its write bank; the
                                     ;  Master's scopy: out of shadow RAM)
         ldx item
-        lda bflo,x                  ; ---- the bank numbers: each byte, 4..7, becomes
-        sta lp                      ; that bank's socket
+        lda bflo,x                 ; ---- the bank numbers: each byte, 4..7, becomes
+        sta lp                     ; that bank's socket
         lda bfhi,x
         sta lp+1
-        bne @bf                     ; (always: A = the list's high byte, not page 0)
+        bne @bf                    ; (always: A = the list's high byte, not page 0)
 @bfl:   sta dst+1
-        lda (dst),y                 ; (Y = 0 from @rd)
+        lda (dst),y                ; (Y = 0 from @rd)
         tax
         lda PBANK-4,x
         sta (dst),y
 @bf:    jsr @rd
         sta dst
         jsr @rd
-        bne @bfl                    ; (a high byte of 0: the list's end)
-@bfd:   lda PBOARD                  ; ---- the write-bank stores, on a board: each a
-        beq @wdone                  ; `sta $FE30` as assembled, a harmless second write
-        ldx item                    ; of the bank on a plain machine
+        bne @bfl                   ; (a high byte of 0: the list's end)
+@bfd:   lda pboard                 ; ---- the write-bank stores, on a board: each a
+        beq @wdone                 ; `sta $FE30` as assembled, a harmless second write
+        ldx item                   ; of the bank on a plain machine
         lda wrlo,x
         sta lp
         lda wrhi,x
@@ -1312,67 +1312,67 @@ image_load:
         jsr @rd
         beq @wdone
         sta dst+1
-        jsr @rd                     ; the kind: 4..7 a constant bank, $FE the bank in X
-        lda PBOARD
+        jsr @rd                    ; the kind: 4..7 a constant bank, $FE the bank in X
+        lda pboard
         cmp #BOARD_SOLIDISK
         beq @wsol
         cpx #$FE
         beq @wdyn
-        lda PBANK-4,x               ; Watford, a constant bank: sta $FF30 + its socket
+        lda PBANK-4,x              ; Watford, a constant bank: sta $FF30 + its socket
         ora #<WRSEL_WATFORD
-        iny                         ; (Y = 0 from @rd: 1)
-        bne @whi                    ; (always)
-@wdyn:  lda #$9D                    ; Watford, the bank in X: sta $FF30,x
-        sta (dst),y                 ; (Y = 0 from @rd)
+        iny                        ; (Y = 0 from @rd: 1)
+        bne @whi                   ; (always)
+@wdyn:  lda #$9D                   ; Watford, the bank in X: sta $FF30,x
+        sta (dst),y                ; (Y = 0 from @rd)
         lda #<WRSEL_WATFORD
         iny
 @whi:   sta (dst),y
         lda #>WRSEL_WATFORD
-        bne @wst                    ; (always)
-@wsol:  lda #<WRSEL_SOLIDISK        ; Solidisk: sta $FE60, the bank being in A
-        iny                         ; (Y = 0 from @rd: 1)
+        bne @wst                   ; (always)
+@wsol:  lda #<WRSEL_SOLIDISK       ; Solidisk: sta $FE60, the bank being in A
+        iny                        ; (Y = 0 from @rd: 1)
         sta (dst),y
         lda #>WRSEL_SOLIDISK
 @wst:   iny
         sta (dst),y
-        bne @wr                     ; (always: Y = 2)
-@rd:    ldy #0                      ; the list's next byte -> A and X (flags on it), Y = 0
+        bne @wr                    ; (always: Y = 2)
+@rd:    ldy #0                     ; the list's next byte -> A and X (flags on it), Y = 0
         lda (lp),y
         inc lp
         bne @rd1
         inc lp+1
 @rd1:   tax
         rts
-@wdone: ldy item                    ; ---- the game's: its variables, the bar's template
+@wdone: ldy item                   ; ---- the game's: its variables, the bar's template
         .assert IMG_GAME = 0, error, "image_load: the game's image is 0"
         bne @done
-        sty dst                     ; (Y = 0)
+        sty dst                    ; (Y = 0)
         lda #>GAME_BSS
         sta dst+1
-        ldx #GAME_BSS_PAGES         ; the whole pages (at least one: build.sh)
+        ldx #GAME_BSS_PAGES        ; the whole pages (at least one: build.sh)
         tya
-@z:     sta (dst),y                 ; (bank 7 paged, and its write bank: bcopy's pgbank)
+@z:     sta (dst),y                ; (bank 7 paged, and its write bank: bcopy's pgbank)
         iny
         bne @z
         inc dst+1
         dex
         bne @z
   .if GAME_BSS_REM
-        ldy #GAME_BSS_REM           ; then the last page's bytes, and no further: the
-@zr:    dey                         ;  image's code may start in that page
+        ldy #GAME_BSS_REM          ; then the last page's bytes, and no further: the
+@zr:    dey                        ;  image's code may start in that page
         sta (dst),y
         bne @zr
   .endif
-        ldx #>BARADDR               ; the bar's template: readpage takes the page in X
+        ldx #>BARADDR              ; the bar's template: read_page takes the page in X
         lda #FI_BAR
-        jmp readpage
+        jmp read_page
 @done:  rts
         .assert <BARADDR = 0 && <STAGE = 0 && <GAME_BSS = 0, error, "image_load: page-aligned"
-imgfile: .byte FI_GAME, FI_MENU
-imgalo: .byte <GAME_ADDR, <MENU_ADDR
-imgahi: .byte >GAME_ADDR, >MENU_ADDR
-imgnlo: .byte <GAME_LEN, <MENU_LEN
-imgnhi: .byte >GAME_LEN, >MENU_LEN
+img_file: .byte FI_GAME, FI_MENU
+img_alo: .byte <GAME_ADDR, <MENU_ADDR
+img_ahi: .byte >GAME_ADDR, >MENU_ADDR
+img_nlo: .byte <GAME_LEN, <MENU_LEN
+img_nhi: .byte >GAME_LEN, >MENU_LEN
 bflo:   .byte <bf_game, <bf_menu
 bfhi:   .byte >bf_game, >bf_menu
 wrlo:   .byte <wr_game, <wr_menu
@@ -1382,7 +1382,7 @@ wrhi:   .byte >wr_game, >wr_menu
 
 ; ---------------------------------------------------------------- the packer's tables
   .ifdef BAKEITEM0
-bakekind: .incbin "bakekind.bin"   ; by baked slot: its kind (the game's)
-bakegeom: .incbin "bakegeom.bin"   ; by kind: bytes, lines, dx (16 bit), dty, overlay offset (16 bit), skip
+bake_kind: .incbin "bake_kind.bin"   ; by baked slot: its kind (the game's)
+bake_geom: .incbin "bake_geom.bin"   ; by kind: bytes, lines, dx (16 bit), dty, overlay offset (16 bit), skip
   .endif
-imgtab: .incbin "imgtab.bin"  ; per item: its file, offset and length (5 bytes)
+img_tab: .incbin "img_tab.bin"  ; per item: its file, offset and length (5 bytes)

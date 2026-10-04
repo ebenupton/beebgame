@@ -8,65 +8,65 @@
 ; one displayed row that straddles the ring end can be read as a single run.  Only
 ; the chars that row takes from it -- wcxm..79 -- need to be right, and when the
 ; window is slot aligned no row straddles at all.  It is made only when its row
-; has been written: its writers note the range (drawrect's head and banks.s mirdirty: MIRDIRTY_BODY).
+; has been written: its writers note the range (draw_rect's head and banks.s mir_dirty: MIRDIRTY_BODY).
 mirror_copy:
-        ldx curbuf
-        lda mrow                    ; a new map row in the last slot (the window
-        cmp mirmr,x                 ;  crossed a slot boundary across: wcxm wrapped),
-        bne @all                    ;  or a move left, uncovers chars the last copy
-        lda wcxm                    ;  never reached -- written while they were the
-        cmp mirwcx,x                ;  row above's, left of wcxm, so never noted --
-        bcs :+                      ;  and the whole row has to be made again
+        ldx cur_buf
+        lda mrow                   ; a new map row in the last slot (the window
+        cmp MIRMR,x                ;  crossed a slot boundary across: wcxm wrapped),
+        bne @all                   ;  or a move left, uncovers chars the last copy
+        lda wcxm                   ;  never reached -- written while they were the
+        cmp MIRWCX,x               ;  row above's, left of wcxm, so never noted --
+        bcs :+                     ;  and the whole row has to be made again
 @all:   lda #0
-        sta mirlo,x
+        sta MIRLO,x
         lda #ROWCHARS-1
-        sta mirhi,x
-        sta mirdty,x                ; non-zero: dirty
-:       lda mirdty,x                ; nothing has touched the ring's last row in this
-        bne :+                      ; buffer since the mirror was last made
+        sta MIRHI,x
+        sta MIRDTY,x               ; non-zero: dirty
+:       lda MIRDTY,x               ; nothing has touched the ring's last row in this
+        bne :+                     ; buffer since the mirror was last made
         rts
 :       lda wcxm
-        bne :+                      ; slot aligned: no row straddles, so the mirror is
-        rts                         ; not read -- and the flag stays up for when it is
+        bne :+                     ; slot aligned: no row straddles, so the mirror is
+        rts                        ; not read -- and the flag stays up for when it is
 :       lda #0
-        sta mirdty,x
-        ldy mirhi,x                 ; the last written char
-        sta mirhi,x                 ; the written range is empty again (mirlo below)
-        lda mirlo,x                 ; the copy starts at the first written char, or at
-        cmp wcxm                    ; wcxm if the writing started left of it
+        sta MIRDTY,x
+        ldy MIRHI,x                ; the last written char
+        sta MIRHI,x                ; the written range is empty again (MIRLO below)
+        lda MIRLO,x                ; the copy starts at the first written char, or at
+        cmp wcxm                   ; wcxm if the writing started left of it
         bcs :+
         lda wcxm
-:       sta tmp4                    ; and runs to the last written one
+:       sta tmp4                   ; and runs to the last written one
         lda #$FF
-        sta mirlo,x
-        lda wcxm                    ; the chars left of wcxm are not copied
-        sta mirwcx,x
+        sta MIRLO,x
+        lda wcxm                   ; the chars left of wcxm are not copied
+        sta MIRWCX,x
         lda mrow
-        sta mirmr,x
-        tya                         ; the chars from the first written to the last
+        sta MIRMR,x
+        tya                        ; the chars from the first written to the last
         sec
         sbc tmp4
-        bcs :+                      ; nothing of it is in the window
+        bcs :+                     ; nothing of it is in the window
         rts
-:       adc #0                      ; C = 1 from the bcs: +1
-        tax                         ; X = the chars to copy (1..80): the loop's count
+:       adc #0                     ; C = 1 from the bcs: +1
+        tax                        ; X = the chars to copy (1..80): the loop's count
         ; source: the last slot, base + (RINGROWS-1)*640 + tmp4*8; the mirror is one
         ; whole ring below it
         .assert (RINGEND_A >> 8) - 3 = (RING_A >> 8) + (((RINGROWS-1)*ROWBYTES) >> 8) && (RINGEND_B >> 8) - 3 = (RING_B >> 8) + (((RINGROWS-1)*ROWBYTES) >> 8), error, "ringe3 is the last slot's page less the base's"
         .assert <(RING_A + (RINGROWS-1)*ROWBYTES) = $80 && <RING_A = <RING_B, error, "the last slot is at xx80"
         .assert (RING_A & $FF) + (RINGROWS-1)*ROWBYTES - RINGBYTES = -$200, error, "the mirror is 2 pages below the base page"
-        lda tmp4                    ; T = tmp4*8: A = its high byte, C = bit 7 of its low
-        lsr                         ; byte -- the carry out of the +$80 below
+        lda tmp4                   ; T = tmp4*8: A = its high byte, C = bit 7 of its low
+        lsr                        ; byte -- the carry out of the +$80 below
         lsr
         lsr
         lsr
         lsr
         tay
-        adc ringe3                  ; ringbhi + >((RINGROWS-1)*ROWBYTES); C = 0 after
+        adc ringe3                 ; ringbhi + >((RINGROWS-1)*ROWBYTES); C = 0 after
         sta w16+1
         tya
-        adc ringbhi                 ; C = 0 in and out
-        sbc #1                      ; C = 0: -2, the mirror's page
+        adc ringbhi                ; C = 0 in and out
+        sbc #1                     ; C = 0: -2, the mirror's page
         sta w16b+1
         ; both pointers page aligned in the reads' favour: the source's low byte goes
         ; to Y (Y0, a multiple of 8, so the page step still falls between chars), w16
@@ -76,11 +76,11 @@ mirror_copy:
         lda tmp4
         asl
         asl
-        asl                         ; L, the char's offset in the row's page
+        asl                        ; L, the char's offset in the row's page
         eor #<(RING_A + (RINGROWS-1)*ROWBYTES)   ; +$80, its carry taken above: Y0
         tay
         bpl :+
-        dec w16b+1                  ; L < $80
+        dec w16b+1                 ; L < $80
 :       lda #0
         sta w16
         lda #$80
@@ -90,7 +90,7 @@ mirror_copy:
         sta (w16b),y
         iny
         .endrepeat
-        beq @pg                     ; Z: Y = 0, a page done (out of line: 1 char in 32)
+        beq @pg                    ; Z: Y = 0, a page done (out of line: 1 char in 32)
 @cb:    dex
         bne @c
         rts

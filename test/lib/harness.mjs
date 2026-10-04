@@ -136,7 +136,7 @@ export class Harness {
 
   // ---- render-work measurement, with the interrupt separated out ------------------
   // The window is the instruction after render_frame's spin ..render_done.  render_frame
-  // opens with wait_flip, inlined (engine/frame.s: `lda flipreq / bne wait_flip`, both
+  // opens with wait_flip, inlined (engine/frame.s: `lda flip_req / bne wait_flip`, both
   // labels at the same address), an idle spin of 6-23k cycles that is not work.  The
   // vsync/timer ISR fires inside that window, and how many times depends on where the
   // CRTC phase happens to sit -- so it is accounted separately rather than left to
@@ -158,13 +158,13 @@ export class Harness {
     // the first time render_frame is reached -- the game's image is in bank 7 then, by
     // construction -- rather than by a hardcoded offset: an offset assumed `jsr
     // wait_flip` (3 bytes) and, once the spin was inlined, landed inside the bne, so no
-    // frame ever opened.  `lda flipreq` is $A5 zp (2 bytes) or $AD abs (3), then `bne`
+    // frame ever opened.  `lda flip_req` is $A5 zp (2 bytes) or $AD abs (3), then `bne`
     // ($D0, 2 bytes) back to render_frame; the fall-through is after the bne.
     let spinEnd = -1;
     const findSpinEnd = (op) => {
       const len = op === 0xa5 ? 2 : op === 0xad ? 3 : 0, p = A.render_frame;
       if (!len || this.rd(p + len) !== 0xd0 || this.rd(p + len + 1) !== (256 - (len + 2)))
-        throw new Error(`render_frame does not open with 'lda flipreq / bne render_frame' (${[0, 1, 2, 3, 4].map((i) => this.rd(p + i).toString(16)).join(" ")})`);
+        throw new Error(`render_frame does not open with 'lda flip_req / bne render_frame' (${[0, 1, 2, 3, 4].map((i) => this.rd(p + i).toString(16)).join(" ")})`);
       return p + len + 2;
     };
     this.cpu.debugInstruction.add((pc, op) => {
@@ -198,10 +198,10 @@ export class Harness {
     const A = this.A, MAXSPR = 32, MAXREC = 32;
     return [
       ["wcx", A.wcx, 2], ["wcy", A.wcy, 1], ["wfine", A.wfine, 1], ["wy", A.wy, 2],
-      ["curbuf", A.curbuf, 1],   // (not BUF_VALID: the Master encodes it in BUF_CX now)
-      ["BUF_CX", A.BUF_CX, 4, "bufcx"], ["BUF_CY", A.BUF_CY, 2],
-      ["BARDIRTY", A.BARDIRTY, 1],   // (one byte: one bar; not BARBG, gone)
-      ["NSPR", A.NSPR, 1], ["SPRLIST", A.SPRLIST, 5 * MAXSPR, "sprites"],
+      ["cur_buf", A.cur_buf, 1],   // (not BUF_VALID: the Master encodes it in BUF_CXL now)
+      ["BUF_CXL", A.BUF_CXL, 4, "bufcx"], ["BUF_CY", A.BUF_CY, 2],
+      ["bar_dirty", A.bar_dirty, 1],   // (one byte: one bar; not BARBG, gone)
+      ["nspr", A.nspr, 1], ["SPRLIST", A.SPRLIST, 5 * MAXSPR, "sprites"],
       ["RECCNT", A.RECCNT, 2], ["SPRREC", A.SPRREC, 2 * MAXREC * 10, "rec"], ["KEEP", A.KEEP, MAXREC, "keep"],
       ["DIRTYCNT", A.DIRTYCNT, 2], ["DIRTYLIST", A.DIRTYLIST, 2 * 2 * 64, "dirty"],
       ...this.gameScene(),

@@ -1,5 +1,5 @@
 ; ============================================================================
-; engine/macros.s -- the engine's macros: the ring wrapping, and RUNN
+; engine/macros.s -- the engine's macros: the ring wrapping, and runn
 ;
 ; Included by engine.s after defs.s and vars.s; emits nothing by itself.  Each buffer's
 ; screen is a ring of RINGROWS char rows (defs.s): an address that runs off the ring's
@@ -18,7 +18,7 @@
 ;   pagestep  a pointer's high byte one page on after its low byte carried, folded
 ;   spnext    sp on one char (8 bytes), folding at the ring end
 ;   spcold    spnext's page step, out of line
-;   RUNN      a run's char count: min(rc_lim, cnt) -> X (x RUNXS); C = 0
+;   runn      a run's char count: min(rc_lim, cnt) -> X (x RUNXS); C = 0
 ;
 ; Anonymous labels.  The ring macros spell their skips with ':' labels, because a
 ; named label would end the enclosing routine's cheap-local (@) scope.  So a caller
@@ -34,7 +34,7 @@
 ;         Master (RINGROWS = 32, a power of two): an and -- X, C kept
 ;         Model B (23): X = the row brought under RINGROWS*5;  C clobbered
 ;   Anonymous labels: none (the Model B's are .local).
-; The Model B's is a table lookup in bank 6 (ringmodtab, banks.s), RINGROWS*5 long:
+; The Model B's is a table lookup in bank 6 (ringmod_tab, banks.s), RINGROWS*5 long:
 ; two subtractions bring the row into it, 141 bytes short of a 256-entry table.
 ; ----------------------------------------------------------------------------
 .macro ringmod
@@ -44,17 +44,17 @@
         .local n1, n2
         cmp #RINGROWS*5
         bcc n1
-        sbc #RINGROWS*5             ; C = 1 from the cmp
+        sbc #RINGROWS*5            ; C = 1 from the cmp
 n1:     cmp #RINGROWS*5
         bcc n2
         sbc #RINGROWS*5
 n2:     tax
-        lda ringmodtab,x
+        lda ringmod_tab,x
 .endif
 .endmacro
 
 ; ----------------------------------------------------------------------------
-; ringmod7: ringmod for bank 7 (calc_ring, ringaddr7), which has no copy of the table
+; ringmod7: ringmod for bank 7 (calc_ring, ring_addr7), which has no copy of the table
 ;   In:   A = the row
 ;   Out:  A = the slot
 ;         Model B: by repeated subtraction;  C = 0 (it leaves by its bcc);  X kept
@@ -63,13 +63,13 @@ n2:     tax
 ;   do not branch over it with :+ / :-.
 ; ----------------------------------------------------------------------------
 .macro ringmod7
-  .if ::BHW                         ; Model B
+  .if ::BHW                        ; Model B
 :       cmp #RINGROWS
         bcc :+
-        sbc #RINGROWS               ; C = 1 from the cmp, and stays 1
+        sbc #RINGROWS              ; C = 1 from the cmp, and stays 1
         bcs :-
 :
-  .else                             ; Master
+  .else                            ; Master
         ringmod
   .endif
 .endmacro
@@ -86,11 +86,11 @@ n2:     tax
 ; sec of its own whatever the caller was holding.
 ; ----------------------------------------------------------------------------
 .macro ringtest cold
-  .if ::BHW                         ; Model B: the buffer's ring end
+  .if ::BHW                        ; Model B: the buffer's ring end
         cmp ringehi
         bcs cold
-  .else                             ; Master
-        bmi cold                    ; RINGEND = $8000: N from A
+  .else                            ; Master
+        bmi cold                   ; RINGEND = $8000: N from A
   .endif
 .endmacro
 
@@ -106,20 +106,20 @@ n2:     tax
 ; folds by $80, which borrows from A when p is below $80 (the sbc #0).
 ; ----------------------------------------------------------------------------
 .macro ringup p
-  .if ::BHW                         ; Model B
-        cmp ringehi                 ; the buffer's ring end, high byte (select_backbuf)
+  .if ::BHW                        ; Model B
+        cmp ringehi                ; the buffer's ring end, high byte (select_backbuf)
         bcc :+
-        sbc #>RINGBYTES             ; C = 1 from the compare, and stays 1
+        sbc #>RINGBYTES            ; C = 1 from the compare, and stays 1
         pha
         lda p
-        sbc #<RINGBYTES             ; $80: borrows when p is below it
+        sbc #<RINGBYTES            ; $80: borrows when p is below it
         sta p
         pla
-        sbc #0                      ; C still 1
+        sbc #0                     ; C still 1
 :
-  .else                             ; Master
-        bpl :+                      ; RINGEND = $8000: N from A
-        sbc #(>RINGBYTES)-1         ; C = 0: a positive operand's adc set N, so no carry
+  .else                            ; Master
+        bpl :+                     ; RINGEND = $8000: N from A
+        sbc #(>RINGBYTES)-1        ; C = 0: a positive operand's adc set N, so no carry
 :
   .endif
 .endmacro
@@ -141,7 +141,7 @@ n2:     tax
 ; the low byte unchanged (<RINGBYTES = 0).
 ; ----------------------------------------------------------------------------
 .macro pagestep p, back
-  .if ::BHW                         ; Model B
+  .if ::BHW                        ; Model B
         inc p+1
         lda p+1
         cmp ringehi
@@ -150,18 +150,18 @@ n2:     tax
     .else
         bcc back
     .endif
-        sbc #>RINGBYTES+1           ; C = 1 from the compare: a ring, and the borrow
+        sbc #>RINGBYTES+1          ; C = 1 from the compare: a ring, and the borrow
         sta p+1
         lda p
-        eor #<RINGBYTES             ; + $80
+        eor #<RINGBYTES            ; + $80
         sta p
         clc
         .assert <RINGBYTES = $80, error, "pagestep: the Model B's ring folds its low byte by $80"
     .ifblank back
 :
     .endif
-  .else                             ; Master
-        inc p+1                     ; N set: ran off the end
+  .else                            ; Master
+        inc p+1                    ; N set: ran off the end
         bpl :+
         lda #>RINGBASE
         sta p+1
@@ -185,7 +185,7 @@ n2:     tax
         adc #8
         sta sp
   .if .blank(cold)
-        bcc :++                     ; past the fold's own anonymous label
+        bcc :++                    ; past the fold's own anonymous label
         pagestep sp
 :
   .else
@@ -204,7 +204,7 @@ n2:     tax
 .endmacro
 
 ; ----------------------------------------------------------------------------
-; RUNN: a run's chars, n = min(rc_lim, cnt), as X, its dispatch index, n x RUNXS: the
+; runn: a run's chars, n = min(rc_lim, cnt), as X, its dispatch index, n x RUNXS: the
 ; Model B's n (a table of branch offsets), the Master's 2n (jmp (abs,x)) -- the only
 ; copy: @advsp reads n and 8n back through X from tables (@run1, @run8).  C = 0
 ; out, for the Model B's patched branch and for @advsp after the blocks (which keep
@@ -217,7 +217,7 @@ RUNXS = 1
   .else
 RUNXS = 2
   .endif
-.macro RUNN
+.macro runn
         lda rc_lim
         cmp cnt
         bcc :+
@@ -227,7 +227,7 @@ RUNXS = 2
   .endif
 :
   .if .not BHW
-        asl                         ; n <= 4: C = 0
+        asl                        ; n <= 4: C = 0
   .endif
         tax
 .endmacro
@@ -237,8 +237,8 @@ RUNXS = 2
 ; mirror.s): A = the first window column written of the row the mirror follows, X =
 ; the last (0..79).  Those chars sit in the last slot row at wcxm on; only the ones
 ; up to char 79 are in it (the rest wrapped to slot row 0), and only those from wcxm
-; are ever read.  Blank exit: a routine, ending in rts (bank 7's mirdirty, banks.s);
-; given one, in line, leaving there or falling out (drawrect's head).  A, X, Y
+; are ever read.  Blank exit: a routine, ending in rts (bank 7's mir_dirty, banks.s);
+; given one, in line, leaving there or falling out (draw_rect's head).  A, X, Y
 ; clobbered.
 ; ----------------------------------------------------------------------------
 .macro MIRDIRTY_BODY exit
@@ -251,23 +251,23 @@ RUNXS = 2
         bcs exit
   .endif
         pha
-        txa                         ; C clear: bcs @out not taken
+        txa                        ; C clear: bcs @out not taken
         adc wcxm
         cmp #ROWCHARS
         bcc :+
         lda #ROWCHARS-1
 :       tax
-        ldy curbuf
+        ldy cur_buf
         lda #1
-        sta mirdty,y
+        sta MIRDTY,y
         pla
-        cmp mirlo,y
+        cmp MIRLO,y
         bcs :+
-        sta mirlo,y
+        sta MIRLO,y
 :       txa
-        cmp mirhi,y
+        cmp MIRHI,y
         bcc :+
-        sta mirhi,y
+        sta MIRHI,y
 :
   .ifblank exit
 @out:   rts

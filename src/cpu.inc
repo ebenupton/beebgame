@@ -43,36 +43,36 @@ TILEMIRROR = 0
         .endif
 ; The build's options (tools/build.sh says what each does), 0 unless it sets them.
         .ifndef MASTERONLY
-MASTERONLY = 0                      ; the Master alone: no Model B build
+MASTERONLY = 0                     ; the Master alone: no Model B build
         .endif
         .ifndef GAMEHAZEL
-GAMEHAZEL = 0                       ; the game's code in HAZEL too (the Master alone)
+GAMEHAZEL = 0                      ; the game's code in HAZEL too (the Master alone)
         .endif
         .ifndef GAMESOUND
-GAMESOUND = 0                       ; the game's own sound player (hook_sound)
+GAMESOUND = 0                      ; the game's own sound player (hook_sound)
         .endif
         .ifndef TALLMAP
-TALLMAP = 0                         ; maps taller than 128 tiles (the Master alone)
+TALLMAP = 0                        ; maps taller than 128 tiles (the Master alone)
         .endif
   .if TALLMAP && BHW
         .error "TALLMAP needs the Master's 32-row ring (the Model B's ring is 23 rows)"
   .endif
         .ifndef DRAWFLAGS
-DRAWFLAGS = 0                       ; draw flags in the sprite list's x high byte
+DRAWFLAGS = 0                      ; draw flags in the sprite list's x high byte
         .endif
         .ifndef TIGHTBSS
-TIGHTBSS = 0                        ; 9-byte sprite records, ENGBSS not page aligned
+TIGHTBSS = 0                       ; 9-byte sprite records, ENGBSS not page aligned
         .endif
         .ifndef ALLLEVELS
-ALLLEVELS = 0                       ; a test build: every level on the chooser, every bonus
-        .endif                      ;  level taken (the game's)
+ALLLEVELS = 0                      ; a test build: every level on the chooser, every bonus
+        .endif                     ;  level taken (the game's)
   .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
         .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
   .endif
 
-.macro PLACEH mseg, bseg              ; the segment by HARDWARE: the interrupt handler's own
-  .if ::BHW                             ; work, which is in bank 7 with the Model B's
-        .segment bseg                   ; handler and in main RAM with the Master's
+.macro PLACEH mseg, bseg           ; the segment by HARDWARE: the interrupt handler's own
+  .if ::BHW                        ; work, which is in bank 7 with the Model B's
+        .segment bseg              ; handler and in main RAM with the Master's
   .else
         .segment mseg
   .endif
@@ -103,8 +103,8 @@ ALLLEVELS = 0                       ; a test build: every level on the chooser, 
         .ident(.concat("@bf_", name)):
         .pushseg
         .segment "BANKFIX"
-    .if b = 0                       ; low RAM: its image, in the BOOT piece (main RAM,
-        .byte BANK_LVL              ; filed under bank 7 in BANKS)
+    .if b = 0                      ; low RAM: its image, in the BOOT piece (main RAM,
+        .byte BANK_LVL             ; filed under bank 7 in BANKS)
         .word .ident(.concat("@bf_", name)) - 1 - __LOWCODE_RUN__ + __LOWCODE_LOAD__
     .else
         .byte b
@@ -123,9 +123,9 @@ ALLLEVELS = 0                       ; a test build: every level on the chooser, 
         BANKREF .sprintf("%s_%d_%d", .string(op), n, tag), b
   .endif
 .endmacro
-.macro setbank n, b, tag            ; ROMSEL_CPY first: ROMSEL's copy,
-        bankimm lda, n, b, tag      ; which the interrupt restores from (the read bank
-        sta ROMSEL_CPY              ; alone: the write bank stays 7's -- below)
+.macro setbank n, b, tag           ; ROMSEL_CPY first: ROMSEL's copy,
+        bankimm lda, n, b, tag     ; which the interrupt restores from (the read bank
+        sta ROMSEL_CPY             ; alone: the write bank stays 7's -- below)
         sta ROMSEL
 .endmacro
 
@@ -141,15 +141,15 @@ ALLLEVELS = 0                       ; a test build: every level on the chooser, 
 ; ROMSEL would page bank 7 in.)  On the Master the macros are empty.
 ; The rule: the write bank is bank 7's, always, but in a WINDOW -- a store into another
 ; bank, between a wrsel to it and a wrback that puts 7's back (the sprite banks' entry,
-; mapput, selbb, boot).  Nothing else moves it: a switch that only reads (every other
-; crossing, pagelogic, setbank) leaves it be, and the interrupt stores into no bank
+; map_put, selbb, boot).  Nothing else moves it: a switch that only reads (every other
+; crossing, page_logic, setbank) leaves it be, and the interrupt stores into no bank
 ; (what it keeps is in main RAM), so it neither needs a write bank nor sets one -- an
 ; interrupt inside a window finds the window's and leaves it.
 ;   wrsel n, b [, tag]   after a switch to the constant bank n (A = n), in bank b's
 ;                        image (0 = the low-RAM image, as BANKREF)
 ;   wrselx b             after a switch to the bank in A AND X
 ;   wrback b [, tag]     a window's end: the write bank back to 7's (A lost)
-.macro WRREC kind, b, name          ; (the record: the image's bank, the store's address,
+.macro WRREC kind, b, name         ; (the record: the image's bank, the store's address,
   .if ::BHW                        ;  the kind: 4..7 a constant bank, $FE "in X")
         .ident(.concat("@wr_", name)):
         .pushseg
@@ -175,11 +175,11 @@ ALLLEVELS = 0                       ; a test build: every level on the chooser, 
     .endif
   .endif
 .endmacro
-.macro wrback b, tag                ; A = bank 7's (Solidisk's store writes A), then a
+.macro wrback b, tag               ; A = bank 7's (Solidisk's store writes A), then a
   .if ::BHW                        ; store the boot loader makes the board's -- but not
     .if .blank(tag)                ; a second sta ROMSEL, which would page bank 7 in under
         bankimm lda, ::BANK_LVL, b, 99   ; whatever runs here: sta $FF30, a store into
-        sta $FF30                        ; the MOS's ROM, nothing on a plain machine
+        sta $FF30                  ; the MOS's ROM, nothing on a plain machine
         WRREC ::BANK_LVL, b, "s_7_99"
     .else
         bankimm lda, ::BANK_LVL, b, tag
@@ -194,13 +194,13 @@ ALLLEVELS = 0                       ; a test build: every level on the chooser, 
         WRREC $FE, b, "x"
   .endif
 .endmacro
-.macro SAMEPAGE from, to            ; after a hot branch: it and its target in one page
+.macro SAMEPAGE from, to           ; after a hot branch: it and its target in one page
         .assert >(from) = >(to), warning, "a hot branch crosses a page (+1 cycle when taken)"
-.endmacro                           ; (checked at link time; a PAD before it fixes it)
-.macro PAD b, m                     ; bytes of padding, the Model B's and the Master's, to
+.endmacro                          ; (checked at link time; a PAD before it fixes it)
+.macro PAD b, m                    ; bytes of padding, the Model B's and the Master's, to
   .if ::BHW                        ; move the code after it off a page boundary (the code
-        .res b                      ; differs in length, so the pads do; the data after
-  .else                             ; lies alike whatever they are: pinned)
+        .res b                     ; differs in length, so the pads do; the data after
+  .else                            ; lies alike whatever they are: pinned)
         .res m
   .endif
 .endmacro

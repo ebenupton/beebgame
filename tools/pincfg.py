@@ -6,7 +6,7 @@ main-RAM segments and the drivers' NMI stubs are left to the linker.
     python3 tools/pincfg.py <master cfg> <Model B game.dbg> > <pinned cfg>"""
 import re, sys
 
-FREE = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX', 'CODE', 'TABLES', 'D8271N', 'D1770N'}
+FREE = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX', 'MRAMCODE', 'MRAMBSS', 'D8271N', 'D1770N'}
 cfg, dbg = open(sys.argv[1]).read(), open(sys.argv[2]).read()
 start = {m.group(1): int(m.group(2), 16)
          for m in re.finditer(r'^seg\tid=\d+,name="(\w+)",start=0x([0-9A-F]+),size=0x([0-9A-F]+)', dbg, re.M)

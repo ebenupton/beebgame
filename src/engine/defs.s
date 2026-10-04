@@ -24,17 +24,17 @@
         .include "pads.inc"
 
 ; ---------------------------------------------------------------- hardware
-CRTC_IDX  = $FE00                 ; 6845: register number
-CRTC_DAT  = $FE01                 ; 6845: register data
-ULA_CTRL  = $FE20                 ; video ULA control
-ULA_PAL   = $FE21                 ; video ULA palette
-ROMSEL    = $FE30                 ; the paged (sideways) bank
-ACCCON    = $FE34                 ; Master: bit D picks the RAM the CRTC displays
-VIA_ORB   = $FE40                 ; the system VIA
+CRTC_IDX  = $FE00                  ; 6845: register number
+CRTC_DAT  = $FE01                  ; 6845: register data
+ULA_CTRL  = $FE20                  ; video ULA control
+ULA_PAL   = $FE21                  ; video ULA palette
+ROMSEL    = $FE30                  ; the paged (sideways) bank
+ACCCON    = $FE34                  ; Master: bit D picks the RAM the CRTC displays
+VIA_ORB   = $FE40                  ; the system VIA
 VIA_ORA   = $FE41
 VIA_DDRB  = $FE42
 VIA_DDRA  = $FE43
-VIA_T1CL  = $FE44                 ; T1: the rupture chain's step timer
+VIA_T1CL  = $FE44                  ; T1: the rupture chain's step timer
 VIA_T1CH  = $FE45
 VIA_T1LL  = $FE46
 VIA_T1LH  = $FE47
@@ -42,27 +42,27 @@ VIA_ACR   = $FE4B
 VIA_PCR   = $FE4C
 VIA_IFR   = $FE4D
 VIA_IER   = $FE4E
-VIA_ORANH = $FE4F                 ; port A without handshake
-UVIA_IER  = $FE6E                 ; the user VIA's
+VIA_ORANH = $FE4F                  ; port A without handshake
+UVIA_IER  = $FE6E                  ; the user VIA's
 
-IRQ1V     = $0204                 ; the ROM's interrupt entry jumps through it
-ROMSEL_CPY= $FD                   ; ROMSEL's copy: the interrupt restores it (zero page's
+IRQ1V     = $0204                  ; the ROM's interrupt entry jumps through it
+ROMSEL_CPY= $FD                    ; ROMSEL's copy: the interrupt restores it (zero page's
                                   ;  last but two; $FC is the ROM's interrupt entry's A)
 
 ; ---------------------------------------------------------------- banks
 ; The same numbers on both machines (the sockets are patched at boot):
 ;   4  the sprite row loop and blitters, sprites, the expansion tables and SWAPTAB
 ;   5  the same, gather5, sprites, the map at $9C00
-;   6  bank6_entry/drawrect_clip, the tile blitter and the ring work, the level's
+;   6  bank6_entry/draw_rect_clip, the tile blitter and the ring work, the level's
 ;      tiles from $8600
 ;   7  the kernel at the top (resident); below it the game's image -- the level's
 ;      tables, then the logic, the game loop and the rest of the renderer -- or,
 ;      during the menus, the menus' image
 BANK_SPR  = 4
-BANK_TIL1 = 5                     ; the second sprite bank
-BANK_TILES= 6                     ; every level's tile data fits one bank
+BANK_TIL1 = 5                      ; the second sprite bank
+BANK_TILES= 6                      ; every level's tile data fits one bank
 BANK_LVL  = 7
-BANK_MAP  = 5                     ; the map, and the gather that reads it in place
+BANK_MAP  = 5                      ; the map, and the gather that reads it in place
 
 ; ============================================================================
 ; Screen shape
@@ -94,15 +94,15 @@ ROWCHARS  = 80
   .if BHW
 ; ---- Model B: two 23-row rings in main RAM
 RINGROWS  = 23
-VISROWS   = 21                    ; 168 lines = 84 game px
+VISROWS   = 21                     ; 168 lines = 84 game px
   .else
 ; ---- Master: one 32-row ring, main and shadow
 ; VISROWS: 240 lines = 120 game px (the original is 108: a 128-line phone screen less
 ; a 20-line HUD).  30 fills the ring exactly: 31 held + the composed row.
-RINGROWS  = 32                    ; the whole 20K: the hardware fold IS the ring wrap
-VISROWS   = 30                    ; visible char rows
+RINGROWS  = 32                     ; the whole 20K: the hardware fold IS the ring wrap
+VISROWS   = 30                     ; visible char rows
   .endif
-BUFROWS   = VISROWS + 1           ; rows held: the visible ones plus the bottom partial's
+BUFROWS   = VISROWS + 1            ; rows held: the visible ones plus the bottom partial's
 ROWBYTES  = ROWCHARS*8
 RINGCHARS = ROWCHARS*RINGROWS
 RINGBYTES = RINGCHARS*8
@@ -113,10 +113,10 @@ RINGBYTES = RINGCHARS*8
 ; both bases are at xx80, which makes the low byte's fold a subtraction of $80.
 RING_A    = $0A80
 RING_B    = $4680
-RING0     = RING_A                ; buffer 0's ring (the menus' too)
-CLEAR0    = MIRR_A                ; the menus' clear: mirrors and rings, to $8000
-MIRR_A    = RING_A - ROWBYTES     ; ring A's mirror: the row just under its base
-MIRR_B    = RING_B - ROWBYTES     ; ring B's mirror
+RING0     = RING_A                 ; buffer 0's ring (the menus' too)
+CLEAR0    = MIRR_A                 ; the menus' clear: mirrors and rings, to $8000
+MIRR_A    = RING_A - ROWBYTES      ; ring A's mirror: the row just under its base
+MIRR_B    = RING_B - ROWBYTES      ; ring B's mirror
 RINGEND_A = RING_A + RINGBYTES
 RINGEND_B = RING_B + RINGBYTES
 .assert RINGEND_B = $8000 && (RINGEND_A & $FF) = 0, error, "the ring ends must be page aligned"
@@ -141,18 +141,18 @@ QBLANK    = BARADDR + 45*8
 BUF0      = $3000
 .assert (RINGCHARS & $FF) = 0, error, "the ring folds on a high-byte compare"
 RINGBASE  = BUF0
-RING0     = RINGBASE              ; buffer 0's ring (the menus' too)
-CLEAR0    = RINGBASE              ; the menus' clear: buffer 0's ring, to $8000
+RING0     = RINGBASE               ; buffer 0's ring (the menus' too)
+CLEAR0    = RINGBASE               ; the menus' clear: buffer 0's ring, to $8000
 RINGEND   = RINGBASE + RINGBYTES
 ; The composed top row has to be INSIDE the screen: it is per buffer, and anything
 ; below $3000 is only main RAM to the CRTC (the bar gets away with it by being single
 ; buffered and scanned with D = 0).  It lives in the one ring row the window does not
-; hold: the row ABOVE it, ring chars [ringS + BUFROWS*80, ringS + RINGCHARS) =
-; [ringS - 80, ringS).  The window start is char granular (ringS = wcy*80 + wcx), so
+; hold: the row ABOVE it, ring chars [ring_s + BUFROWS*80, ring_s + RINGCHARS) =
+; [ring_s - 80, ring_s).  The window start is char granular (ring_s = wcy*80 + wcx), so
 ; that row is not a slot in the row tables: its column c is ring char
-; (ringS + c + RINGCHARS - 80) mod RINGCHARS, a constant offset from its source, which
+; (ring_s + c + RINGCHARS - 80) mod RINGCHARS, a constant offset from its source, which
 ; makes it a ring row like any other.  It is window aligned, not slot aligned -- a
-; row-aligned slot (barq + 31) would overlap the window's last row by ringS mod 80
+; row-aligned slot (barq + 31) would overlap the window's last row by ring_s mod 80
 ; chars with BUFROWS at 31 -- so its copy may fold at $8000 mid-run (copy_partial).
 ;
 ; The bar is BELOW the screen in memory, in main RAM, and there is only one of it.
@@ -167,11 +167,11 @@ BARADDR   = $2B00
 ; the bar (boot's), in main RAM: Q's step puts D back to 0 before that scanline.
 QBLANK    = BARADDR - ROWBYTES
 .assert LV_OBJS + 6*149 <= QBLANK, error, "QBLANK: the level's objects run into it"
-CRTCBASE  = RINGBASE / 8          ; the CRTC counts characters, so the ring starts here
-CRTCB_A   = CRTCBASE              ; each buffer's ring base, as the CRTC counts: one
-CRTCB_B   = CRTCBASE              ;  ring, main and shadow (ACCCON D picks)
+CRTCBASE  = RINGBASE / 8           ; the CRTC counts characters, so the ring starts here
+CRTCB_A   = CRTCBASE               ; each buffer's ring base, as the CRTC counts: one
+CRTCB_B   = CRTCBASE               ;  ring, main and shadow (ACCCON D picks)
   .endif
-WINPX     = ROWCHARS*2            ; window width in game pixels
+WINPX     = ROWCHARS*2             ; window width in game pixels
 VISLINES  = VISROWS*8
 
 ; ---------------------------------------------------------------- sprites
@@ -202,20 +202,20 @@ REC_XL    = SPRREC+2*MAXREC
 REC_XH    = SPRREC+4*MAXREC
 REC_YL    = SPRREC+6*MAXREC
 REC_YH    = SPRREC+8*MAXREC
-REC_CX    = SPRREC+10*MAXREC        ; the column's low byte
+REC_CX    = SPRREC+10*MAXREC       ; the column's low byte
 REC_CY    = SPRREC+12*MAXREC
 REC_W     = SPRREC+14*MAXREC
-REC_H     = SPRREC+16*MAXREC        ; height | column high << 5 | clipped << 7
-recb      = recp                    ; the buffer's first record
-rq        = rp                      ; the current record
+REC_H     = SPRREC+16*MAXREC       ; height | column high << 5 | clipped << 7
+recb      = recp                   ; the buffer's first record
+rq        = rp                     ; the current record
         .assert BUFROWS < 32, error, "TIGHTBSS: a record's height is 5 bits"
         .assert 2*MAXREC <= 256, error, "TIGHTBSS: the records are indexed by a register"
   .else
 RECSZ     = 10
-REC_CX    = 5                       ; (2 bytes)
+REC_CX    = 5                      ; (2 bytes)
 REC_CY    = 7
 REC_W     = 8
-REC_H     = 9                       ; height | clipped << 7
+REC_H     = 9                      ; height | clipped << 7
   .endif
 
 ; ---------------------------------------------------------------- misc

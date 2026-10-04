@@ -11,28 +11,28 @@
 ; both): the controller, the drive, the physical bank of each of banks 4..7, the board
 dsk_type:  .res 1
 dsk_drv:   .res 1
-dsk_banks: .res 4
+DSK_BANKS: .res 4
 dsk_board: .res 1
         .import __LOWCODE_LOAD__: absolute, __LOWCODE_RUN__: absolute, __LOWCODE_SIZE__: absolute
         .import __TILBSS_RUN__: absolute, __TILBSS_SIZE__: absolute
 boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $7000, the entry $7007"
         sei
-        ldx #$3F                    ; the stack is 64 bytes: $0100-$013F
+        ldx #$3F                   ; the stack is 64 bytes: $0100-$013F
         txs
-        lda #0                      ; zero page $00-$EF (zp,x wrapping) and $0114-$0203,
-        ldx #$F0                    ; the low RAM and the stack above $0113 (nothing is
-:       sta $FF,x                   ; on it yet); interrupts are off until take_over
+        lda #0                     ; zero page $00-$EF (zp,x wrapping) and $0114-$0203,
+        ldx #$F0                   ; the low RAM and the stack above $0113 (nothing is
+:       sta $FF,x                  ; on it yet); interrupts are off until take_over
         sta $0113,x
         dex
         bne :-
         .import __TILBSS_RUN__, __TILBSS_SIZE__
         .assert __TILBSS_RUN__ + __TILBSS_SIZE__ <= TILES + (TOFF+1)*64, error, "bank 6's code and variables run into the first tile: raise TOFF (the game's packer)"
-        ldy #$0F                    ; (A = 0) and zero page $F0-$FF
+        ldy #$0F                   ; (A = 0) and zero page $F0-$FF
 :       sta $F0,y
         dey
         bpl :-
         .assert __LOWCODE_SIZE__ < 256, error, "the low-RAM image is copied a byte at a time"
-@lc:    lda __LOWCODE_LOAD__,x      ; (X = 0) exactly its length: the bar starts at $0300
+@lc:    lda __LOWCODE_LOAD__,x     ; (X = 0) exactly its length: the bar starts at $0300
         sta __LOWCODE_RUN__,x
         inx
         cpx #<__LOWCODE_SIZE__
@@ -41,43 +41,43 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
         sta ROMSEL_CPY
         sta ROMSEL
         wrsel BANK_LVL, BANK_LVL
-        .assert dsk_board = dsk_banks + 4 && PBOARD = PBANK + 4, error, "the board byte follows the banks"
-        .assert dsk_drv = dsk_type + 1 && dsk_banks = dsk_type + 2 && drv_unit = drv_type + 1 && ld_sec = drv_type + 2 && ld_n = drv_type + 4, error, "boot copies the driver's bytes beside the banks"
-        ldx #4                      ; the physical banks and the board, from where the
-@pb:    lda dsk_banks,x             ; loader put them (the loop above has just zeroed
-        sta PBANK,x                 ; the low BSS); and the disc driver's own copies
-        lda dsk_type,x              ; (this piece is screen memory once play starts):
-        sta drv_type,x              ; drv_type, drv_unit, then three bytes of ld_sec and
-        dex                         ; ld_n, which every read writes before it reads them
+        .assert dsk_board = DSK_BANKS + 4 && pboard = PBANK + 4, error, "the board byte follows the banks"
+        .assert dsk_drv = dsk_type + 1 && DSK_BANKS = dsk_type + 2 && drv_unit = drv_type + 1 && ld_sec = drv_type + 2 && ld_n = drv_type + 4, error, "boot copies the driver's bytes beside the banks"
+        ldx #4                     ; the physical banks and the board, from where the
+@pb:    lda DSK_BANKS,x            ; loader put them (the loop above has just zeroed
+        sta PBANK,x                ; the low BSS); and the disc driver's own copies
+        lda dsk_type,x             ; (this piece is screen memory once play starts):
+        sta drv_type,x             ; drv_type, drv_unit, then three bytes of ld_sec and
+        dex                        ; ld_n, which every read writes before it reads them
         bpl @pb
-        ; (the records and the buffers' state: load_level's lvreset, in the game's image)
-        ; MUSON and SFXREQ: the zeros above (both zero page)
-        jsr blank_palette           ; nothing on the screen is a picture until the title
-  .if .not BHW                      ; the Master: its handler's state, in main RAM
-        .import __TABLES_RUN__: absolute, __TABLES_SIZE__: absolute
-        .assert __TABLES_SIZE__ < 256, error, "boot zeroes TABLES with an 8-bit index"
-        ldx #<__TABLES_SIZE__       ; (LOADREQ above all: a load is not under way)
+        ; (the records and the buffers' state: load_level's lv_reset, in the game's image)
+        ; mus_on and sfx_req: the zeros above (both zero page)
+        jsr blank_palette          ; nothing on the screen is a picture until the title
+  .if .not BHW                     ; the Master: its handler's state, in main RAM
+        .import __MRAMBSS_RUN__: absolute, __MRAMBSS_SIZE__: absolute
+        .assert __MRAMBSS_SIZE__ < 256, error, "boot zeroes MRAMBSS with an 8-bit index"
+        ldx #<__MRAMBSS_SIZE__     ; (load_req above all: a load is not under way)
         lda #0
 :       dex
-        sta __TABLES_RUN__,x
+        sta __MRAMBSS_RUN__,x
         bne :-
-        ldx #0                      ; Q's black row (defs.s QBLANK): 640 zeros (A = 0)
+        ldx #0                     ; Q's black row (defs.s QBLANK): 640 zeros (A = 0)
         .assert ROWBYTES > 512 && ROWBYTES <= 768, error, "QBLANK's zeroing: three overlapping pages"
 @qz:    sta QBLANK,x
         sta QBLANK+256,x
-        sta QBLANK+ROWBYTES-256,x   ; (over the second's end: ROWBYTES in all)
+        sta QBLANK+ROWBYTES-256,x  ; (over the second's end: ROWBYTES in all)
         inx
         bne @qz
   .endif
         jsr crtc_init
-        ; both buffers' chains, for a blank window at the origin (ringS, barq, wfine
+        ; both buffers' chains, for a blank window at the origin (ring_s, barq, wfine
         ; are the zeros above), before the interrupt can walk one
         jsr build_sections
-        inc curbuf
+        inc cur_buf
         jsr build_sections
-        dec curbuf                  ; (1 -> 0: build_sections only reads it)
+        dec cur_buf                ; (1 -> 0: build_sections only reads it)
         ; bank 6's variables (TILBSS: the ring work's) zeroed
-        jsr page6                   ; (low RAM's: A = bank 6 after, as wrsel wants)
+        jsr page6                  ; (low RAM's: A = bank 6 after, as wrsel wants)
         wrsel BANK_TILES, BANK_LVL
         .assert __TILBSS_SIZE__ < 256, error, "boot zeroes TILBSS with an 8-bit index"
         ldx #<__TILBSS_SIZE__
@@ -85,8 +85,8 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
 :       dex
         sta __TILBSS_RUN__,x
         bne :-
-        wrback BANK_LVL             ; (the window's end: the write bank 7's from here on)
-        jsr take_over               ; the interrupt: bank 6 still paged, as it was
-        jsr pagelogic               ; bank 7 (low RAM's, the image copied above)
-        jsr disc_init               ; a 1770: reset, and the head found
-        jmp go_title                ; the menus' image, and the title (disc.s)
+        wrback BANK_LVL            ; (the window's end: the write bank 7's from here on)
+        jsr take_over              ; the interrupt: bank 6 still paged, as it was
+        jsr page_logic             ; bank 7 (low RAM's, the image copied above)
+        jsr disc_init              ; a 1770: reset, and the head found
+        jmp go_title               ; the menus' image, and the title (disc.s)

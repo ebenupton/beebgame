@@ -3,7 +3,7 @@ cost the sprite loops least.
 
 The cost is the pointers' page crossings.  A row of a sprite walks its column pointer
 across the image a column (`lines` bytes) at a time, and every page it crosses takes
-the carry path (sprpinc: 9 cycles more than falling through; the mirrored walk's
+the carry path (spr_pinc: 9 cycles more than falling through; the mirrored walk's
 borrow about the same).  The walk of row r starts at base + 8r - lb0, lb0's
 low three bits the sprite's line phase, which is anything: the cost of a placement is
 the carries a draw expects over the eight phases, at the base's offset in its page.
@@ -19,7 +19,7 @@ items in the same room come back the same without the search.
 import hashlib, json, os, random
 
 CARRY = 9.0             # cycles: the carry path over falling through
-BORROW = 7.0            # the mirrored walk's borrow path (sprretM's dec ptr+1)
+BORROW = 7.0            # the mirrored walk's borrow path (spr_retm's dec ptr+1)
 READ = 3.5              # cycles a draw: the (zp),Y reads past a page boundary in an image
 VERSION = 2
 _tables = {}

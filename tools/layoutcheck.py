@@ -4,7 +4,7 @@ code) both builds have must sit at the same address -- the Master's shorter 65C0
 code is padded out to the Model B's, so nothing after it moves.  Code labels may
 differ (a CMOS instruction is shorter); so may the pieces that only run once at
 start-up, and each machine's own data, which the segments LOWHW and KRNHW put after
-the shared (the Master's handler keeps its state in TABLES, main RAM).  Zero page has
+the shared (the Master's handler keeps its state in MRAMBSS, main RAM).  Zero page has
 no exception: every zero-page variable must exist on both machines at one address.
 Exit 1 on any difference.
     python3 tools/layoutcheck.py [modelb_dir=build/modelb] [master_dir=build/master]"""
@@ -15,10 +15,10 @@ def dbgfile(d):                     # (game.dbg; cleo.dbg before the engine was 
     g = os.path.join(d, 'game.dbg')
     return g if os.path.exists(g) else os.path.join(d, 'cleo.dbg')
 
-CODE = {'CODE', 'TILCODE', 'GAMECODE', 'SPR4CODE', 'SPR5CODE', 'MAP5CODE',
+CODE = {'MRAMCODE', 'TILCODE', 'GAMECODE', 'SPR4CODE', 'SPR5CODE', 'MAP5CODE',
         'TIL6ENT', 'MNUCODE', 'LOWCODE', 'D8271C', 'D1770C', 'D8271N', 'D1770N', 'KRNCODE', 'ENGCODE', 'MUSCODE'}
 STARTUP = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX'}      # run once, then overwritten
-OWN = {'LOWHW', 'KRNHW', 'TABLES'}                      # one machine's own, after the shared
+OWN = {'LOWHW', 'KRNHW', 'MRAMBSS'}                      # one machine's own, after the shared
 
 
 def load(d):

@@ -11,7 +11,7 @@
 #   GAME_MAIN    the game's root source (it includes the engine's: see README.md)
 #   GAME_SRC     the game's include directory
 #   GAME_ASSETS  run once per machine (TARGET, BD set): writes build/$TARGET's assets
-#                -- assets.inc, the level files, SPRC, SPRX, BAR, imgtab.bin and what
+#                -- assets.inc, the level files, SPRC, SPRX, BAR, img_tab.bin and what
 #                the game's own sources .incbin -- and build/TILES0-2
 #   GAME_MUSIC   run once first (may be empty)
 #   DISC_TITLE   the disc's title; DISC_OUT the disc image (build/game.ssd); GAME_NAME
@@ -27,7 +27,7 @@
 #   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound
 #                effects (the game's player, resident: its code in HAZEL, say)
 #   TALLMAP=1    maps up to 256 tiles tall (the window's char row keeps its high bits
-#                for drawrect's map row); the Master alone
+#                for draw_rect's map row); the Master alone
 #   DRAWFLAGS=1  the sprite list carries draw flags in the high bits of its x (bit 7:
 #                mirror the image), so one image is drawn either way round
 #   TIGHTBSS=1   the engine's bank 7 variables packed: the sprite records 9 bytes (the
@@ -145,10 +145,10 @@ for pass in 1 2 3; do
         python3 - <<'EOF'
 import re
 want = ['boot','dsk_type','dsk_drv','read_sectors','ld_sec','ld_n','ld_dst',
-        'LV_HDR','LV_OBJS','LV_ATTR0','LV_ALTCLS','TILES','SPR_TABLE','mapshr','MAPSTRIDE','FLATTAB',
-        'half0','halfhi5','halfsub','HLOW','mir0','MIRTAB','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
-        'MAP5','LDZP','BARADDR','STAGE','STAGE_LVL','LDPROG','PBANK','PBOARD','dsk_banks','dsk_board',
-        'ld_img','ld_open','LOADREQ','game_in']
+        'LV_HDR','LV_OBJS','LV_ATTR0','LV_ALTCLS','TILES','DIR_TABLE','map_shr','map_stride','FLATTAB',
+        'half0','halfhi5','half_sub','HLOW','mir0','MIRTAB','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
+        'MAP5','LDZP','BARADDR','STAGE','STAGE_LVL','LDPROG','PBANK','pboard','DSK_BANKS','dsk_board',
+        'ld_img','ld_open','load_req','game_in']
 addr = {}
 import os
 BD = os.environ['BD']
@@ -156,11 +156,11 @@ for l in open(BD + '/labels.txt'):
     p = l.split()
     if len(p) >= 3 and p[0] == 'al':
         addr[p[2].lstrip('.')] = int(p[1], 16)
-# drawrect's @s0f (a cheap label: in the debug info, not labels.txt): the solid's
-# lda #fill, whose operand the loader patches.  Its @ scope is drawrect's, or on the
-# Model B RINGHIOP's (defined at drawrect's head: a symbol starts a new @ scope)
+# draw_rect's @s0f (a cheap label: in the debug info, not labels.txt): the solid's
+# lda #fill, whose operand the loader patches.  Its @ scope is draw_rect's, or on the
+# Model B RINGHIOP's (defined at draw_rect's head: a symbol starts a new @ scope)
 dbg = open(BD + '/game.dbg').read()
-dids = '|'.join(re.findall(r'^sym\tid=(\d+),name="(?:drawrect|RINGHIOP)",', dbg, re.M))
+dids = '|'.join(re.findall(r'^sym\tid=(\d+),name="(?:draw_rect|RINGHIOP)",', dbg, re.M))
 s0f = re.search(r'^sym\tid=\d+,name="@s0f",[^\n]*parent=(?:%s),[^\n]*val=0x([0-9A-F]+)' % dids, dbg, re.M)
 addr['SOLIDF'] = int(s0f.group(1), 16) + 1
 want.append('SOLIDF')
@@ -288,7 +288,7 @@ EOF
     done
     # the boot loader, one for both machines: the start-up header it writes and the
     # entry it jumps to are at the same addresses on both (init.s)
-    [ "$MASTERONLY" = 1 ] || for n in boot dsk_type dsk_drv dsk_banks dsk_board; do
+    [ "$MASTERONLY" = 1 ] || for n in boot dsk_type dsk_drv DSK_BANKS dsk_board; do
         [ "$(grep "^$n = " $B/defs_ld.inc)" = "$(grep "^$n = " $M/defs_ld.inc)" ] || { echo "$n differs between the machines"; exit 1; }
     done
     printf '          .byte "%s"\n' "$GAME_NAME" > build/gamename.inc

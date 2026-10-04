@@ -8,7 +8,7 @@
 ; (loader.s) says which controller and which drive (drv_type, drv_unit).
 ; ============================================================================
         .include "files.inc"        ; the disc's sector table (one disc, both machines)
-  .if BHW                           ; this machine's load-time program
+  .if BHW                          ; this machine's load-time program
 F_LDPROG_SEC = F_LDPROGB_SEC
 F_LDPROG_N   = F_LDPROGB_N
   .else
@@ -16,16 +16,16 @@ F_LDPROG_SEC = F_LDPROGM_SEC
 F_LDPROG_N   = F_LDPROGM_N
   .endif
         .segment "KRNBSS"
-drv_type: .res 1                    ; 0 = 8271, 1 = 1770 (loader.s decides at boot: init.s
-drv_unit: .res 1                    ; copies them here) and the drive DFS had current
-ld_sec:   .res 2                    ; read_sectors: first sector, count, destination
+drv_type: .res 1                   ; 0 = 8271, 1 = 1770 (loader.s decides at boot: init.s
+drv_unit: .res 1                   ; copies them here) and the drive DFS had current
+ld_sec:   .res 2                   ; read_sectors: first sector, count, destination
 ld_n:     .res 1
 ld_dst:   .res 2
 ld_trk:   .res 1
 ld_sc:    .res 1
 ld_cnt:   .res 1
-ld_img:   .res 1                    ; the image in bank 7 (ldprog.s: the test harness reads it)
-ld_open:  .res 1                    ; the disc is still open: go_game's load goes on into
+ld_img:   .res 1                   ; the image in bank 7 (ldprog.s: the test harness reads it)
+ld_open:  .res 1                   ; the disc is still open: go_game's load goes on into
                                     ; the level's (ldprog.s ld_resume clears it: every load ends so)
 
 ; ---------------------------------------------------------------- the drivers
@@ -45,17 +45,17 @@ DRVSLOT    = __DRV8271_START__
 DRV_TRACK  = DRVSLOT
 DRV_NMILEN = DRVSLOT + 3
 DRV_NMI    = DRVSLOT + 4
-LD_RES     = NMIPAGE + $FD            ; the 8271's result
-LD_DONE    = NMIPAGE + $FE            ; the command is over
-LD_SECS    = NMIPAGE + $FF            ; the 1770's sectors to go
+LD_RES     = NMIPAGE + $FD         ; the 8271's result
+LD_DONE    = NMIPAGE + $FE         ; the command is over
+LD_SECS    = NMIPAGE + $FF         ; the 1770's sectors to go
 
 ; ---- the 8271
         .segment "D8271H"
         jmp r8271
         .byte n8271_end - n8271
         .segment "D8271N"           ; (runs at NMIPAGE)
-n8271:                              ; status bit 2 = a byte is ready, otherwise the
-        pha                         ; command has ended
+n8271:                             ; status bit 2 = a byte is ready, otherwise the
+        pha                        ; command has ended
         lda FDC8271_CMD
         and #$04
         beq n8271_x
@@ -67,7 +67,7 @@ n8271_sta:
         inc n8271_sta+2
 :       pla
         rti
-n8271_x: lda FDC8271_PAR             ; the result (reading it clears the interrupt)
+n8271_x: lda FDC8271_PAR           ; the result (reading it clears the interrupt)
         sta LD_RES
         inc LD_DONE
         pla
@@ -81,33 +81,33 @@ n8271_end:
 ; drive is "not ready" ($10) at once, without starting it.  And the 8271 LATCHES not
 ; ready: only a read drive status clears it, so the retry would fail for ever without
 ; one (the title's idle stops the motor).
-r8271:  lda ld_dst                  ; the transfer address, into the stub
+r8271:  lda ld_dst                 ; the transfer address, into the stub
         sta n8271_sta+1
         lda ld_dst+1
         sta n8271_sta+2
         jsr i_idle
-        lda #$40                    ; bits 7,6 select the drive: $40 = 0, $80 = 1
+        lda #$40                   ; bits 7,6 select the drive: $40 = 0, $80 = 1
         ldx drv_unit
         beq :+
         asl
-:       tax                         ; (the helpers keep X)
-        ora #$3A                    ; write special register
+:       tax                        ; (the helpers keep X)
+        ora #$3A                   ; write special register
         sta FDC8271_CMD
         lda #$23
         jsr i_param
         txa
-        ora #$08                    ; select + load head
+        ora #$08                   ; select + load head
         jsr i_param
         jsr i_idle
         txa
-        ora #$2C                    ; read drive status: an immediate command, no
-        sta FDC8271_CMD             ; interrupt -- its result (the status) is read to
-        jsr i_idle                  ; clear it
+        ora #$2C                   ; read drive status: an immediate command, no
+        sta FDC8271_CMD            ; interrupt -- its result (the status) is read to
+        jsr i_idle                 ; clear it
         lda FDC8271_PAR
         lda #0
-        sta LD_DONE                 ; (and the stub's flag, should a controller interrupt after all)
+        sta LD_DONE                ; (and the stub's flag, should a controller interrupt after all)
         txa
-        ora #$13                    ; read data
+        ora #$13                   ; read data
         sta FDC8271_CMD
         lda ld_trk
         jsr i_param
@@ -116,17 +116,17 @@ r8271:  lda ld_dst                  ; the transfer address, into the stub
         lda ld_cnt
         ora #$20
         jsr i_param
-:       lda LD_DONE                 ; the stub's completion flag
+:       lda LD_DONE                ; the stub's completion flag
         beq :-
         lda LD_RES
         and #$1E
-        cmp #1                      ; C = 1: not ready, or a soft error -- the run again
+        cmp #1                     ; C = 1: not ready, or a soft error -- the run again
         rts
-i_idle: lda FDC8271_CMD             ; the 8271 takes a command when not busy
+i_idle: lda FDC8271_CMD            ; the 8271 takes a command when not busy
         bmi i_idle
         rts
-i_param:                            ; and a parameter when the register is free
-        tay                         ; (Y: nothing after read_sectors reads it)
+i_param:                           ; and a parameter when the register is free
+        tay                        ; (Y: nothing after read_sectors reads it)
 :       lda FDC8271_CMD
         and #$20
         bne :-
@@ -138,8 +138,8 @@ i_param:                            ; and a parameter when the register is free
         jmp r1770
         .byte n1770_end - n1770
         .segment "D1770N"           ; (runs at NMIPAGE)
-n1770:                              ; DRQ with busy = a byte, else the command has
-        pha                         ; ended (busy dropped)
+n1770:                             ; DRQ with busy = a byte, else the command has
+        pha                        ; ended (busy dropped)
         lda FDC1770_CMD
         and #3
         cmp #3
@@ -150,9 +150,9 @@ n1770_sta:
         inc n1770_sta+1
         bne :+
         inc n1770_sta+2
-        dec LD_SECS                 ; a whole sector done
+        dec LD_SECS                ; a whole sector done
         bne :+
-        lda #$D0                    ; force interrupt: stop the multi-sector read
+        lda #$D0                   ; force interrupt: stop the multi-sector read
         sta FDC1770_CMD
         inc LD_DONE
 :       pla
@@ -166,7 +166,7 @@ n1770_end:
         .assert n1770_end - n1770 <= $FD, error, "the 1770's stub runs into the page's state"
         .segment "D1770C"
 ; seek if the head is elsewhere, then read multiple
-r1770:  lda ld_dst                  ; the transfer address, into the stub
+r1770:  lda ld_dst                 ; the transfer address, into the stub
         sta n1770_sta+1
         lda ld_dst+1
         sta n1770_sta+2
@@ -177,28 +177,28 @@ r1770:  lda ld_dst                  ; the transfer address, into the stub
         beq @rd
         sta w_trk
         sta FDC1770_DAT
-        lda #$10                    ; seek, no verify
+        lda #$10                   ; seek, no verify
         sta FDC1770_CMD
         jsr w_wait
 @rd:    lda ld_sc
         sta FDC1770_SEC
         lda ld_cnt
         sta LD_SECS
-        lda #$94                    ; read multiple with head settle: the stub stops it
+        lda #$94                   ; read multiple with head settle: the stub stops it
         sta FDC1770_CMD
         ldx #20
 :       dex
         bne :-
 :       lda LD_DONE
-        bne w_wait                  ; (the abort takes a moment to clear busy)
-        lda FDC1770_CMD             ; fallback: the command ended without a completion NMI
-        lsr                         ; busy (bit 0) into C
+        bne w_wait                 ; (the abort takes a moment to clear busy)
+        lda FDC1770_CMD            ; fallback: the command ended without a completion NMI
+        lsr                        ; busy (bit 0) into C
         bcs :-
-w_wait: ldx #20                     ; (and start-up's: init.s disc_init)
+w_wait: ldx #20                    ; (and start-up's: init.s disc_init)
 :       dex
         bne :-
 :       lda FDC1770_CMD
-        lsr                         ; busy (bit 0) into C: C = 0 when it returns
+        lsr                        ; busy (bit 0) into C: C = 0 when it returns
         bcs :-
         rts
 
@@ -208,7 +208,7 @@ w_wait: ldx #20                     ; (and start-up's: init.s disc_init)
 ; 256-byte sectors: the division is by repeated subtraction; each track's run is the
 ; driver's (the slot's DRV_TRACK).
 read_sectors:
-        ldx #$FF                    ; X = track, Y = high byte + 1: ld_sec / 10
+        ldx #$FF                   ; X = track, Y = high byte + 1: ld_sec / 10
         lda ld_sec
         ldy ld_sec+1
         iny
@@ -218,10 +218,10 @@ read_sectors:
         bcs @d10
         dey
         bne @d10
-        adc #10                     ; (C clear) the remainder
+        adc #10                    ; (C clear) the remainder
         stx ld_trk
         sta ld_sc
-@track: lda #10                     ; sectors to read on this track: min(n, 10 - s)
+@track: lda #10                    ; sectors to read on this track: min(n, 10 - s)
 
         sbc ld_sc
         cmp ld_n
@@ -229,7 +229,7 @@ read_sectors:
         lda ld_n
 :       sta ld_cnt
         jsr DRV_TRACK
-        bcs @track                  ; (the 8271: the run again)
+        bcs @track                 ; (the 8271: the run again)
         lda ld_dst+1
 
         adc ld_cnt
@@ -242,11 +242,11 @@ read_sectors:
         lda #0
         sta ld_sc
         inc ld_trk
-        bne @track                  ; (always: the track after one below 80)
+        bne @track                 ; (always: the track after one below 80)
 @done:  rts
 
         .segment "KRNBSS"
-w_trk:    .res 1                    ; the 1770's head, as far as its driver knows
+w_trk:    .res 1                   ; the 1770's head, as far as its driver knows
 
 ; a 1770 is reset and its head found once, at start-up (init.s, main RAM): the 8271
 ; keeps DFS's state and needs nothing
@@ -254,16 +254,16 @@ w_trk:    .res 1                    ; the 1770's head, as far as its driver know
 disc_init:
         lda drv_type
         beq @done
-        lda #FDC_RESET              ; the latch: reset held
+        lda #FDC_RESET             ; the latch: reset held
         sta FDC1770_CTL
-        ldx drv_unit                ; then the drive (and side), FM, reset released
+        ldx drv_unit               ; then the drive (and side), FM, reset released
         lda @drvsel,x
         sta FDC1770_CTL
         nop
-        lda #$00                    ; restore: track 0
+        lda #$00                   ; restore: track 0
         sta FDC1770_CMD
         jsr w_wait
-        stx w_trk                   ; X = 0: w_wait's delay loop ends there
+        stx w_trk                  ; X = 0: w_wait's delay loop ends there
 @done:  rts
 @drvsel: .byte FDC_DRV0, FDC_DRV1, FDC_DRV0|FDC_SIDE1, FDC_DRV1|FDC_SIDE1
         .segment "KRNCODE"
@@ -285,41 +285,41 @@ disc_init:
 ; then hook_image and hook_play, whose first level load goes straight on: ld_open);
 ; go_menu the game's (A = 0 lost, 1 won: the menus' image, then hook_over).
 load_level_b:
-        ldy ld_open                 ; straight on from go_game's image load: the chain is
-        bne ld_on                   ; parked, LDPROG in place
-        .byte $2C                   ; (bit abs: skips the ldx, X kept: the level)
+        ldy ld_open                ; straight on from go_game's image load: the chain is
+        bne ld_on                  ; parked, LDPROG in place
+        .byte $2C                  ; (bit abs: skips the ldx, X kept: the level)
 go_title:
         ldx #LDOP_TITLE
-        .byte $2C                   ; (bit abs: skips the next ldx; LDOP_ is $8x, a read of
-go_game:                            ;  sideways memory, no side effect)
+        .byte $2C                  ; (bit abs: skips the next ldx; LDOP_ is $8x, a read of
+go_game:                           ;  sideways memory, no side effect)
         ldx #LDOP_GAME
         .byte $2C
 go_menu:
         ldx #LDOP_OVER
-ld_go:  pha                         ; A and X across the load, on the stack
+ld_go:  pha                        ; A and X across the load, on the stack
         txa
         pha
-        jsr music_stop              ; (the tune's player is the menus')
-        jsr load_begin              ; the chain parks the CRTC in a standard frame first
-        sei                         ; (engine.s load_begin)
-        ldx DRV_NMILEN              ; the driver's NMI stub to its page (its labels are
-:       lda DRV_NMI-1,x             ; its run addresses there)
+        jsr music_stop             ; (the tune's player is the menus')
+        jsr load_begin             ; the chain parks the CRTC in a standard frame first
+        sei                        ; (engine.s load_begin)
+        ldx DRV_NMILEN             ; the driver's NMI stub to its page (its labels are
+:       lda DRV_NMI-1,x            ; its run addresses there)
         sta NMIPAGE-1,x
         dex
         bne :-
-        lda #<F_LDPROG_SEC          ; and LDPROG to its place
+        lda #<F_LDPROG_SEC         ; and LDPROG to its place
         sta ld_sec
         lda #F_LDPROG_N
         sta ld_n
         lda #>LDPROG
         sta ld_dst+1
-        stx ld_sec+1                ; (X = 0: >F_LDPROG_SEC and <LDPROG)
+        stx ld_sec+1               ; (X = 0: >F_LDPROG_SEC and <LDPROG)
         stx ld_dst
         .assert >F_LDPROG_SEC = 0 && <LDPROG = 0, error, "ld_go: a zero assumed"
         jsr read_sectors
         pla
         tax
         pla
-ld_on:  jmp LDPROG                  ; ld_entry: a level returns, an image goes on
-game_in:                            ; (LDPROG's way to hook_play: a label for the test
-        jmp hook_play               ;  harness, the game's image in, its entry not yet run)
+ld_on:  jmp LDPROG                 ; ld_entry: a level returns, an image goes on
+game_in:                           ; (LDPROG's way to hook_play: a label for the test
+        jmp hook_play              ;  harness, the game's image in, its entry not yet run)

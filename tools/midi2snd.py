@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Convert a MIDI file into a 50Hz 3-voice note stream for the engine's SN76489 music
-player (engine.s music_tick: the game puts the stream at MUSIC_ADDR).
+player (engine.s music_tick: the game puts the stream at music_addr).
 
    python3 beebgame/tools/midi2snd.py <in.mid> <out> [<voices>]
 

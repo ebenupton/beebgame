@@ -52,16 +52,16 @@
 ;   engine/defs.s      constants: hardware, banks, screen shape, records, keys
 ;   engine/vars.s      zero page and every table, by where it lives
 ;   engine/macros.s    the ring-wrapping macros, RUNX
-;   engine/tiles.s     bank 6: drawrect, scroll_validate, select_backbuf,
-;                      the bank's entry (drawrect_clip)
+;   engine/tiles.s     bank 6: draw_rect, scroll_validate, select_backbuf,
+;                      the bank's entry (draw_rect_clip)
 ;   engine/gather.s    bank 5: gather5, a tile row's ids into GATHERL/H
 ;   engine/sprloops.s  banks 4 and 5: the sprite row loops and blitters
 ;   engine/frame.s     bank 7: render_frame and what it calls
 ;   engine/kernel.s    the kernel: the CRTC chain, the interrupt, keyboard, sound,
-;                      load mode, ringaddr7
+;                      load mode, ring_addr7
 ;   engine/menus.s     the menus' image: the tune's player
 ;   engine/boot.s      start-up: the interrupt's takeover, the CRTC's first frame
-;   engine/lowram.s    low RAM: the map access, pagelogic
+;   engine/lowram.s    low RAM: the map access, page_logic
 ;
 ; Beside them: cpu.inc (the two CPUs' spellings, bank patching, the write-bank rule),
 ; defs.inc (addresses shared with the loader), low.s (the crossings, the Model B's
