@@ -1,113 +1,231 @@
 ; ============================================================================
-; engine/kernel.s -- the kernel: the rupture chain, the interrupt, keys and sound
+; engine/kernel.s -- the kernel: the rupture chain and its interrupt, the keys,
+; the sound, the palette
 ;
-; The kernel is the resident part of bank 7: the top of the bank on both machines,
-; there whichever image (the game's or the menus') is swapped in below it, so the menus
-; build their frame with it too.  The interrupt's own work -- the handler body,
-; scan_keys, sound_tick, snd_write -- is placed with PLACEH: in the kernel (KRNCODE) on
-; the Model B, whose low-RAM stub (low.s) pages bank 7 in around it, and in main RAM
-; (CODE) on the Master, whose handler sits at IRQ1V itself.
+; Both machines.  The resident part of bank 7 (KRNCODE): it stays paged in under
+; either image of the bank (the game's or the menus'), so the menus build their
+; frames with it as the game does.  The interrupt's own work -- the handler, the
+; vsync's sound step, scan_keys with the game's key table (keymap.inc),
+; snd_write -- is placed with PLACEH "MRAMCODE", "KRNCODE": in bank 7 on the
+; Model B, where low.s's stub pages the bank in around it, and in main RAM on
+; the Master, whose handler is IRQ1V's target itself (a blessed placement).  The
+; rest is KRNCODE on both.
 ;
-; The display is a rupture: each frame is several CRTC frames ("sections": the bar,
-; the composed row, the playfield, the bottom partial, the blanking), reprogrammed
-; from a chain of VIA T1 interrupts and re-phased at every vsync.  docs/DESIGN.md
-; ("The chain", "Load mode") has the whole story; the timing notes are here.
+; The display is a rupture: each 312-line frame is a chain of CRTC frames
+; ("sections": the bar, the composed row, the playfield, the bottom partial, the
+; blanking), each programmed by a VIA T1 interrupt (a "step") and re-phased at
+; every vsync (CA1).  build_sections lays a buffer's chain out in SECTAB; the
+; interrupt walks it.  docs/DESIGN.md has the design; the timing is here.
 ;
-;   build_sections  fill the current buffer's SECTAB entries from ring_s and wfine
-;   menu_sections   build_sections, with section 0 moved off the bar (the menus)
-;   load_begin      park the CRTC in a standard frame before a disc load
-;   calc_ring       ring_s and barq (and the Model B's wcxm, mrow) from wcx, wcy
-;   isr_body        the interrupt: a chain step (T1) or the vsync (CA1)
-;                   (irq_handler on the Master)
+;   build_sections  the current buffer's chain, for the next flip
+;   menu_sections   build_sections with buffer 0's section 0 moved off the bar
+;   load_begin      stop the chain at a frame boundary before a disc load
+;   calc_ring       ring_s and barq (the Model B: wcxm, mrow too) from wcx, wcy
+;   isr_body        the interrupt's body (the Master: irq_handler, the handler)
 ;   scan_keys       the keyboard into keys
-;   sound_tick      step the sound effect; raise the tune's step (not with GAMESOUND)
-;   snd_write        write A to the SN76489
-;   music_stop      stop the tune and silence all four channels
-;   set_palette     the MODE 1 palette: logical 0..3 = black, cyan, magenta, yellow
+;   snd_write       one byte to the SN76489
+;   music_stop      stop the tune, silence all four channels
+;   set_palette     the MODE 1 palette
 ;   blank_palette   every palette entry black
-;   ring_addr7       the screen address of a ring character, from bank 7
+;   ring_addr7      a ring character's screen address, from bank 7
 ;
-; Segments: KRNCODE, and PLACEH "MRAMCODE", "KRNCODE" for the interrupt's work.
+; Order: as listed, which is the as-built order on both machines (the
+; interrupt's work between the two KRNCODE runs); no code here is under a PAD or
+; SAMEPAGE.
 ; ============================================================================
 
-; ============================================================================
-; build_sections: fill SECTAB for the current buffer from ring_s and wfine
-;   In:   cur_buf, ring_s, wfine;  barq (Model B)
-;   Out:  the buffer's SECTAB entries (SECBYTES bytes from SECTAB + cur_buf*SECBYTES),
-;         and its BUF_SEC0/BUF_SEC0T1 (the bar's address and length, at cur_buf*2);
-;         crtcb (and the Model B's crtcbm) = the buffer's CRTC base
-;   Clobbers A, X, Y, w16, tmp2, tmp3, tmp4.
-;
-; An entry is SECENT (8) bytes (defs.s SE_*):
-;   +0 R12, +1 R13   the NEXT section's start address (high byte first)
-;   +2 R4, +3 R9, +4 R6, +5 R7    this section's shape
-;   +6 T1lo, +7 T1hi the NEXT section's duration, as a T1 latch value
-; The shape is section i's; the address and duration are section i+1's, because
-; R12/R13 latch at the next restart and the T1 latch takes effect one interrupt later.
-;
-; The sections, top to bottom:
-;   T   bar          2 rows, fixed home
-;   A   composed row 8-f lines, the fine scroll                (only when f > 0)
-;   P   playfield    VISROWS rows from the window's slot; the Model B's software
-;                    ring splits it at the ring's end (P1, then M from the mirror
-;                    below the ring base), the Master's CRTC folds its ring itself
-;   P2  bottom       f lines                                   (only when f > 0)
-;   Q   blanking     QROWS rows, vsync at row QVSYNC
-; Section 0 (T) takes its address and length from BUF_SEC0/BUF_SEC0T1, which the
-; vsync programs; the chain stops at Q (the interrupt, below).
-;
-; The Master's step timing (all 0 on the Model B), in us (T1 ticks):
-;   BARLEAD   10  the T1 that ends the bar fires this much early, beyond the lead every
-;                 step has, so the step after the bar's can switch ACCCON D in the
-;                 blanking of the bar's last line.  The section after the bar (entry
-;                 0's duration) runs BARLEAD longer to end where it should.
-;   BARLATE   13  the bar's step fires this much later than when its hold carried it
-;                 (26 cycles): it has no hold now.
-;   STEPLATE  20  so does every step after the one that switches D (39 cycles: the D
-;                 write and the hold).
-; VS2T, the bar's length and entry 0's duration carry them.
-; ============================================================================
+; ---------------------------------------------------------------- chain timing
+; In T1 ticks (us; one tick is two CPU cycles).  Each step fires a lead before
+; the restart it programs (VS2T, below, sets the lead); these move single steps
+; off it.  The values were tuned against test/crtctime.mjs, which shows where
+; each write lands.
+;   BARLATE   the bar's step fires this much later: VS2T carries it (as -STUBLAT
+;             on the Master) and the bar's own duration (BUF_SEC0T1) is that
+;             much shorter, so the steps after it are back in line
+;   BARLEAD   the step after the bar's fires this much earlier still: the bar's
+;             duration is shorter by it and the section after the bar (entry 0's
+;             T1) longer
+;   STEPLATE  every step after the D step fires this much later: the section
+;             after the bar runs this much longer, and the section before Q this
+;             much shorter (Q's step is back on the common lead)
+;   QLEAD     Q's step fires this much early: the section before Q runs it
+;             shorter
+;   P2EARLY   a bottom partial's (P2's) step fires this much early: P runs it
+;             shorter and P2 it longer, so the step before Q's is done in time
+;             behind a two-line P2
+;   DHOLD     the Master's D and Q steps: a dey loop from DHOLD, 26 cycles with
+;             the ldy (2 + 4 x 5 + 4), so their first CRTC write follows the
+;             restart
+;   KENDWAIT  the Model B's two-line P2 step: the same loop before its palette
+;             kill
   .if BHW
-BARLEAD = 0
-BARLATE = 0
+BARLEAD  = 0
+BARLATE  = 0
 STEPLATE = 0
-QLEAD = 40                         ; Q's step: its palette writes start as the line before
-                                    ; Q's goes into its blanking (crtctime)
-P2EARLY = 0                        ; (a two-line P2's step does Q's kill: @kend)
+QLEAD    = 40                      ; the palette kill starts as the line before
+                                   ;  Q goes into its blanking (crtctime)
+P2EARLY  = 0                       ; (a two-line P2's own step does Q's kill:
+                                   ;  @kend)
   .else
-BARLATE = 13
+BARLATE  = 13
 STEPLATE = 20
-BARLEAD = 23
-QLEAD = 6                          ; Q's step: D lands in the blanking before Q (crtctime)
-P2EARLY = 12                       ; a bottom partial's step: early enough behind a 2-line one
-DHOLD = 5                          ; the D step's hold (and Q's): a dey loop of 26 cycles,
-                                    ;  so its first CRTC write follows the restart
+BARLEAD  = 23
+QLEAD    = 6                       ; D = 0 lands in the blanking before Q
+                                   ;  (crtctime)
+P2EARLY  = 12
+DHOLD    = 5
   .endif
-KENDWAIT = 4                       ; (Model B) a two-line P2's step: its wait to the line's
-                                    ;  blanking before the palette kill (crtctime)
-        .segment "KRNCODE"          ; the kernel: the menus build their frame with it too
+KENDWAIT = 4
+
+; VS2T: the T1 count the vsync restarts the chain with, to the bar's step.  The
+; (QROWS-QVSYNC) rows from the vsync's row to the bar, less: 2*LINE, as CA1 is
+; taken at the end of the two-line vsync pulse; 35, which would put each step ~5
+; us into its section, and 36 more, the lead that puts the shape writes early in
+; a section's first scanline; STUBLAT; 8 for the step's load_req test; plus 2,
+; as the vsync loads the count as immediates.  These terms are the old
+; derivation (not re-derived in this pass); the write positions they give are
+; what crtctime measures.
+;
+; STUBLAT: on the Model B the low-RAM stub runs before the body (cld, the X/Y
+; saves, bank 7 paged: 26 cycles), where the Master's handler starts at once and
+; holds instead; 18 - 22 - 4 + 2 is the old account (the stub before page_logic
+; was inlined, less the inlining, less two write-bank stores, plus the cld).  On
+; the Master it is -BARLATE: the bar's step fires later.
+  .if BHW
+STUBLAT  = 18 - 22 - 4 + 2
+  .else
+STUBLAT  = -BARLATE
+  .endif
+VS2T     = (QROWS-QVSYNC)*CHARLINES*LINE - 2*LINE - 35 - 36 - STUBLAT - 8 + 2
+
+; ---------------------------------------------------------------- chain shapes
+PARTR6   = 2                       ; a one-row partial's R6: more rows than it
+                                   ;  has, so the display stays on to its end
+P2SHORT  = 2                       ; the fine scroll whose P2 is two lines
+                                   ;  (wfine is even): its own step must black
+                                   ;  Q's palette
+BUFPAIR  = 2                       ; BUF_SEC0, BUF_SEC0T1, BUF_QS, BUF_KS: bytes
+                                   ;  a buffer (each is indexed by 2 x the
+                                   ;  buffer)
+; MENUBAR: the menus' section 0, the ring rows below the window (menu_sections)
+MENUBAR  = (RING0 + VISROWS*ROWBYTES) / CHARBYTES
+        .assert VISROWS + BARROWS <= RINGROWS, error, "MENUBAR: not in the ring"
+
+; ---------------------------------------------------------------- load mode
+; A disc load runs with interrupts off (disc.s), which stops the chain.  Stopped
+; mid-chain the CRTC repeats whatever section it was in -- a few lines over and
+; over, no vsync -- and a monitor loses sync.  So load_begin asks the interrupt
+; to stop the chain at a frame boundary: the bar's step programs one standard
+; 39-row frame (LDR4) with the vsync on the row the chain puts it (LDR7) and
+; turns T1's interrupt off; the CRTC free-runs that frame, the vsync where it
+; was.  The palette is black through a load (the callers' blank_palette), so
+; what that frame shows does not matter.  load_req (defs.inc LDR_*): LDR_RUN,
+; LDR_STOP (load_begin), LDR_STOPPED (the bar's step), LDR_RESUME (ldprog.s, at
+; a load's end).  At LDR_RESUME the next vsync re-arms T1's interrupt; its
+; re-phase from cur_r7 = LDR7 gives R4 = LDR4, the standard frame's own, so the
+; next bar step takes the display back on time.
+; LDR4: FRAMEROWS - 1, a standard 312-line frame's R4;  LDR7: the vsync's row in
+; the chain's frame
+LDR4     = BARROWS + VISROWS + QROWS - 1
+LDR7     = BARROWS + VISROWS + QVSYNC
+
+; ---------------------------------------------------------------- sound effects
+SFXTONE  = 2                       ; the tone channel the sound effects use
+                                   ;  (with the noise, which SFX_END silences)
+
+; ---------------------------------------------------------------- local macros
+; ----------------------------------------------------------------------------
+; crtcw reg, src [,ix]: CRTC register reg = src (lda's operand: #imm, abs or
+; abs,ix)
+;   Out:   A = the value written;  N, Z from it
+; ----------------------------------------------------------------------------
+.macro crtcw reg, src, ix
+        lda #reg
+        sta CRTC_IDX
+  .if .paramcount = 3
+        lda src,ix
+  .else
+        lda src
+  .endif
+        sta CRTC_DAT
+.endmacro
+
+; ----------------------------------------------------------------------------
+; palfill cy, cm, cc: the palette entries of logical yellow, magenta and cyan,
+; in that order, to physical colours cy, cm, cc -- 12 writes, 72 cycles
+; (lda # 2, sta 4)
+;   Out:   A = the last byte written
+; A MODE 1 logical colour is index bits 3 and 1 (PALIDX_*); bits 2 and 0 are
+; don't cares, run through as i .mod 2 and (i / 2) * 4.  The order is the one
+; the Model B's palette kill needs: the colour that can first show on Q's line 0
+; first (defs.s QBLANK).
+; ----------------------------------------------------------------------------
+.macro palfill cy, cm, cc
+        .repeat 4, i
+        lda #((PALIDX_YELLOW + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (cy ^ PAL_INV)
+        sta ULA_PAL
+        .endrepeat
+        .repeat 4, i
+        lda #((PALIDX_MAGENTA + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (cm ^ PAL_INV)
+        sta ULA_PAL
+        .endrepeat
+        .repeat 4, i
+        lda #((PALIDX_CYAN + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (cc ^ PAL_INV)
+        sta ULA_PAL
+        .endrepeat
+.endmacro
+
+; ----------------------------------------------------------------------------
+; build_sections: lay out the current buffer's section chain, for the next flip
+;   In:    cur_buf (0 or 1);  ring_s, wfine (calc_ring, the frame);  barq
+;   Out:   the buffer's SECTAB entries (from SECTAB + cur_buf*SECBYTES); its
+;          BUF_SEC0 (the bar's CRTC address, high byte first) and BUF_SEC0T1
+;          (the bar's T1 count) and BUF_QS (Q's entry), at 2 x cur_buf (the
+;          Model B: BUF_KS too);  crtcb = the buffer's CRTC base (the Model B:
+;          crtcbm = that less RINGCHARS)
+;   Uses:  A X Y, w16, tmp2, tmp3, tmp4
+;   Pre:   bank 7 paged
+; Called once a frame (frame.s, after calc_ring), by menu_sections, and at
+; start-up (init.s, for each buffer).  An entry is SECENT bytes (defs.s SE_*):
+; the section's shape (R4, R9, R6, R7), then the NEXT section's start address
+; (R12, R13) and duration (a T1 latch value): R12/R13 latch at the next restart
+; and a T1 latch takes effect when the counter next reloads, so each step arms
+; the section after the one it shapes.  The chain, top to bottom (f = wfine, 0,
+; 2, 4 or 6):
+;   T   the bar: BARROWS rows from BARCRTC (entry 0's shape; its address and
+;       duration are BUF_SEC0/BUF_SEC0T1, which the vsync programs)
+;   A   f > 0 only: 8-f lines of the ring row above the window (the composed
+;       row)
+;   P   the playfield from the window: VISROWS rows, VISROWS-1 when f > 0.  The
+;       Model B's ring does not wrap in hardware: a run that reaches the ring's
+;       end is split there, P1, then M, read from the mirror row below the
+;       ring's base
+;   P2  f > 0 only: the top f lines of the row below
+;   Q   QROWS rows of blanking with the vsync on row QVSYNC; the chain stops
+;       here
+; ----------------------------------------------------------------------------
+        .segment "KRNCODE"
 build_sections:
-        ; ---- the buffer's CRTC base, and the Model B's mirror redirect (the same less
-        ;      the ring)
+        ; ---- the buffer's CRTC base (Model B: and its mirror redirect)
         ldx cur_buf
         lda @cbl,x
         sta crtcb
         lda @cbh,x
         sta crtcb+1
-  .if BHW
+  .if BHW                          ; hardware: the Model B's mirror
         lda @cml,x
         sta crtcbm
         lda @cmh,x
         sta crtcbm+1
   .endif
-        ; ---- section 0 is the bar: a fixed address and length, in BUF_SEC0/BUF_SEC0T1
-        txa                        ; X = cur_buf still (ldx cur_buf above)
+        ; ---- section 0, the bar: a fixed address and length
+        txa
         asl
-        tay                        ; Y = cur_buf*2, and Z from it
-        ; ---- X = entry 0 of the buffer (0 or SECBYTES)
-        beq :+
+        tay                        ; Y = 2 x cur_buf;  Z = 1 for buffer 0
+        beq @entry0                ; X = entry 0: 0, or SECBYTES for buffer 1
         ldx #SECBYTES
-:       lda #>BARCRTC
+@entry0:
+        lda #>BARCRTC
         sta BUF_SEC0,y
         lda #<BARCRTC
         sta BUF_SEC0+1,y
@@ -115,11 +233,10 @@ build_sections:
         sta BUF_SEC0T1,y
         lda #>(BARROWS*CHARLINES*LINE-T1_RELOAD-BARLEAD-BARLATE)
         sta BUF_SEC0T1+1,y
-        ; ---- the bar's shape
         lda #BARROWS-1
         sta SECTAB+SE_R4,x
         .assert BARROWS = 2, error, "build_sections: the bar's R6 is its R4 doubled"
-        asl                        ; BARROWS-1 -> BARROWS (C = 0 out, as the asl of cur_buf left it)
+        asl                        ; R6 = BARROWS
         sta SECTAB+SE_R6,x
         lda #CHARLINES-1
         sta SECTAB+SE_R9,x
@@ -128,134 +245,135 @@ build_sections:
         lda wfine
         beq @coarse
 
-        ; ---- f > 0: T -> A (the composed row) -> P.. -> P2 -> Q
-        ;      A is the 80 chars above the window: w16 = ring_s - 80, folded into the ring
+        ; ---- f > 0: T, A, P, P2, Q.  A is the 80 chars before the window:
+        ;      w16 = ring_s - 80, folded into the ring
         lda ring_s
         sec
         sbc #<ROWCHARS
         sta w16
         lda ring_s+1
         sbc #0
-        bpl :+
+        bpl @aplus                 ; no borrow out of the ring's start
   .if .lobyte(RINGCHARS)
-        lda w16                    ; negative: C = 0 (the borrow), A = $FF
-        adc #<RINGCHARS            ; + RINGCHARS
+        lda w16                    ; C = 0 (the borrow), A = $FF
+        adc #<RINGCHARS
         sta w16
         lda #>(RINGCHARS-$100)     ; $FF + >RINGCHARS + C
         adc #0
   .else
-        adc #>RINGCHARS            ; negative: C = 0, A = $FF; RINGCHARS's low byte is 0
+        adc #>RINGCHARS            ; C = 0, A = $FF; RINGCHARS's low byte is 0
   .endif
-:       sta w16+1
+@aplus: sta w16+1
         jsr @addr                  ; A's address, into entry 0
         lda wfine
         eor #CHARLINES-1           ; 7 - f: A's R9
         sta SECTAB+SECENT+SE_R9,x
-  .if BHW
-        clc                        ; (the Master's @addr leaves C = 0; the B's mirror add can carry)
+  .if BHW                          ; hardware: the Model B's @addr may leave
+        clc                        ;  C = 1 (its mirror path's add carries)
   .endif
-        adc #1                     ; 8-f lines of it
-        jsr @dur                   ; A's duration into entry 0; X = A's entry
-        stz SECTAB+SE_R4,x         ; R4 = 0: one row
-        lda #2                     ; R6: more rows than the section has, so the display
-        sta SECTAB+SE_R6,x         ;  stays on to its end
+        adc #1                     ; 8 - f lines
+        jsr @dur                   ; A's duration, into entry 0;  X = A's entry
+        stz SECTAB+SE_R4,x         ; R4 = 0: one row (A dead: reloaded next)
+        lda #PARTR6
+        sta SECTAB+SE_R6,x
         lda #R7_NEVER
         sta SECTAB+SE_R7,x
-        ;      the run starts one row into the window (C = 0: @dur's adc #SECENT)
-        lda ring_s
-        adc #<ROWCHARS
+        lda ring_s                 ; the run starts one row into the window
+        adc #<ROWCHARS             ;  (C = 0 from @dur)
         sta w16
         lda ring_s+1
         adc #0
         sta w16+1
         jsr @wrap
-  .if BHW
-        ldy barq                   ; the ring row the run starts on: barq+1,
-        iny                        ; folded
+  .if BHW                          ; hardware: the Model B's mirror
+        ldy barq                   ; the run's first ring row: barq + 1, folded
+        iny
         cpy #RINGROWS
-        bcc :+
+        bcc @rowsf
         ldy #0
-:
+@rowsf:
   .endif
         lda #VISROWS-1
-        bne @rows                  ; always: A = VISROWS-1
+        bne @rows                  ; (always)
 
-        ; ---- f = 0: T -> P.. -> Q
+        ; ---- f = 0: T, P, Q
 @coarse:
         lda ring_s
         sta w16
         lda ring_s+1
         sta w16+1
-  .if BHW
+  .if BHW                          ; hardware: the Model B's mirror
         ldy barq
   .endif
         lda #VISROWS
 @rows:
-  .if BHW
+  .if BHW                          ; hardware: the Model B's mirror
         sty tmp3                   ; the ring row the run starts on
   .endif
-        sta tmp4                   ; rows in the run
+        sta tmp4                   ; the run's rows
 
-        ; ---- the playfield run.  w16 = its ring offset, tmp4 = its rows, X = the entry
-        ;      before it (tmp3 = the ring row it starts on, Model B)
-@run:
-  .if BHW
-        ; Model B: the rows of the run that end before the ring end.  With
-        ; r = ring_s mod 80 non-zero the last ring row straddles the end, so the rows
-        ; that fit are RINGROWS-1 - tmp3; with r = 0, RINGROWS - tmp3.
+        ; ---- the playfield.  w16 = its first row's ring offset, tmp4 = its
+        ;      rows, X = the entry before it;  Model B: tmp3 = its first ring
+        ;      row
+  .if BHW                          ; hardware: the Model B's mirror
+        ; The rows that end before the ring's end: with r = ring_s mod 80 > 0
+        ; the last ring row straddles the end, so RINGROWS-1 - tmp3; with r = 0,
+        ; RINGROWS - tmp3.  If the run is longer, emit P1 to the end, then the
+        ; rest (M) from the mirror.
         ldy barq
         lda ring_s
-        eor mul_rowlo,y            ; 0 iff r = 0 (the low bytes match)
+        eor mul_rowlo,y            ; 0 iff r = 0 (ring_s - barq*80 < 80)
         cmp #1                     ; C = 1 iff r > 0
-        lda tmp3                   ; RINGROWS - tmp3 - C, as ~(tmp3 + C + $FF-RINGROWS):
-        adc #$FF-RINGROWS          ; with r = 0 the whole last row fits too
-:       eor #$FF                   ; (':' kept for the anonymous labels' count)
+        lda tmp3                   ; RINGROWS - tmp3 - C, as the complement of
+        adc #$FF-RINGROWS          ;  tmp3 + C + $FF - RINGROWS
+        eor #$FF
         cmp tmp4
         bcs @one                   ; the whole run fits
-        tay                        ; Z from A (Y is dead: @emit's @addr reloads it)
-        beq @one                   ; starts in the straddling row: all of it folds
+        tay                        ; Z from A (Y is dead: @addr reloads it)
+        beq @one                   ; it starts in the straddling row: all from
+                                   ;  the mirror
         sta tmp2
-        jsr @emit                  ; P1: up to the ring end
-        lda tmp4                   ; the rest, M, from the mirror
+        jsr @emit                  ; P1, up to the ring's end
+        lda tmp4                   ; M: the rest
         sec
         sbc tmp2
         sta tmp4
   .endif
 @one:   lda tmp4
         sta tmp2
-        jsr @emit                  ; and past it: now the row below the playfield
-        jsr @addr                  ; ... P2's start, or Q's
+        jsr @emit                  ; w16 = the row below the playfield
+        jsr @addr                  ; P2's address, or Q's
         lda wfine
-        beq @sq2
+        beq @qentry
 
         ; ---- P2: the top f lines of that row
-        jsr @dur                   ; A = f lines; X = P2's entry
+        jsr @dur                   ; A = f lines;  X = P2's entry
         stz SECTAB+SE_R4,x         ; R4 = 0 (A dead: reloaded next)
         lda wfine
-        sbc #0                     ; C = 0 from @dur's adc #SECENT: f - 1
+        sbc #0                     ; f - 1 (C = 0 from @dur)
         sta SECTAB+SE_R9,x
-        lda #VISROWS               ; R6: more rows than the partial has: the display on
+        lda #VISROWS               ; R6: more rows than it has
         sta SECTAB+SE_R6,x
   .if VISROWS <> R7_NEVER
         lda #R7_NEVER
   .endif
         sta SECTAB+SE_R7,x
 
-        ; ---- Q: blanking and the vsync; it hands the chain back to the bar.  Its
-        ; start (entry X's next address) is a black line whatever the fine scroll:
-        ; a 6845 shows a frame's first scanline whatever R6 says, so Q's line 0 is
-        ; one line more under the picture -- as the next map row it would be junk
-        ; at the map's bottom, and a repeat of P2's first line under a fine scroll.
-        ; (QBLANK: defs.s -- the Master's 640 zeroed bytes below the bar; the Model
-        ; B's own bar, until its palette can blank that scanline.)
-@sq2:   lda #>(QBLANK / CHARBYTES) ; = >BARCRTC: Q hands the chain back to the bar
-        .assert >(QBLANK / CHARBYTES) = >BARCRTC, error, "QBLANK and the bar must share a CRTC high byte"
+        ; ---- Q.  Its line 0 shows whatever R6 says (a 6845 displays a frame's
+        ;      first scanline), so its address is QBLANK, a line of black
+        ;      (defs.s: the Master's zeroed row below the bar; the Model B's bar
+        ;      line 0 from char 45, with Q's step blacking the palette).  Entry
+        ;      X (the one before Q) arms that address and Q's duration; Q's
+        ;      entry arms the bar's address.
+@qentry:
+        lda #>(QBLANK / CHARBYTES)
+        .assert >(QBLANK / CHARBYTES) = >BARCRTC, error, "QBLANK: not BARCRTC's page"
         sta SECTAB+SE_R12,x
         sta SECTAB+SECENT+SE_R12,x
         lda #<(QBLANK / CHARBYTES)
         sta SECTAB+SE_R13,x
-        ; X stays the entry before Q; Q's entry is X + SECENT
-        lda #<(IDLE_LINES*LINE-T1_RELOAD)   ; the previous section's T1 and Q's
+        ; Q's duration and the next: the chain rests on Q until the vsync
+        lda #<(IDLE_LINES*LINE-T1_RELOAD)
         sta SECTAB+SE_T1L,x
         sta SECTAB+SECENT+SE_T1L,x
         lda #>(IDLE_LINES*LINE-T1_RELOAD)
@@ -269,106 +387,111 @@ build_sections:
         sta SECTAB+SECENT+SE_R9,x
         stz SECTAB+SECENT+SE_R6,x  ; R6 = 0: display off (A dead: reloaded next)
         lda #QVSYNC
-        sta SECTAB+SECENT+SE_R7,x  ; R7: the only entry whose R7 is this
-        ; ---- Q's step fires early, by QLEAD: the section before Q -- whose duration the
-        ;      entry before that carries -- runs STEPLATE + QLEAD shorter.  The Master's
-        ;      puts D back to 0 before Q's first scanline (QBLANK is main RAM: under
-        ;      $3000, D = 1 would read HAZEL/ANDY), as the D step does; the Model B's
-        ;      blacks the palette for it, from the line before's blanking.  The vsync
-        ;      takes this buffer's Q entry from BUF_QS into qsect.
-        lda cur_buf                ; Y = 2 x the buffer (C = 0: cur_buf is 0 or 1)
+        sta SECTAB+SECENT+SE_R7,x  ; the only such R7: the chain stops here
+
+        ; ---- Q's step fires QLEAD early: the section before Q, whose duration
+        ;      entry X-SECENT carries, runs STEPLATE + QLEAD shorter.  The vsync
+        ;      takes Q's entry from BUF_QS (qsect).
+        lda cur_buf
         asl
-        tay
-        txa                        ; Q's entry: X + SECENT (C = 0 out: X <= 80)
-        adc #SECENT
+        tay                        ; Y = 2 x cur_buf (C = 0: cur_buf < $80)
+        txa
+        adc #SECENT                ; Q's entry (C = 0 out: X < $F8)
         sta BUF_QS,y
-  .if BHW
-        ; the Model B: behind a two-line P2 (f < 3) that P2's step kills the palette
-        ; (ksect), else Q's (qsect); SECT_NONE, never an entry, is neither.  Q's step
-        ; then fires on time: early, its flag could be set before P2's step clears it
+  .if BHW                          ; hardware: the Model B's palette kill
+        ; Behind a two-line P2 (f = P2SHORT) P2's step kills the palette
+        ; (BUF_KS = P2's entry) and Q's step does not (BUF_QS = SECT_NONE, never
+        ; an entry); Q's step then fires on time: early, Q's interrupt could be
+        ; taken before P2's step had done.  Otherwise Q's step does it (BUF_KS =
+        ; SECT_NONE).
         lda wfine
-        beq @k1                    ; (f = 0: Q's, after a whole row)
-        cmp #3                     ; (f = 2: a two-line P2)
-        bcs @k1
-        txa                        ; P2's entry: X
-        sta BUF_KS,y
+        beq @qkill                 ; (f = 0: Q's step)
+        cmp #P2SHORT+1
+        bcs @qkill
+        txa
+        sta BUF_KS,y               ; P2's entry
         lda #SECT_NONE
         sta BUF_QS,y
-        bne @q3                    ; (always)
-@k1:    lda #SECT_NONE
+        bne @barlead               ; (always)
+@qkill: lda #SECT_NONE
         sta BUF_KS,y
   .endif
   .if P2EARLY
-        lda wfine                  ; a bottom partial's step fires P2EARLY early (its
-        beq @qa                    ; writes still follow its restart), so the step before
-        lda SECTAB-2*SECENT+SE_T1L,x   ; Q's is done in time behind a two-line one: P ends
-        sec                        ; P2EARLY sooner, and P2 runs it longer -- Q's lead
-        sbc #P2EARLY               ; less P2EARLY, in one subtraction
+        ; with a P2: P's duration (entry X-2*SECENT's) P2EARLY shorter, and
+        ; P2's (X-SECENT's) STEPLATE+QLEAD-P2EARLY shorter
+        lda wfine
+        beq @nop2
+        lda SECTAB-2*SECENT+SE_T1L,x
+        sec
+        sbc #P2EARLY
         sta SECTAB-2*SECENT+SE_T1L,x
-        bcs @q2
+        bcs @p2dur
         dec SECTAB-2*SECENT+SE_T1H,x
-@q2:    lda SECTAB-SECENT+SE_T1L,x
+@p2dur: lda SECTAB-SECENT+SE_T1L,x
         sec
         sbc #STEPLATE+QLEAD-P2EARLY
-        bra @qb
-@qa:
+        bra @qlead                 ; (Master-only by P2EARLY's value)
+@nop2:
   .endif
         lda SECTAB-SECENT+SE_T1L,x
-  .if BHW
+  .if BHW                          ; hardware: C from the palette-kill block
         sec
         sbc #STEPLATE+QLEAD
   .else
-        sbc #STEPLATE+QLEAD-1      ; C = 0 (the adc #SECENT above): - (STEPLATE+QLEAD)
+        sbc #STEPLATE+QLEAD-1      ; C = 0 (the adc #SECENT): - (STEPLATE+QLEAD)
   .endif
-@qb:    sta SECTAB-SECENT+SE_T1L,x
-        bcs @q3
+@qlead: sta SECTAB-SECENT+SE_T1L,x
+        bcs @barlead
         dec SECTAB-SECENT+SE_T1H,x
-@q3:
+@barlead:
   .if BARLEAD
-        clc                        ; (the adc below wants C = 0)
-        ; ---- the Master: the T1 that ends the bar fired BARLEAD early, so the section
-        ;      after the bar -- whose duration entry 0 carries -- runs BARLEAD longer to
-        ;      end where it should; and the steps after the D step's fire STEPLATE later
+        ; ---- the section after the bar (entry 0's duration) runs BARLEAD +
+        ;      STEPLATE longer: the bar's step ended the bar BARLEAD early, and
+        ;      the steps after the D step fire STEPLATE late
+        clc
         ldx cur_buf
         beq @e0
         ldx #SECBYTES
 @e0:    lda SECTAB+SE_T1L,x
-        adc #BARLEAD+STEPLATE      ; C = 0 (@q1's clc)
+        adc #BARLEAD+STEPLATE      ; (C = 0: the clc)
         sta SECTAB+SE_T1L,x
-        bcc @e1
+        bcc @e0done
         inc SECTAB+SE_T1H,x
-@e1:
+@e0done:
   .endif
         rts
 
         ; ---- the buffers' CRTC bases, and the Model B's mirror redirects
 @cbl:   .byte <CRTCB_A, <CRTCB_B
 @cbh:   .byte >CRTCB_A, >CRTCB_B
-  .if BHW
+  .if BHW                          ; hardware: the Model B's mirror
 @cml:   .byte <(CRTCB_A-RINGCHARS), <(CRTCB_B-RINGCHARS)
 @cmh:   .byte >(CRTCB_A-RINGCHARS), >(CRTCB_B-RINGCHARS)
   .endif
 
-; ---- @addr: SECTAB+0/1,x = the CRTC address of the row at ring offset w16
-;   Out:  C = 0 (from the add, which cannot carry out);  Y = w16+1
-; On the Model B a row starting past RINGCHARS-80 straddles the ring end and is read
-; from the mirror below the base, which is exactly the address w16 - RINGCHARS names.
+; ---- @addr: entry X's R12/R13 = the CRTC address of the row at ring offset w16
+;   Out:   Y = w16+1;  C = 0, but on the Model B's mirror path C = 1
+;   Uses:  A Y
+; Model B: a row starting past RINGCHARS-80 straddles the ring's end and is read
+; from the mirror below the base, which is the address w16 - RINGCHARS names
+; (crtcbm).  The Master's CRTC wraps the ring itself.
 @addr:  lda w16
         ldy w16+1
-  .if BHW
+  .if BHW                          ; hardware: the Model B's mirror
         cpy #>(RINGCHARS-ROWCHARS+1)
-        bcc :++
-        bne :+
+        bcc @plain
+        bne @mirror
         cmp #<(RINGCHARS-ROWCHARS+1)
-        bcc :++
-:       clc                        ; straddles: from the mirror
+        bcc @plain
+@mirror:
+        clc
         adc crtcbm
         sta SECTAB+SE_R13,x
         tya
-        adc crtcbm+1
+        adc crtcbm+1               ; (carries: crtcbm < 0 <= the sum)
         sta SECTAB+SE_R12,x
         rts
-:                                  ; (C = 0: both ways here are a bcc)
+@plain:                            ; (C = 0: both ways here are a bcc)
   .else
         clc
   .endif
@@ -379,25 +502,25 @@ build_sections:
         sta SECTAB+SE_R12,x
         rts
 
-; ---- @emit: a run of tmp2 rows starting at ring offset w16, following entry X, then
-;   on into @advance past it
-;   Out:  its address and duration in entry X; X = the run's entry, its shape filled;
-;         w16 = the row after the run
+; ---- @emit: entry X arms a run of tmp2 rows (>= 1) from ring offset w16; X =
+;      the run's entry, its shape written; on into @advance
+;   Out:   X = the run's entry;  w16 = the row after the run, folded
+;   Uses:  A Y, tmp3
 @emit:  jsr @addr
         lda tmp2
         jsr @lines                 ; X = the run's entry
         lda tmp2
-        sbc #0                     ; C = 0 out of the adc: tmp2 - 1
+        sbc #0                     ; R4 = tmp2 - 1 (C = 0 from @lines)
         sta SECTAB+SE_R4,x
         lda #CHARLINES-1
         sta SECTAB+SE_R9,x
-        lda #R7_NEVER              ; R6 = R7 = R7_NEVER: more rows than the run has, so
-        sta SECTAB+SE_R6,x         ;  the display stays on and no vsync falls in it
+        lda #R7_NEVER              ; R6 = R7 = R7_NEVER, more rows than the run:
+        sta SECTAB+SE_R6,x         ;  the display stays on, no vsync falls in it
         sta SECTAB+SE_R7,x
-        lda tmp2                   ; (no rts: on into @advance, A = the rows)
+        lda tmp2
 
-        ; ---- @advance: A = rows: advance w16 by that many rows, folding into
-        ;      0..RINGCHARS (@wrap: the fold alone)
+; ---- @advance: w16 += A rows (A <= RINGROWS), folded into 0..RINGCHARS-1
+;   Uses:  A Y
 @advance:
         tay
         clc
@@ -407,41 +530,45 @@ build_sections:
         lda w16+1
         adc mul_rowhi,y
         sta w16+1
-@wrap:                             ; A = w16+1: both ways in have just stored it
-        cmp #>RINGCHARS
-        bcc :++
-        bne :+
+
+; ---- @wrap: fold w16 (< 2 x RINGCHARS) into 0..RINGCHARS-1
+;   In:    A = w16+1 (both ways in have just stored it)
+;   Uses:  A
+@wrap:  cmp #>RINGCHARS
+        bcc @wrapped
+        bne @fold
         lda w16
         cmp #<RINGCHARS
-        bcc :++
-:       lda w16                    ; C = 1: both ways here
+        bcc @wrapped
+@fold:  lda w16                    ; C = 1: both ways here
         sbc #<RINGCHARS
         sta w16
         lda w16+1
         sbc #>RINGCHARS
         sta w16+1
-:       rts
+@wrapped:
+        rts
 
-        ; ---- @lines: A = rows -> entry X's T1 = that many rows of lines (as @dur,
-        ;      into which it falls)
-        ; ---- @dur: A = lines, X = an entry -> its T1lo/T1hi (SECTAB+SE_T1L/H,x) = the
-        ;      T1 count that lasts that long (tmp3 = the high byte); then X = the next
-        ;      entry (C = 0).  A line is LINE (64) T1 ticks; the count is lines*LINE -
-        ;      T1_RELOAD.
-        .assert LINE = 64 && CHARLINES = 8 && T1_RELOAD = 2, error, "@dur's shifts and its sbc #1 (with C = 0) are LINE's, CHARLINES's and T1_RELOAD's"
+; ---- @lines: entry X's T1 = A rows (< 32) of lines; on into @dur
+; ---- @dur: entry X's T1 (SE_T1L/H) = A lines: A*LINE - T1_RELOAD; X += SECENT
+;   Out:   X = the next entry;  C = 0;  tmp3 = the T1 high byte
+;   Uses:  A, tmp3
+; tmp3:A = A*64 as (A*256) >> 2: the two bits shifted out of A land in the low
+; byte.
+        .assert LINE = 64 && CHARLINES = 8 && T1_RELOAD = 2, error, "@dur's shifts"
 @lines: asl
         asl
         asl
-@dur:   lsr                        ; n*64 == (n*256)>>2
+@dur:   lsr
         sta tmp3
         lda #0
         ror
         lsr tmp3
-        ror
-        sbc #1                     ; C = 0 out of the ror pair: A - 2
-        bcs :+
+        ror                        ; C = 0: A's bit 0 was 0
+        sbc #1                     ; - T1_RELOAD
+        bcs @durhi
         dec tmp3
-:       sta SECTAB+SE_T1L,x
+@durhi: sta SECTAB+SE_T1L,x
         lda tmp3
         sta SECTAB+SE_T1H,x
         txa
@@ -451,16 +578,15 @@ build_sections:
         rts
 
 ; ----------------------------------------------------------------------------
-; menu_sections: the menus' frame
-;   Out:  as build_sections, then buffer 0's section 0 moved to MENUBAR
-; build_sections, then buffer 0's first section (the bar's, in play) shows two ring
-; rows below the window instead: the menus never draw there and clear_ring has made
-; them black, so the menus look as they did but the bar is neither shown nor touched
-; while they run -- it is laid once and left in place.
+; menu_sections: build_sections for the menus, without the bar
+;   In:    as build_sections, with cur_buf = 0 (menu.s)
+;   Out:   as build_sections, then buffer 0's section 0 address = MENUBAR
+;   Uses:  A X Y, w16, tmp2, tmp3, tmp4
+;   Pre:   bank 7 paged
+; Section 0 shows two ring rows below the window instead of the bar: the menus
+; never draw there and menu.s clear_ring has made them black, so the bar is
+; neither shown nor touched while the menus run.
 ; ----------------------------------------------------------------------------
-        .segment "KRNCODE"
-MENUBAR  = (RING0 + VISROWS*ROWBYTES) / CHARBYTES
-        .assert VISROWS + BARROWS <= RINGROWS, error, "the menus' bar rows must be in the ring"
 menu_sections:
         jsr build_sections
         lda #>MENUBAR
@@ -469,293 +595,220 @@ menu_sections:
         sta BUF_SEC0+1
         rts
 
-; ============================================================================
-; The load mode
-;
-; A disc load stops the chain: the loader runs with interrupts off (disc.s).  Stopped
-; mid-chain the CRTC repeats whatever section it was in -- a few lines over and over,
-; no vsync -- and monitors and capture cards drop out of sync and take seconds to come
-; back, so a level's first moments are missed.  So a load first asks the chain to stop
-; at a frame boundary: the next bar step programs a standard 39-row frame instead of
-; the bar, with the vsync on the row the chain puts it, so the sync never moves, and
-; turns the T1 interrupt off.  The palette is black throughout, so what the frame
-; shows does not matter.
-;
-; load_req (defs.inc LDR_*): 0 running, 1 stop asked (load_begin), 2 stopped (the bar
-; step, @ldsw), 3 resume asked (the load's end, ldprog.s ld_resume).  At 3 the next
-; vsync re-arms the chain: its re-phase writes R4 = cur_r7 + QROWS-1-QVSYNC, which with
-; cur_r7 = LDR7 is the standard frame's own total, and the bar step at that frame's end
-; takes the display back as if it had never stopped.
-;
-; On both machines the switch is the interrupt's bar step (@ldsw), so it happens at
-; the frame boundary however long the handler's other work runs.  (Polling for the
-; bar's T1 with interrupts off does not: when the vsync's own work runs past that T1,
-; the switch lands one section late and makes a short frame.)
-; ============================================================================
-LDR4 = BARROWS + VISROWS + QROWS - 1      ; 38: a standard 312-line frame
-LDR7 = BARROWS + VISROWS + QVSYNC  ; the row the chain's vsync is on
-
 ; ----------------------------------------------------------------------------
-; load_begin: ask the chain to stop at the next frame boundary, and wait until it has
-;   Out:  load_req = LDR_STOPPED;  A = LDR_STOP, C = 0
-; Interrupts must be on: the interrupt makes the switch.
+; load_begin: ask the interrupt to stop the chain at the next frame boundary,
+; and wait until it has (the load mode: the equates above)
+;   Out:   load_req = LDR_STOPPED;  A = LDR_STOP;  C = 0, Z = 0
+;   Uses:  A
+;   Pre:   interrupts enabled (the interrupt makes the switch)
 ; ----------------------------------------------------------------------------
 load_begin:
         lda #LDR_STOP
-        sta load_req               ; stop asked
-:       cmp load_req               ; still LDR_STOP until the bar step stores LDR_STOPPED
-        beq :-
+        sta load_req
+@wait:  cmp load_req               ; until the bar's step stores LDR_STOPPED
+        beq @wait
         rts
 
-; ============================================================================
-; calc_ring: the window's place in the ring
-;   In:   wcx (16 bits), wcy
-;   Out:  ring_s = ((wcy mod RINGROWS) * 80 + wcx) mod RINGCHARS
-;         barq  = ring_s / 80, the window's slot
-;         Model B: wcxm = ring_s mod 80, where the window starts in its slot;
-;                  mrow = the map row shown by the window row in the last slot
-;   Clobbers A, X, Y.
-; ============================================================================
-        .segment "KRNCODE"          ; the kernel, with the row multiples
+; ----------------------------------------------------------------------------
+; calc_ring: where the window sits in the ring
+;   In:    wcx (16 bits), wcy
+;   Out:   ring_s = ((wcy mod RINGROWS) * 80 + wcx) mod RINGCHARS;  barq =
+;          ring_s / 80, the window's slot;  Model B: wcxm = ring_s mod 80 (where
+;          the window starts in its slot) and mrow = wcy + RINGROWS-1 - barq
+;          (the map row the window shows in the ring's last slot)
+;   Uses:  A X Y
+;   Pre:   bank 7 paged;  wcx < RINGCHARS + ROWCHARS (one subtraction folds the
+;          sum)
+;   Cost:  the division: 7 x barq + 3 x (ring_s's high byte) + 18 cycles,
+;          without page crossings (7 a subtraction, 3 more for each borrow from
+;          the high byte, and the loop's entry and exit)
+; Called once a frame (frame.s) and by the menus.
+; ----------------------------------------------------------------------------
 calc_ring:
-        ; ---- ring_s
         lda wcy
         ringmod7
         tax
         lda mul_rowlo,x
-  .if .not BHW
-        clc                        ; (the Model B's ringmod7 leaves C = 0 by its bcc)
+  .if .not BHW                     ; hardware: the Master's ringmod keeps C (the
+        clc                        ;  Model B's leaves C = 0)
   .endif
         adc wcx
         sta ring_s
         lda mul_rowhi,x
         adc wcx+1
         sta ring_s+1
-        tay                        ; the high byte in Y for the division
-        cmp #>RINGCHARS            ; fold into 0..RINGCHARS
-        bcc :+
+        tay
+        cmp #>RINGCHARS            ; fold into 0..RINGCHARS-1
+        bcc @div0
         bne @sub
         lda ring_s
         cmp #<RINGCHARS
-        bcc :+
-@sub:   lda ring_s                 ; C = 1: both ways here leave a cmp's bcc untaken
+        bcc @div0
+@sub:   lda ring_s                 ; C = 1: both ways here
         sbc #<RINGCHARS
         sta ring_s
         tya
         sbc #>RINGCHARS
         sta ring_s+1
         tay
-        ; ---- q = S / 80, by repeated subtraction.  The loop's own bcs keeps C = 1 all
-        ;      the way round, so the only entries needing a sec are the first and the
-        ;      one after a borrow.
-:       lda ring_s                 ; the running value: low in A, high in Y
+        ; ---- barq = ring_s / 80, by subtraction: the low byte in A, the high
+        ;      in Y
+@div0:  lda ring_s
         ldx #$FF                   ; the quotient, pre-decremented
         sec
 @div:   inx
         sbc #ROWCHARS
-        bcs @div                   ; no borrow: high byte unchanged, value >= 0
-  .if BHW
-        sec                        ; (dey does not touch the carry)
-        dey
-        bpl @div                   ; the borrow absorbed by the high byte
-  .else
-        dey                        ; a borrow: C = 0
-        bmi @dd                    ; high byte went negative: done
-        inx
-        sbc #ROWCHARS-1            ; C = 0: takes 80; A >= 176, so no borrow
-        bcs @div                   ; always
-  .endif
-@dd:    stx barq                   ; high byte went negative: X is the quotient
-  .if BHW
-        adc #ROWCHARS-1            ; C = 1 (the sec before dey): A + 80,
-        sta wcxm                   ;  the remainder: the window's start in its slot
-        lda #RINGROWS-1            ; the window row in the last slot ...
-        sbc barq                   ;  (C = 1: the adc carried)
+        bcs @div                   ; no borrow: C = 1 for the next
+        dey                        ; a borrow from the high byte (C = 0)
+        bmi @dd                    ; none left: done
+        inx                        ; the next subtraction, folded in: C = 0, so
+        sbc #ROWCHARS-1            ;  this takes 80; A >= 176, so no borrow
+        bcs @div                   ; (always)
+@dd:    stx barq
+  .if BHW                          ; hardware: the Model B's mirror
+        adc #ROWCHARS              ; C = 0 (the bmi): A = the remainder, C = 1
+        sta wcxm                   ;  (A was the remainder - 80 + 256)
+        lda #RINGROWS-1
+        sbc barq                   ; (C = 1)
         clc
         adc wcy
-        sta mrow                   ; ... and the map row it shows
+        sta mrow
   .endif
         rts
 
-; ============================================================================
-; The interrupt: the rupture chain's steps (T1) and the vsync (CA1)
-;
-; One body, placed with its state (PLACEH): on the Master the handler itself
-; (irq_handler, at IRQ1V, in main RAM); on the Model B isr_body, in bank 7, which the
-; low-RAM stub (low.s irq_handler) jumps to after saving X and Y and paging bank 7 in.
-;   In:   A SAVED in $FC (the MOS);  Model B: X, Y SAVED and ROMSEL stacked by the stub
-;   Out:  Master: X, Y, A restored, rti.  Model B: back to the stub -- a step by
-;         irq_ret, the vsync by irq_vret (which steps the title tune first)
-;
-; A step reprograms the next section from SECTAB (build_sections has the layout) and
-; walks sec_idx on; the vsync restarts T1, re-phases the frame, takes a pending flip,
-; programs section 0 from the buffer about to be shown, then scans the keys and runs
-; the sound.  load_req (the load mode, above) diverts both.
-;
-; ---- A step's timing
-; Each step is a CRTC restart: the next section's address was armed during the
-; previous one and is latched at the boundary.  What the new section needs quickly is
-; its shape.  R9 and R4 together decide where the section ENDS: the CRTC latches
-; end-of-frame at the start of the scanline where row = R4 and line = R9, so for a
-; 2-line section (a partial with R9 = 1) both must be in place before the start of
-; scanline 1 -- 128 cycles after the restart.  R6 is compared from scanline 1 on, so
-; Q's R6 = 0 has the same deadline.  Everything else has a row or more to spare.
-;
-; The chain is phased (VS2T) so the step fires ~50 cycles BEFORE the restart; the hold
-; (the Master's; the Model B's stub takes as long) carries the first write past it,
-; and the three deadline registers then land about 40, 60 and 80 cycles in, with the
-; rest behind them.  So the order is R9, R4, R6, R7: writing R4 third put it at ~140
-; for a 2-line P2 -- that section never ended, Q's R6 hit never came, and both borders
-; lit up on every scroll frame.
-;
-; R12/R13 go LAST, after the T1 reload and the index bookkeeping, so they land on
-; scanline 1 (measured: ~140-175 cycles in).  Written straight after R7 they fell at
-; ~105-125, across the end of scanline 0 -- and on a partial (R4 = 0, written on row 0
-; = its last row) some 6845s end the frame at once, the VL6845 among them (Tom
-; Seddon's r4-3), and reload the start address as that scanline ends: a Master with
-; such a chip lost the R12 write and showed the playfield from A's high byte with P's
-; low byte, 256 chars adrift, a 16-char tear down every row whenever the fine scroll
-; was not 0.  Two-line sections still have 80 cycles in hand before the next restart.
-;
-; ACCCON D (the Master) is different again: it is the memory map, sampled by every
-; fetch, so it must be in place BEFORE the boundary -- the bar's T1 fires a further
-; BARLEAD us early so D lands in the horizontal blanking of the bar's last line.
-; ============================================================================
+; ----------------------------------------------------------------------------
+; isr_body: the interrupt -- a chain step (T1) or the vsync (CA1).  The Model
+; B's body, which low.s's stub (irq_handler) jumps to; on the Master it is the
+; handler, irq_handler, at IRQ1V.
+;   In:    A saved in MOS_IRQA by the MOS's IRQ entry;  Model B: X and Y saved
+;          in irq_x, irq_y, ROMSEL_CPY pushed and bank 7 paged by the stub
+;   Out:   a step: the section starting at the next restart shaped (R9, R4, R6,
+;          R7, cur_r7), the one after it armed (T1 latch, R12/R13), sec_idx on
+;          to the next entry, but never past Q's.  The vsync: T1 restarted with
+;          VS2T, the frame re-phased (R9, R6, R4), a due flip taken (disp_sect,
+;          flipvs; Master: disp_d), section 0 armed from the displayed buffer,
+;          sec_idx = disp_sect, keys scanned, the sound effect stepped, the tune
+;          stepped (the Master here; the Model B raises mus_tick for the stub)
+;   Uses:  everything, restored: the Master returns by rti with A X Y as they
+;          were; the Model B jumps to the stub, irq_ret from a step and irq_vret
+;          from the vsync, which restores them
+;   Post:  Master: ROMSEL as it was
+;   Cost:  where the writes land (crtctime, 4 Oct 2026, level 0, 60 frames): a
+;          step's R9 at char 20-78 of its section's first scanline on the
+;          Master, 35-59 on the Model B; R4, R6, R7 at 18-char steps behind it
+;          (R7 on the Master up to char 4 of scanline 1); R12/R13 on scanline 1.
+;          (Q's step behind a two-line P2 lands a scanline later: @kend has
+;          written its values already)
+; A step's registers have deadlines: the CRTC ends a frame at the start of the
+; scanline where row = R4 and line = R9, so for a two-line section both are due
+; before scanline 1 -- 128 cycles after the restart -- and R6 is compared from
+; scanline 1 on, so Q's R6 = 0 is too.  Hence the order R9, R4, R6, R7.  R12/R13
+; (the next section's address) go last, onto scanline 1: on a partial (R4 = 0)
+; some 6845s (the VL6845; Tom Seddon's r4-3 test) end the frame at once and
+; reload the start address as scanline 0 ends, and an R12 written then was lost
+; on a real Master (a 256-char tear, observed 24 Sep 2026).  ACCCON D (Master)
+; is sampled by every fetch, so it must change before the restart: the D step,
+; which ends the bar, fires BARLEAD early and switches it in the blanking of the
+; bar's last line.
+; ----------------------------------------------------------------------------
         PLACEH "MRAMCODE", "KRNCODE"
-  .if BHW
-        ; The Model B's palette kill (Q's first scanline): the three colours, black, in
-        ; the order they can first show on it (defs.s QBLANK) -- 12 writes, 72 cycles.
-        ; A logical colour's four indices: PALIDX_x with the don't-care bits 0 and 2
-        ; (i .mod 2, (i / 2) * 4) run through
-  .macro killpal
-        .repeat 4, i               ; yellow: indices 10, 11, 14, 15
-        lda #((PALIDX_YELLOW + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (PCOL_BLACK ^ PAL_INV)
-        sta ULA_PAL
-        .endrepeat
-        .repeat 4, i               ; magenta: 8, 9, 12, 13
-        lda #((PALIDX_MAGENTA + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (PCOL_BLACK ^ PAL_INV)
-        sta ULA_PAL
-        .endrepeat
-        .repeat 4, i               ; cyan: 2, 3, 6, 7
-        lda #((PALIDX_CYAN + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (PCOL_BLACK ^ PAL_INV)
-        sta ULA_PAL
-        .endrepeat
-  .endmacro
+  .if BHW                          ; blessed placement: the Model B's body
 isr_body:
-  .else
+  .else                            ;  behind the stub, the Master's handler
 irq_handler:
-        ; Q's step puts D back to 0 before Q's first scanline (the 6845 shows it
-        ; whatever R6 says, from QBLANK, main RAM), first thing: behind a two-line P2's
-        ; own step there is no time for more.  The chain rests on Q till the vsync, so
-        ; any interrupt with sec_idx at qsect is Q's step, or a vsync that wants D = 0.
+        ; Q's step puts D back to 0 first thing, before Q's line 0 (QBLANK, main
+        ; RAM, which D = 1 would read from HAZEL/ANDY): behind a two-line P2's
+        ; own step there is no time for more.  The chain rests on Q until the
+        ; vsync, so an interrupt with sec_idx = qsect is Q's step, or a vsync,
+        ; which wants D = 0 too (the bar).
         lda sec_idx
         cmp qsect
-        bne @nq
+        bne @notq
         lda ACCCON
         and #<~ACC_D
         sta ACCCON
-@nq:    stx irq_x
+@notq:  stx irq_x
         sty irq_y
   .endif
-        bit VIA_IFR                ; V = bit 6, T1's flag (VIA_IT1)
+        bit VIA_IFR                ; V = T1's flag
         .assert VIA_IT1 = $40, error, "the T1 test is bit's V"
-        bvs @t1arm                 ; T1.  The arm grew past bvc's reach:
-        jmp @notT1                 ;  one cycle more each way
+        bvs @t1                    ; (a bvc to @nott1 would be out of reach)
+        jmp @nott1
 
         ; ---- the chain step
-@t1arm: lda load_req
+@t1:    lda load_req
         beq @chain
-        jmp @ldcheck               ; a load asked for, under way or ending
-@chain: ldx sec_idx                ; X = this section's entry
-  .if .not BHW
-        ; The Master: the step after the bar's (dsect) switches D to the displayed
-        ; buffer's -- before the boundary -- then holds (26 cycles) so its first CRTC
-        ; write follows the restart.  Every other step needs neither (D is 0 for the bar
-        ; from the vsync, and already right after it): it fires later instead, by
-        ; STEPLATE (the bar's by BARLATE), and spends nothing waiting.
+        jmp @ldcheck               ; a load: asked for, under way or ending
+@chain: ldx sec_idx                ; X = this step's entry
+  .if .not BHW                     ; hardware: ACCCON D
+        ; The D step (dsect, the step after the bar's) switches D to the
+        ; displayed buffer's before the restart, then holds so its CRTC writes
+        ; follow it.  Other steps fire STEPLATE later instead (the bar's
+        ; BARLATE) and do not wait.
         cpx dsect
-        bne @noD
+        bne @notd
         lda ACCCON
         and #<~ACC_D
         ora disp_d
         sta ACCCON
         ldy #DHOLD
-@hold:  dey
-        bne @hold
-@noD:
-        ; Q's step (qsect): D is 0 already (irq_handler's first act); it holds as the D
-        ; step does, so its CRTC writes follow Q's restart
+@dhold: dey
+        bne @dhold
+@notd:
+        ; Q's step: D is 0 already (above); it holds as the D step does
         cpx qsect
-        bne @noQ
+        bne @shape
         ldy #DHOLD
 @qhold: dey
         bne @qhold
-@noQ:
-  .else
-        ; The Model B: Q's step (qsect) blacks the palette for Q's first scanline, which
-        ; the 6845 shows whatever R6 says: the bar's line 0 from QBLANK.  It fires as the
-        ; line before goes into its blanking, and the last writes land with the beam
-        ; already on the line (defs.s QBLANK: why that is in time).  Behind a two-line
-        ; P2 Q's interrupt waits on P2's step, so that step does it instead (@kend).  The
-        ; vsync puts the colours back (palon).
+@shape:
+  .else                            ; hardware: the Model B's palette kill
+        ; Q's step blacks the palette for Q's line 0 (the bar's line 0 from char
+        ; 45: defs.s QBLANK).  It fires as the line before goes into its
+        ; blanking; the last writes land with the beam already on the line,
+        ; before the colours first show.  Behind a two-line P2 that P2's step
+        ; does it (@kend).  The vsync puts the colours back (palon).
         cpx qsect
-        bne @nok
-        killpal
-@nok:
+        bne @shape
+        palfill PCOL_BLACK, PCOL_BLACK, PCOL_BLACK
+@shape:
   .endif
-        ; ---- the shape: R9, R4, R6, R7, in that order (the header)
-        lda #R_MAXRAST
-        sta CRTC_IDX
-        lda SECTAB+SE_R9,x
-        sta CRTC_DAT
-        lda #R_VTOT
-        sta CRTC_IDX
-        lda SECTAB+SE_R4,x
-        sta CRTC_DAT
+        ; ---- the shape, deadline order (the header)
+        crtcw R_MAXRAST, SECTAB+SE_R9, x
+        crtcw R_VTOT, SECTAB+SE_R4, x
         lda #R_VDISP
         sta CRTC_IDX
         ldy SECTAB+SE_R6,x
         sty CRTC_DAT
-        lda #R_VSYNC
-        sta CRTC_IDX
-        lda SECTAB+SE_R7,x
-        sta CRTC_DAT
-        sta cur_r7                 ; the vsync handler re-phases the frame from this
+        crtcw R_VSYNC, SECTAB+SE_R7, x
+        sta cur_r7                 ; the vsync re-phases the frame from it
         ; ---- the next section's duration, into the T1 latch
         lda SECTAB+SE_T1L,x
         sta VIA_T1LL
         lda SECTAB+SE_T1H,x
         sta VIA_T1LH
-        lda VIA_T1CL               ; clear T1's flag
-        ; ---- the next entry.  The chain stops at Q, the only entry whose R7 is the
-        ;      vsync row: a late vsync must not walk the chain off the end of SECTAB.
-        ;      Every other section's R7 is R7_NEVER, so C = 1 on the way past, as the
-        ;      adc needs.
-        lda cur_r7                 ; R7, just written
+        lda VIA_T1CL               ; clears T1's flag
+        ; ---- the next entry, unless this is Q's (the only R7 = QVSYNC): a late
+        ;      vsync must not walk sec_idx off the end of SECTAB
+        lda cur_r7
         cmp #QVSYNC
-        beq :+
+        beq @addrw
         txa
-        adc #SECENT-1              ; C is set (R7_NEVER >= QVSYNC): this adds SECENT
-        sta sec_idx                ; (X still indexes this entry for R12/R13)
-        ; ---- the next section's address, last: see the header
-:       lda #R_ADDRH
-        sta CRTC_IDX
-        lda SECTAB+SE_R12,x
-        sta CRTC_DAT
-        lda #R_ADDRL
-        sta CRTC_IDX
-        lda SECTAB+SE_R13,x
-        sta CRTC_DAT
-  .if BHW
-        cpx ksect                  ; a two-line P2's step: Q's first scanline's
-        bne @xit                   ;  palette too
+        adc #SECENT-1              ; + SECENT: C = 1 (R7_NEVER > QVSYNC)
+        sta sec_idx                ; (X still this entry's, for R12/R13)
+        ; ---- the next section's address, last (the header)
+@addrw: crtcw R_ADDRH, SECTAB+SE_R12, x
+        crtcw R_ADDRL, SECTAB+SE_R13, x
+  .if BHW                          ; hardware: the Model B's palette kill
+        cpx ksect                  ; a two-line P2's step: Q's line 0's kill and
+        bne @stepexit              ;  Q's shape too
         jmp @kend
   .endif
-@xit:
-  .if BHW
-        jmp irq_ret                ; to the stub (low.s)
+@stepexit:
+  .if BHW                          ; blessed placement: the stub restores
+        jmp irq_ret
   .else
-        ldy irq_y                  ; @exit inlined: no jmp on the chain-step path
+        ldy irq_y
         ldx irq_x
         lda MOS_IRQA
         rti
@@ -765,85 +818,74 @@ irq_handler:
 @ldcheck:
         cmp #LDR_STOP
         bne @ldt1
-        ldx sec_idx                ; stop asked: only the bar step, a frame
-        cpx disp_sect              ;  boundary, makes the switch
+        ldx sec_idx                ; a stop asked for: only the bar's step, a
+        cpx disp_sect              ;  frame boundary, switches
         beq @ldsw
         jmp @chain
-        ; ---- the switch: this restart is a standard frame, not the bar (load_begin).
-        ;      R9 = CHARLINES-1 and R6 = BARROWS are the vsync's pre-arm already, and
-        ;      R12/R13 hold the bar.  The bar's step fires BARLATE later: no hold.
-@ldsw:  lda #R_VTOT
-        sta CRTC_IDX
-        lda #LDR4
-        sta CRTC_DAT
-        lda #R_VSYNC
-        sta CRTC_IDX
-        lda #LDR7
-        sta CRTC_DAT
-        sta cur_r7                 ; the resume's first vsync re-phases to LDR4 from this
+        ; ---- the switch: from this restart a standard frame, not the bar.
+        ;      R9 = CHARLINES-1 and R6 = BARROWS are the vsync's already,
+        ;      R12/R13 the bar's
+@ldsw:  crtcw R_VTOT, #LDR4
+        crtcw R_VSYNC, #LDR7
+        sta cur_r7                 ; the resume's vsync re-phases from it
         lda #VIA_IT1
-        sta VIA_IER                ; T1 off: the chain is stopped
-        lda VIA_T1CL
+        sta VIA_IER                ; T1's interrupt off: the chain is stopped
+        lda VIA_T1CL               ; (clears T1's flag)
         lda #LDR_STOPPED
-        sta load_req               ; stopped
-        bne @xit                   ; (Z = 0: LDR_STOPPED <> 0)
-        ; ---- the vsync while stopped: the standard frame free-runs; count the vsync
-        ;      and keep the keys and the sound alive
+        sta load_req
+        bne @stepexit              ; (always)
+        ; ---- a vsync while stopped (T1 restarted above, its interrupt off):
+        ;      count it, and keep the keys and the sound going
 @ldvsync:
         inc vsyncs
-        jmp @sk
-        ; ---- stopped or ending: T1 runs on with its interrupt off, so its flag is
-        ;      stale: was this the vsync?
+        jmp @keys
+        ; ---- T1 while stopped or resuming: its interrupt is off, so its flag
+        ;      is stale.  Clear it and see whether this is the vsync.
 @ldt1:  lda VIA_T1CL
-        bit irq_x                  ; (a 3-cycle pad for the jmp it replaces)
+        bit irq_x                  ; 3 cycles, flags unused: this path's vsync
+                                   ;  restarts T1 as late as when a jmp stood
+                                   ;  here
 
         ; ---- not T1: the vsync?
-@notT1:
-        lda VIA_IFR
-        and #VIA_ICA1              ; CA1
-        bne :+
-        beq @xit                   ; (Z = 1: the bne fell through)
+@nott1: lda VIA_IFR
+        and #VIA_ICA1
+        bne @vsync
+        beq @stepexit              ; neither: (always)
 
-        ; ---- the vsync.  Restart T1 first (constant latency): counter = vsync->T.
-        ;      The latch (how long section 0 lasts) is programmed further down, after
-        ;      the flip: section 0 belongs to the buffer that is about to be displayed.
-:       lda #<VS2T                 ; (an immediate: VS2T allows for its timing)
+        ; ---- the vsync.  T1 first, at a fixed latency: the counter = VS2T, to
+        ;      the bar's step.  Its latch (the bar's duration) is set below,
+        ;      after the flip: it is the displayed buffer's.
+@vsync: lda #<VS2T                 ; (immediates: VS2T counts on their timing)
         sta VIA_T1LL
         lda #>VS2T
         sta VIA_T1CH               ; loads the counter: T1 restarts
         lda #VIA_ICA1
-        sta VIA_IFR                ; clear CA1's flag
-        lda load_req               ; (after the restart: it sets the chain's phase)
+        sta VIA_IFR                ; clears CA1's flag
+        lda load_req
         cmp #LDR_STOPPED
-        beq @ldvsync               ; stopped: T1 runs on with its interrupt off
+        beq @ldvsync
         cmp #LDR_RESUME
-        bne :+
-        stz load_req               ; resume: T1's interrupt on again, below (LDR_RUN = 0)
-:       lda #VIA_ISET|VIA_IT1
-        sta VIA_IER                ; T1's interrupt on
-        ; ---- re-phase: the vsync fired at row cur_r7, so end this frame at row
-        ;      cur_r7 + QROWS-1-QVSYNC with 8-line rows -> T starts exactly
-        ;      QROWS-QVSYNC rows after the vsync even if the CRTC row counter had run
-        ;      past its vertical total (which otherwise never recovers)
-        lda #R_MAXRAST
-        sta CRTC_IDX
-        lda #CHARLINES-1
-        sta CRTC_DAT               ; R9 = 7
-        ;      pre-arm the bar's R6 now, in Q, where the display is already off and a
-        ;      new R6 cannot show: the step at the bar's start is too close to the
-        ;      second scanline to be trusted with it
-        lda #R_VDISP
-        sta CRTC_IDX
-        lda #BARROWS
-        sta CRTC_DAT
+        bne @t1on
+        stz load_req               ; LDR_RUN (A dead: reloaded next)
+@t1on:  lda #VIA_ISET|VIA_IT1
+        sta VIA_IER
+        ; ---- the re-phase: the vsync came at row cur_r7, so this frame ends at
+        ;      row cur_r7 + QROWS-1-QVSYNC: the bar starts QROWS-QVSYNC rows
+        ;      after the vsync even if the row counter had run past R4 (from
+        ;      which a 6845 does not recover).  R6 = BARROWS is armed here, in Q
+        ;      with the display off, for the bar: its step is too close to the
+        ;      bar's scanline 1 for it.
+        crtcw R_MAXRAST, #CHARLINES-1
+        crtcw R_VDISP, #BARROWS
         lda #R_VTOT
         sta CRTC_IDX
         lda cur_r7
         clc
         adc #QROWS-1-QVSYNC
-        and #$7F                   ; (R4 is 7 bits)
-        sta CRTC_DAT               ; R4
-        ; ---- the flip, if one is asked and FLIPWAIT vsyncs have passed since the last
+        and #%01111111             ; R4 is 7 bits
+        sta CRTC_DAT
+        ; ---- the flip, if one is asked for and FLIPWAIT vsyncs have passed
+        ;      since the last
         inc vsyncs
         lda flip_req
         beq @noflip
@@ -856,286 +898,110 @@ irq_handler:
         sta flipvs
         lda next_sect
         sta disp_sect
-  .if .not BHW
-        ; the Master: the flip is the section chain moving to the other buffer's rows;
-        ; D follows it, but only from the first playfield section -- the bar needs D = 0
-        lda next_buf
+  .if .not BHW                     ; hardware: ACCCON D follows the flip, from
+        lda next_buf               ;  the D step (the bar is D = 0)
         sta disp_d
-        stz flip_req
-  .else
-        dec flip_req               ; only ever 1 here (beq @noflip above): 1 -> 0, in
-                                    ;  stz's 5 cycles and half its bytes
   .endif
+        stz01 flip_req             ; flip_req is 1 here (the beq above)
 @noflip:
-        ; ---- section 0: everything it needs comes from the buffer that is about to
-        ;      be displayed -- its start address (menu_sections moves it) and its length
+        ; ---- section 0, the displayed buffer's bar: its duration (the T1
+        ;      latch) and its address (menu_sections moves it)
         ldx #0
-        ldy disp_sect              ; held in Y: sec_idx wants the same byte below
-        beq :+
-        ldx #2
-:       lda BUF_SEC0T1,x
+        ldy disp_sect              ; (Y: sec_idx's below)
+        beq @sec0
+        ldx #BUFPAIR
+@sec0:  lda BUF_SEC0T1,x
         sta VIA_T1LL
         lda BUF_SEC0T1+1,x
         sta VIA_T1LH
-        lda #R_ADDRH
-        sta CRTC_IDX
-        lda BUF_SEC0,x
-        sta CRTC_DAT
-        lda #R_ADDRL
-        sta CRTC_IDX
-        lda BUF_SEC0+1,x
-        sta CRTC_DAT
+        crtcw R_ADDRH, BUF_SEC0, x
+        crtcw R_ADDRL, BUF_SEC0+1, x
         lda #VIA_IT1
-        sta VIA_IFR                ; clear T1's flag
+        sta VIA_IFR                ; clears T1's flag
         sty sec_idx                ; the chain starts at the bar's entry
-  .if .not BHW
-        tya                        ; dsect: the step after the bar's (the
-        clc                        ;  D step)
+  .if .not BHW                     ; hardware: ACCCON D
+        tya                        ; dsect: the step after the bar's
+        clc
         adc #SECENT
         sta dsect
-        lda BUF_QS,x               ; and Q's, the step that puts D back to 0
+        lda BUF_QS,x               ; qsect: Q's, which puts D back to 0
         sta qsect
-        lda #ACC_D                 ; the bar is below $3000: it is only main
-        trb ACCCON                 ;  RAM to the CRTC while D = 0
-  .else
+        lda #ACC_D                 ; D = 0 for the bar: below $3000, the CRTC
+        trb ACCCON                 ;  reads main RAM only with D = 0
+  .else                            ; hardware: the Model B's palette kill
         lda BUF_QS,x               ; the step that blacks the palette: Q's, or
         sta qsect                  ;  behind a two-line P2 that P2's
         lda BUF_KS,x
         sta ksect
-        lda palon                  ; and the colours it blacked back (Q's display is
-        beq @nopal                 ; off: the bar is the next thing shown) -- killpal's
-                                    ; indices, each colour's own physical one
-        .repeat 4, i
-        lda #((PALIDX_YELLOW + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (PCOL_YELLOW ^ PAL_INV)
-        sta ULA_PAL
-        .endrepeat
-        .repeat 4, i
-        lda #((PALIDX_MAGENTA + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (PCOL_MAGENTA ^ PAL_INV)
-        sta ULA_PAL
-        .endrepeat
-        .repeat 4, i
-        lda #((PALIDX_CYAN + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (PCOL_CYAN ^ PAL_INV)
-        sta ULA_PAL
-        .endrepeat
+        ; the colours Q's step blacked, back (Q's display is off: the bar is the
+        ; next thing shown), unless blank_palette has the screen black
+        lda palon
+        beq @nopal
+        palfill PCOL_YELLOW, PCOL_MAGENTA, PCOL_CYAN
 @nopal:
   .endif
         ; ---- the keys and the sound
-@sk:    jsr scan_keys
+@keys:  jsr scan_keys
   .if GAMESOUND
-        ; the game's player (resident); the tune's step is raised here, as the engine's
-        ; sound_tick does
-        jsr hook_sound
-        lda mus_on
-        sta mus_tick
-    .if BHW
-        jmp irq_vret               ; (the stub steps the tune)
-    .endif
-  .elseif BHW
-        jsr sound_tick
-        jmp irq_vret               ; (the stub steps the tune)
+        jsr hook_sound             ; the game's own sound
   .else
-        ; sound_tick inlined (the Master: room in main RAM; its only caller)
+        ; ---- sound_tick: the sound effect's step, then the tune's.  An sfx is
+        ;      steps of SFXSTEP_LEN bytes: three for the chip, then the vsyncs
+        ;      to hold them; a first byte of SFX_END ends it.  sfx_req: 1-based
+        ;      into sfx_tab (the game's), 0 for none;  sfx_ptr: the next step,
+        ;      its high byte 0 for none playing (an sfx is never in page 0);
+        ;      sfx_dur: the vsyncs left of the step being held.  The common case
+        ;      (none asked, none playing) falls through to @tune.
         lda sfx_req
-        beq @sfplay
-        ; ---- start a new sfx
-        asl
-        tax
-        stz sfx_req
-        lda sfx_tab-2,x
-        sta sfx_ptr
-        lda sfx_tab-1,x
-        sta sfx_ptr+1
-        bne @sfgo                  ; an sfx is never in page 0: to its first step
-        ; ---- one playing: its next step when this one's frames are up
-@sfplay: lda sfx_ptr+1
-        beq @sfmus
-        dec sfx_dur
-        bne @sfmus
-@sfgo:  lda (sfx_ptr)              ; (zp): the first byte needs no index
-        cmp #SFX_END
-        beq @sfend
-        jsr snd_write              ; (C = 0 from the cmp: snd_write keeps it)
-        ldy #1
-        lda (sfx_ptr),y
-        jsr snd_write
-        iny
-        lda (sfx_ptr),y
-        jsr snd_write
-        iny
-        lda (sfx_ptr),y
-        sta sfx_dur
-        lda sfx_ptr                ; the next step (C = 0 still)
-        adc #SFXSTEP_LEN
-        sta sfx_ptr
-        bcc @sfmus
-        inc sfx_ptr+1
-        bne @sfmus                 ; sfx_ptr+1 <> 0 after the inc
-@sfend: jsr snd_write              ; A = SFX_END (the end mark): noise off
-        lda #SN_LATCH|SN_VOL|(2 << SN_CHSHIFT)|SN_ATT_OFF   ; channel 2 off
-        jsr snd_write
-        stz sfx_ptr+1              ; none playing
-@sfmus: lda mus_on                 ; (no mus_tick: only the Model B's stub reads it)
+        bne @sfstart
+        lda sfx_ptr+1
+        bne @sfplay
   .endif
-  .if .not BHW
-        ; ---- the Master: step the menus' tune, as the Model B's interrupt stub does
-        ;      (low.s)
-        ; (A = mus_on and Z with it: the sound step's lda mus_on; with GAMESOUND, mus_tick)
-        beq @exit
+        ; ---- the tune: its player, music_tick, is in the menus' image of bank
+        ;      7 (menus.s), and mus_on is set only while that image is in
+@tune:  lda mus_on
+  .if BHW .or GAMESOUND
+        sta mus_tick               ; (the Model B's stub reads it: low.s)
+  .endif
+  .if BHW                          ; blessed placement: the stub steps the tune
+        jmp irq_vret
+  .else
+        beq @vexit
     .if GAMESOUND
         dec mus_tick
     .endif
-        lda ROMSEL_CPY
+        lda ROMSEL_CPY             ; the interrupted code's bank: back after
         pha
-        jsr page_logic             ; bank 7 (low RAM's, patched at boot)
+        jsr page_logic             ; bank 7, for the menus' image
         jsr music_tick
         pla
         sta ROMSEL_CPY
         sta ROMSEL
-@exit:
-        ldy irq_y
+@vexit: ldy irq_y
         ldx irq_x
         lda MOS_IRQA
         rti
   .endif
-
-  .if BHW
-        ; ---- a two-line P2's step, its registers written: Q's interrupt can come only
-        ;      after this handler, too late for the palette and for Q's R9/R4/R6 (due
-        ;      before Q's scanline 1).  So this step, on P2's last line, waits for its
-        ;      blanking, blacks the palette and writes Q's shape itself -- Q's step
-        ;      writes it again, the same values, later
-@kend:  ldy #KENDWAIT              ; (crtctime: the first write at char 80+)
-:       dey
-        bne :-
-        killpal
-        lda #R_MAXRAST             ; Q's shape, R9, R4, R6, R7 (its step's order)
-        sta CRTC_IDX
-        lda SECTAB+SECENT+SE_R9,x
-        sta CRTC_DAT
-        lda #R_VTOT
-        sta CRTC_IDX
-        lda SECTAB+SECENT+SE_R4,x
-        sta CRTC_DAT
-        lda #R_VDISP
-        sta CRTC_IDX
-        lda SECTAB+SECENT+SE_R6,x
-        sta CRTC_DAT
-        lda #R_VSYNC
-        sta CRTC_IDX
-        lda SECTAB+SECENT+SE_R7,x
-        sta CRTC_DAT
-        jmp irq_ret
-  .endif
-
-; ----------------------------------------------------------------------------
-; VS2T: the T1 count from the vsync to the bar's step
-; CA1 fires at the end of the 2-line vsync pulse (the -2*LINE).  Then:
-;   -35       would put each step ~5 us INTO its section;
-;   -36       the further lead puts it ~30 us before the restart, so that the shape
-;             registers land early in the first scanline (the interrupt's header);
-;   -8        the step's load-flag test;
-;   +2        (ticks) the vsync loads it as immediates, 4 cycles sooner than from memory;
-;   -STUBLAT  the Model B's stub pages bank 7 in (page_logic inlined: no write bank, the
-;             interrupt stores into none) before the body, which makes both the
-;             vsync's T1 restart and every step later -- STUBLAT ticks in all -- where
-;             the Master's handler holds instead.  On the Master it is -BARLATE: the
-;             bar's step fires later, with no hold in it.
-; STUBLAT (Model B): 22 is the stub's page_logic inlined, jmp for jsr; 4 is its write
-; bank gone, twice; +2 its cld (BCD-safe: low.s), which comes before the vsync's T1
-; restart and so shortens the count by as much -- the steps' own writes still come 2
-; cycles later in their lines (test/crtctime.mjs: each on its scanline, well inside its
-; deadline; the palette kills where they were).
-; ----------------------------------------------------------------------------
-  .if BHW
-STUBLAT = 18 - 22 - 4 + 2
-  .else
-STUBLAT = -BARLATE
-  .endif
-VS2T = (QROWS-QVSYNC)*CHARLINES*LINE - 2*LINE - 35 - 36 - STUBLAT - 8 + 2
-
-; ----------------------------------------------------------------------------
-; scan_keys: the keyboard into keys
-;   Out:  keys = the K_ bits of the keys held (keymap.inc);  A, X clobbered
-; Called from the vsync.  keys is built in place: the interrupt is atomic to its
-; readers.  Placed with the interrupt's own work: bank 7 with the Model B's handler,
-; main RAM with the Master's.
-; ----------------------------------------------------------------------------
-        PLACEH "MRAMCODE", "KRNCODE"
-scan_keys:
-        lda #DDRA_KEYS
-        sta VIA_DDRA               ; PA0-6 out (the key number), PA7 in
-        lda #SL_KBD                ; latch 3 = 0: disable keyboard autoscan
-        sta VIA_ORB
-  .if BHW
-        lda #0                     ; the Model B builds keys in A (the Master's tsb, in place)
-  .else
-        stz keys
-  .endif
-        ldx #KEYN-1
-@k:     ldy key_tab,x              ; (Y for the key number: A is the Model B's keys)
-        sty VIA_ORANH
-        bit VIA_ORANH              ; N = PA7
-        bpl :+                     ; PA7 clear: not pressed
-  .if BHW
-        ora key_bits,x
-  .else
-        lda key_bits,x
-        tsb keys
-  .endif
-:       dex
-        bpl @k
-  .if BHW
-        sta keys
-  .endif
-        rts
-        .include "keymap.inc"       ; the game's: key_tab (KEYN key numbers), key_bits
-                                    ; (the K_ bits each sets); README.md
-
-; ============================================================================
-; The sound
-; ============================================================================
-  .if BHW .and (.not GAMESOUND)    ; (GAMESOUND: the game's hook_sound instead; the Master inlines it in the vsync)
-; ----------------------------------------------------------------------------
-; sound_tick: step the sound effect, and raise the tune's step
-;   In:   sfx_req = an sfx to start (1-based, into sfx_tab) or 0;  sfx_ptr, sfx_dur
-;   Out:  mus_tick = mus_on;  A, X, Y clobbered
-; Called from the vsync.  An sfx is steps of (b0, b1, b2, frames): three bytes written
-; to the SN76489, then the frames to hold them; $FF ends it.  sfx_ptr+1 = 0: none
-; playing.
-; ----------------------------------------------------------------------------
-sound_tick:
-        lda sfx_req
-        bne @start                 ; (rare: the common case falls through)
-        lda sfx_ptr+1
-        bne @play                  ; one playing
-        ; ---- the tune is stepped at the interrupt's tail (the Model B's stub in
-        ;      low.s, the Master's handler): its player is in the menus' image.  Only
-        ;      raised here, at the vsync: the T1 steps share that tail.
-@music:
-        lda mus_on
-        sta mus_tick
-        rts
-        ; ---- start a new sfx
-@start: asl
+  .if .not GAMESOUND
+        ; ---- a new sfx: its first step at once
+@sfstart:
+        asl
         tax
-        stz sfx_req                ; (Model B: A = 0 -- the index is in X)
+        stz sfx_req                ; (A dead: reloaded next)
         lda sfx_tab-2,x
         sta sfx_ptr
         lda sfx_tab-1,x
         sta sfx_ptr+1
-        bne @go                    ; an sfx is never in page 0: to its first step
-        ; ---- one playing: its next step when this one's frames are up
-@play:  dec sfx_dur
-        bne @music
-@go:    ldaz sfx_ptr               ; (zp): the first byte needs no index
+        bne @sfgo                  ; (always: not page 0)
+        ; ---- one playing: its next step when this one's vsyncs are up
+@sfplay:
+        dec sfx_dur
+        bne @tune
+@sfgo:  ldaz sfx_ptr
         cmp #SFX_END
-        beq @end
-        jsr snd_write              ; (C = 0 from the cmp: snd_write keeps it)
-  .if BHW
-        iny                        ; Y = 0 from ldaz (snd_write keeps it)
-  .else
-        ldy #1
-  .endif
+        beq @sfend
+        jsr snd_write              ; (C = 0 from the cmp: snd_write keeps C, Y)
+        ldy1
         lda (sfx_ptr),y
         jsr snd_write
         iny
@@ -1147,95 +1013,145 @@ sound_tick:
         lda sfx_ptr                ; the next step (C = 0 still)
         adc #SFXSTEP_LEN
         sta sfx_ptr
-        bcc @music
+        bcc @tune
         inc sfx_ptr+1
-        bne @music                 ; sfx_ptr+1 <> 0 after the inc
-@end:   jsr snd_write              ; A = SFX_END (the end mark): noise off
-        lda #SN_LATCH|SN_VOL|(2 << SN_CHSHIFT)|SN_ATT_OFF   ; channel 2 off
+        bne @tune                  ; (always: not page 0)
+@sfend: jsr snd_write              ; SFX_END, the noise's silence (defs.s)
+        lda #SN_LATCH|SN_VOL|(SFXTONE << SN_CHSHIFT)|SN_ATT_OFF
         jsr snd_write
-  .if BHW
-        sty sfx_ptr+1              ; none playing (Y = 0 from ldaz)
-  .else
-        stz sfx_ptr+1              ; none playing
+    .if BHW                        ; CPU spelling: Y = 0 from ldaz (snd_write
+        sty sfx_ptr+1              ;  keeps it)
+    .else
+        stz sfx_ptr+1
+    .endif
+        bne @tune                  ; (always: Z = 0 from snd_write's A)
   .endif
-        bne @music                 ; Z = 0: snd_write's A = DDRA_KEYS
+
+  .if BHW                          ; hardware: the Model B's palette kill
+        ; ---- @kend: a two-line P2's step, its own writes done.  Q's interrupt
+        ;      cannot be taken until this handler is done, too late for Q's
+        ;      palette kill and for Q's R9/R4/R6 (due before Q's scanline 1).
+        ;      So this step, on P2's last line, waits for its blanking
+        ;      (crtctime: the first write at char 80 or later), kills the
+        ;      palette and writes Q's shape; Q's own step writes the same values
+        ;      again later.
+@kend:  ldy #KENDWAIT
+@kwait: dey
+        bne @kwait
+        palfill PCOL_BLACK, PCOL_BLACK, PCOL_BLACK
+        crtcw R_MAXRAST, SECTAB+SECENT+SE_R9, x
+        crtcw R_VTOT, SECTAB+SECENT+SE_R4, x
+        crtcw R_VDISP, SECTAB+SECENT+SE_R6, x
+        crtcw R_VSYNC, SECTAB+SECENT+SE_R7, x
+        jmp irq_ret
   .endif
 
 ; ----------------------------------------------------------------------------
-; snd_write: write a byte to the SN76489
-;   In:   A = the byte
-;   Out:  A = DDRA_KEYS ($7F);  X, Y and the carry kept
-; Through the slow data bus: port A drives the byte, latch SL_SND is the chip's write
-; enable (low for the 8 nops, 16 cycles), and the port goes back to the keyboard's
-; shape (PA7 in) after.  Placed with the interrupt's work (the PLACEH above).
+; scan_keys: the keyboard into keys
+;   Out:   keys = the K_ bits (key_bits) of the keys in key_tab held;  A = keys;
+;          X = $FF;  Y = key_tab's first byte
+;   Uses:  A X Y
+;   Post:  the keyboard's autoscan off; port A PA0-6 out, PA7 in
+; Called from the vsync; keys is written once, at the end.  Placed with the
+; interrupt's work.  test/harness.mjs, test/bopen.mjs and test/hbeebem patch its
+; first byte to rts, so their inputs come from the tool alone.
+; ----------------------------------------------------------------------------
+scan_keys:
+        lda #DDRA_KEYS
+        sta VIA_DDRA
+        lda #SL_KBD                ; latch bit SL_KBD = 0: autoscan off
+        sta VIA_ORB
+        lda #0
+        ldx #KEYN-1
+@key:   ldy key_tab,x              ; the key's number on PA0-6
+        sty VIA_ORANH
+        bit VIA_ORANH              ; N = PA7: held
+        bpl @next
+        ora key_bits,x
+@next:  dex
+        bpl @key
+        sta keys
+        rts
+        .include "keymap.inc"      ; the game's: KEYN, key_tab, key_bits
+
+; ----------------------------------------------------------------------------
+; snd_write: a byte to the SN76489
+;   In:    A = the byte
+;   Out:   A = DDRA_KEYS;  N = 0, Z = 0
+;   Uses:  A
+;   Keeps: X, Y, C
+;   Post:  port A PA0-6 out, PA7 in (scan_keys's shape);  the keyboard's
+;          autoscan on
+; The byte goes out on port A; the addressable latch's SL_SND bit is the chip's
+; write enable, held low through 8 nops (16 cycles).  Autoscan is turned on
+; first so the keyboard does not drive PA7.  Placed with the interrupt's work.
 ; ----------------------------------------------------------------------------
 snd_write:
         pha
         lda #DDRA_OUT
-        sta VIA_DDRA               ; port A all out
+        sta VIA_DDRA
         lda #SL_KBD|SL_SET
-        sta VIA_ORB                ; keyboard autoscan on so the keyboard does not pull PA7
+        sta VIA_ORB
         pla
         sta VIA_ORANH
         lda #SL_SND
         sta VIA_ORB                ; write enable low
+        .repeat 8
         nop
-        nop
-        nop
-        nop
-        nop
-        nop
-        nop
-        nop
+        .endrepeat
         lda #SL_SND|SL_SET
         sta VIA_ORB                ; write enable high
         lda #DDRA_KEYS
-        sta VIA_DDRA               ; PA7 in again
+        sta VIA_DDRA
         rts
 
 ; ----------------------------------------------------------------------------
 ; music_stop: stop the tune and silence all four channels
-;   Out:  mus_on = 0;  A clobbered
-; In the kernel because the kernel stops it: the menus' image (the tune's player) may
-; be gone.
+;   Out:   mus_on = 0;  A = $1F;  C = 1
+;   Uses:  A
+;   Keeps: X, Y
+; In the kernel because its callers (disc.s before a load, menu.s) may have the
+; menus' image, which holds the tune's player, swapped out.
 ; ----------------------------------------------------------------------------
         .segment "KRNCODE"
 music_stop:
-  .if BHW
-        lsr mus_on                 ; mus_on is 0 or 1: 6 cycles, as lda #0 / sta
+  .if BHW                          ; CPU spelling: mus_on is 0 or 1
+        lsr mus_on
   .else
         stz mus_on
   .endif
-        lda #SN_LATCH|SN_VOL|SN_ATT_OFF   ; tone 0, 1, 2 and noise off: $9F, $BF, $DF, $FF
+        ; channels 0, 1, 2 and 3 (the noise): $9F, $BF, $DF, $FF
+        lda #SN_LATCH|SN_VOL|SN_ATT_OFF
         clc
 @off:   pha
-        jsr snd_write              ; (keeps the carry)
+        jsr snd_write              ; (keeps C)
         pla
-        adc #1 << SN_CHSHIFT       ; the next channel's (C = 1 past $FF, the noise's)
+        adc #1 << SN_CHSHIFT       ; the next channel's; C = 1 past the noise's
         bcc @off
         rts
 
 ; ----------------------------------------------------------------------------
-; set_palette: the MODE 1 palette, logical 0..3 = black, cyan, magenta, yellow
-;   Out:  A, X, Y clobbered
-; A screen pixel's two bits land in bits 3 and 1 of the palette index; the other two
-; bits are don't-cares, so all 16 entries are written.  In the kernel: the menus call
-; it too.
+; set_palette: the MODE 1 palette: logical 0..3 = black, cyan, magenta, yellow
+;   Out:   all PAL_N entries written from @pal;  Model B: palon = 1;  A = @pal's
+;          first byte;  X = $FF
+;   Uses:  A X
+;   Keeps: Y
+; In the kernel: the menus call it too.
 ; ----------------------------------------------------------------------------
-        .segment "KRNCODE"
 set_palette:
-  .if BHW
-        lda #1                     ; lit: the vsync restores what Q's step blacks
+  .if BHW                          ; hardware: the Model B's palette kill
+        lda #1                     ; the vsync restores what Q's step blacks
         sta palon
   .endif
-        ldx #PAL_N-1               ; X = the palette index
-:       lda @pal,x
-        sta ULA_PAL                ; (index << PAL_SHIFT) | (physical ^ PAL_INV)
+        ldx #PAL_N-1
+@set:   lda @pal,x
+        sta ULA_PAL
         dex
-        bpl :-
+        bpl @set
         rts
-; index bits 3 and 1 are the logical colour (LCOL_IDX_B1, LCOL_IDX_B0); its physical
-; colour is PALPHYS's nibble, written inverted
+        ; ---- entry i: index i, and the physical colour (PALPHYS's nibble) of
+        ;      the logical colour in its bits 3 and 1 (LCOL_IDX_B1,
+        ;      LCOL_IDX_B0), inverted
 @pal:
 .repeat PAL_N, i
         .byte (i << PAL_SHIFT) | (((PALPHYS >> (4 * ((i & LCOL_IDX_B1) / (LCOL_IDX_B1/2) | (i & LCOL_IDX_B0) / LCOL_IDX_B0))) & 15) ^ PAL_INV)
@@ -1243,48 +1159,50 @@ set_palette:
 
 ; ----------------------------------------------------------------------------
 ; blank_palette: every palette entry black
-;   Out:  A clobbered, C = 0
+;   Out:   Model B: palon = 0;  A = $F7;  C = 0
+;   Uses:  A
+;   Keeps: X, Y
 ; ----------------------------------------------------------------------------
 blank_palette:
-  .if BHW
-        lsr palon                  ; palon is 0 or 1: now 0 (Q's step blacks colours; the vsync must not light them)
+  .if BHW                          ; hardware: the Model B's palette kill
+        lsr palon                  ; 1 or 0 -> 0: the vsync must not light the
+                                   ;  colours Q's step blacks
   .endif
-        lda #((PAL_N-1) << PAL_SHIFT) | (PCOL_BLACK ^ PAL_INV)   ; index 15 down to 0, black
+        lda #((PAL_N-1) << PAL_SHIFT) | (PCOL_BLACK ^ PAL_INV)
         sec
-:       sta ULA_PAL
+@blank: sta ULA_PAL                ; index 15 down to 0
         sbc #1 << PAL_SHIFT
-        bcs :-
+        bcs @blank
         rts
 
 ; ----------------------------------------------------------------------------
-; ring_addr7: the kernel's ringaddr -- the screen address of a ring character
-;   In:   A = the char row;  w16 = the char column (16 bits);  C = 0
-;   Out:  sp = the character's screen address (the Model B: in the back buffer,
-;         by ringbhi);  A = sp+1;
-;         X = the ring slot
-; For the sprite prologue, copy_partial and the menus.  The ring modulus
-; is by subtraction (no table this side), the row multiple from the kernel's
-; mul_rowlo/hi, and on the Model B the buffer's base from select_backbuf (both bases
-; are xx80: ringbhi is the page).  C = 0 in: the Master's modulus (and #RINGROWS-1)
-; leaves the caller's carry for the add, where the Model B's leaves it clear.
+; ring_addr7: the screen address of a ring character, from bank 7
+;   In:    A = the map char row;  w16 = the char column (16 bits);  C = 0 (the
+;          Master adds it in; the Model B's ringmod7 clears it)
+;   Out:   sp = the character's address in the ring (Model B: the back buffer's,
+;          from ringbhi);  A = sp+1
+;   Uses:  A X, sp
+;   Keeps: Y
+; The kernel's ringaddr (bank 6 has the table form), for the sprite prologue,
+; copy_partial and the menus: the slot by ringmod7, the row's offset from
+; mul_rowlo/hi, x 8, the ring's base, folded at its end.
 ; ----------------------------------------------------------------------------
-        .segment "KRNCODE"
 ring_addr7:
         ringmod7
         tax
-        lda mul_rowlo,x            ; slot * 80 + cx (C = 0: ringmod7 leaves by its bcc)
+        lda mul_rowlo,x            ; slot * 80 + the column
         adc w16
         sta sp
         lda mul_rowhi,x
         adc w16+1
-        asl sp                     ; x 8, the high byte kept in A
+        asl sp                     ; x 8, the high byte in A
         rol
         asl sp
         rol
         asl sp
-        rol                        ; C = 0: bit 13 of the char (< 8192)
-  .if BHW
-        tax                        ; the high byte (X out is dead at every caller)
+        rol                        ; C = 0: the char offset is under 8192
+  .if BHW                          ; hardware: the Model B's two rings, at xx80
+        tax
         lda sp
         adc #<RING_A
         sta sp
@@ -1292,8 +1210,8 @@ ring_addr7:
         adc ringbhi
   .else
         .assert (<RINGBASE) = 0, error, "ring_addr7: the Master's base is page aligned"
-        adc #>RINGBASE             ; <RINGBASE = 0: sp stands (C = 0 from the rol)
+        adc #>RINGBASE             ; (C = 0 from the rol)
   .endif
-        ringup sp                  ; fold back into the ring
+        ringup sp
         sta sp+1
         rts
