@@ -217,7 +217,8 @@ barq:      .res 1                  ; its slot, ring_s / 80
 ; The game's (its level start, from the level header); the engine reads mapw, maph
 ; through maxwx, maxwy only in the game's clamp.
 maplw:     .res 1                  ; log2 of the map's width in tiles
-maplh:     .res 1                  ; log2 of its height (written; nothing reads it)
+row_lim:   .res 1                  ; draw_sprite's line limit this frame: render_frame's
+                                   ;  min(BUFROWS, 256 - wcy) rows, in lines
 mapw:      .res 2                  ; the map's width in game pixels
 maph:      .res 2                  ;  and height
 maxwx:     .res 2                  ; mapw - WINPX: the window's largest x

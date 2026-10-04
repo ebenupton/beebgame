@@ -896,17 +896,19 @@ draw_sprite:
         bne @st                    ; always: sp_clip is 1..2 now; A = lb1 high = 0
 @pos:   bne @out0                  ; lb0 >= 256: below the window
         lda sp_lb0
-        cmp #BUFROWS*CHARLINES
-        bcs @out0                  ; below the window
+        cmp row_lim
+        bcs @out0                  ; below the window (or past map row 255)
 @st:    sta tmp                    ; lstart
         txa
         bne @clampend              ; lb1 >= 256
         tya
-        cmp #BUFROWS*CHARLINES
+        cmp row_lim
         bcc :+
 @clampend:
         inc sp_clip                ; cut at the bottom
-        lda #BUFROWS*CHARLINES-1
+        ldx row_lim                ; the last line: row_lim - 1
+        dex
+        txa
 :       tax                        ; lend
         cmp tmp
         bcc @out0                  ; lend < lstart: nothing left
@@ -1290,6 +1292,23 @@ wait_flip:
   .endif
         ror
         sta wcy
+        ; ---- row_lim: the lines draw_sprite may draw.  The buffer's BUFROWS rows,
+        ; but none past map row 255: rows are bytes, and a sprite row of 256 would
+        ; wrap to 0 -- on the Model B its ring slot (0 mod RINGROWS) is a visible
+        ; row's.  Only a 256-row map's bottom reaches it (Cleo falling off it).
+  .if .not TALLMAP
+        eor #$FF                   ; 255 - wcy
+        cmp #BUFROWS
+        bcc :+                     ; 255 - wcy < BUFROWS: rows = 256 - wcy
+        lda #BUFROWS-1
+:       asl                        ; (rows - 1) * CHARLINES: at most 240, C = 0
+        asl
+        asl
+        adc #CHARLINES             ; rows * CHARLINES
+  .else                            ; (TALLMAP: rows go on past 255 legitimately)
+        lda #BUFROWS*CHARLINES
+  .endif
+        sta row_lim
         ; ---- draw the back buffer, the steps in order, and build its section
         ; chain.  Bank 7 drives the frame and keeps the records; bank 6 gets two
         ; fixed calls a frame (low RAM's selbb and validate) and the rects through
