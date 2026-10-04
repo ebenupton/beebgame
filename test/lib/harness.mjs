@@ -135,10 +135,12 @@ export class Harness {
   }
 
   // ---- render-work measurement, with the interrupt separated out ------------------
-  // The window is select_backbuf..render_done (render_frame opens with wait_flip, an
-  // idle spin of 6-23k cycles that is not work).  The vsync/timer ISR fires inside
-  // that window, and how many times depends on where the CRTC phase happens to sit --
-  // so it is accounted separately rather than left to pollute the figure.
+  // The window is the instruction after render_frame's spin ..render_done.  render_frame
+  // opens with wait_flip, inlined (engine/frame.s: `lda flipreq / bne wait_flip`, both
+  // labels at the same address), an idle spin of 6-23k cycles that is not work.  The
+  // vsync/timer ISR fires inside that window, and how many times depends on where the
+  // CRTC phase happens to sit -- so it is accounted separately rather than left to
+  // pollute the figure.
   // Also counts instructions retired in the window.  Cycles move when code moves --
   // a taken branch costs an extra cycle across a page -- so for a change of a few
   // hundred cycles the cycle figure cannot tell a real win from a relocation.  The
@@ -151,14 +153,31 @@ export class Harness {
     let t0 = -1, inWin = false, isrAt = -1, exiting = false;
     this.meter = m;
     let n = 0, lt0 = -1, li = 0, inLogic = false;
+    // The window opens at the instruction the spin falls through to.  No label names
+    // it (wait_flip is render_frame itself), so it is found by disassembling the spin
+    // the first time render_frame is reached -- the game's image is in bank 7 then, by
+    // construction -- rather than by a hardcoded offset: an offset assumed `jsr
+    // wait_flip` (3 bytes) and, once the spin was inlined, landed inside the bne, so no
+    // frame ever opened.  `lda flipreq` is $A5 zp (2 bytes) or $AD abs (3), then `bne`
+    // ($D0, 2 bytes) back to render_frame; the fall-through is after the bne.
+    let spinEnd = -1;
+    const findSpinEnd = (op) => {
+      const len = op === 0xa5 ? 2 : op === 0xad ? 3 : 0, p = A.render_frame;
+      if (!len || this.rd(p + len) !== 0xd0 || this.rd(p + len + 1) !== (256 - (len + 2)))
+        throw new Error(`render_frame does not open with 'lda flipreq / bne render_frame' (${[0, 1, 2, 3, 4].map((i) => this.rd(p + i).toString(16)).join(" ")})`);
+      return p + len + 2;
+    };
     this.cpu.debugInstruction.add((pc, op) => {
       if (inWin) n++;
       if (inLogic) li++;
       if (this.at(A.frame_top, pc)) { lt0 = this.cyc(); inLogic = true; li = 0; }
-      else if (inLogic && this.at(A.render_frame, pc)) { m.logic = this.cyc() - lt0; m.logicI = li; inLogic = false; }
-      // the window opens as render_frame's wait for the flip returns (its first
-      // instruction is that jsr): everything the frame does after
-      if (!inWin && this.atIn(A.render_frame + 3, "render_frame", pc)) { t0 = this.cyc(); inWin = true; m.isr = 0; m.isrCount = 0; n = 0; }
+      else if (this.at(A.render_frame, pc)) {
+        if (spinEnd < 0) spinEnd = findSpinEnd(op);
+        if (inLogic) { m.logic = this.cyc() - lt0; m.logicI = li; inLogic = false; }
+      }
+      // the window opens as render_frame's spin for the flip falls through: everything
+      // the frame does after
+      if (!inWin && spinEnd >= 0 && this.atIn(spinEnd, "render_frame", pc)) { t0 = this.cyc(); inWin = true; m.isr = 0; m.isrCount = 0; n = 0; }
       else if (inWin && this.at(A.render_done, pc)) { m.work = this.cyc() - t0; m.instrs = n; inWin = false; m.frames++; }
       else if (this.at(A.irq_handler, pc)) { isrAt = this.cyc(); }
       else if (isrAt >= 0 && op === 0x40) { exiting = true; }   // RTI: measure to the
@@ -182,7 +201,6 @@ export class Harness {
       ["curbuf", A.curbuf, 1],   // (not BUF_VALID: the Master encodes it in BUF_CX now)
       ["BUF_CX", A.BUF_CX, 4, "bufcx"], ["BUF_CY", A.BUF_CY, 2],
       ["BARDIRTY", A.BARDIRTY, 1],   // (one byte: one bar; not BARBG, gone)
-      ["MIRR_R", A.MIRR_R, 2], ["MIRR_LO", A.MIRR_LO, 2],
       ["NSPR", A.NSPR, 1], ["SPRLIST", A.SPRLIST, 5 * MAXSPR, "sprites"],
       ["RECCNT", A.RECCNT, 2], ["SPRREC", A.SPRREC, 2 * MAXREC * 10, "rec"], ["KEEP", A.KEEP, MAXREC, "keep"],
       ["DIRTYCNT", A.DIRTYCNT, 2], ["DIRTYLIST", A.DIRTYLIST, 2 * 2 * 64, "dirty"],

@@ -1,11 +1,13 @@
 """tools/levelfile.py: the level file's writer against its reader, the run length code,
-and the loader's use of its constants.   python3 -m unittest discover beebgame/test"""
+the directory, the header's tail, and the loader's use of its constants.
+    python3 -m unittest discover beebgame/test"""
 import os, random, re, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'tools'))
 import levelfile as lf
 
 BOXID0, BOXN = 10, 3            # a game's sprite ids (deliberately not Cleo's 103, 15)
+NIDS = BOXID0 + BOXN            # the directory: an entry a sprite id, images then boxes
 
 
 def level(**kw):
@@ -19,10 +21,10 @@ def level(**kw):
              map=bytes(rnd.choice((0, 0, 0, 1, 2, 3)) for _ in range(1 << (lw + lh))),
              flat=b'\x0f\x0f', halves=b'\x05\x01\x06\x03', hpair=b'\x33\x33', mir=b'',
              page0=bytes(range(256)) * 2, game_header={2: 9, 3: 8, 7: 1})
-    ents = [None] * (BOXID0 + BOXN)
-    ents[1] = (0x9000, 4, bytes([3, 12, 0, 0, 2, 24]))
-    ents[7] = (0x8400, 5, bytes([2, 8, 0, 0, 2 | 8, 16]))
-    d['directory'], d['masks'] = lf.directory(ents, [0x9100 if i == 1 else 0 for i in range(BOXID0)])
+    ents = [None] * NIDS
+    ents[1] = (0x9000, 4)       # an image in bank 4
+    ents[7] = (0x8400, 5)       # one in bank 5
+    d['directory'] = lf.directory(ents)
     d['boxid0'], d['boxn'] = BOXID0, BOXN
     d.update(kw)
     return lf.Level(**d)
@@ -54,33 +56,58 @@ class File(unittest.TestCase):
         self.assertEqual(sec['map'], lv.map)
         self.assertEqual(sec['objs'], lv.objects)
         self.assertEqual(sec['dir'], lv.directory)
-        self.assertEqual(sec['smask'], lv.masks)
         self.assertEqual(sec['page0'], lv.page0)
+        self.assertEqual(sec['place'], lv.placement)
+        self.assertEqual((sec['attr'], sec['altcls']), lv.tile_tables)
         f = sec['fields']
         self.assertEqual((f['lw'], f['lh'], f['nobj'], f['nhalf'], f['solidfill']), (5, 4, 7, 2, 0x0F))
         self.assertEqual(sec['hdr'][2:4], bytes([9, 8]))
 
     def test_page0_last_and_aligned(self):
         data = lf.encode(level())
-        off = data[26] | data[27] << 8
+        t = 2 * lf.SEC['page0']                     # its entry in the section table
+        off = data[t] | data[t + 1] << 8
         self.assertEqual(off % 256, 0)
         self.assertEqual(len(data) - off, lf.PAGE0_LEN)
 
-    def test_directory_bank5_flag(self):
-        sec = lf.decode(lf.encode(level()), BOXID0)
-        self.assertTrue(sec['dir'][7 * 8 + 6] & lf.DIR_BANK5)
-        self.assertFalse(sec['dir'][1 * 8 + 6] & lf.DIR_BANK5)
+    def test_directory_split_and_bank5_flag(self):
+        # the low bytes, then the high bytes; a None is 0,0; bank 5 clears bit 7 of the
+        # high byte (every image is at $8000..$BFFF, so bit 7 set means bank 4)
+        d = lf.decode(lf.encode(level()), BOXID0, BOXN)['dir']
+        self.assertEqual(len(d), 2 * NIDS)
+        self.assertEqual((d[1], d[NIDS + 1]), (0x00, 0x90))
+        self.assertEqual((d[7], d[NIDS + 7]), (0x00, 0x04))
+        self.assertTrue(d[NIDS + 1] & 0x80)
+        self.assertFalse(d[NIDS + 7] & 0x80)
+        for i in range(NIDS):
+            if i not in (1, 7):
+                self.assertEqual((d[i], d[NIDS + i]), (0, 0))
+
+    def test_directory_rejects_what_the_loader_cannot_read(self):
+        with self.assertRaises(AssertionError):     # bank 5 at $80xx: its high byte would read as none
+            lf.directory([(0x8010, 5)])
+        with self.assertRaises(AssertionError):     # not a sideways address
+            lf.directory([(0x7000, 4)])
+        with self.assertRaises(AssertionError):     # not a sprite bank
+            lf.directory([(0x9000, 6)])
 
     def test_engine_header_fields_are_protected(self):
         for o in (0, 1, 6, 20, 31):
             with self.assertRaises(AssertionError):
                 lf.encode(level(game_header={o: 1}))
 
+    def test_header_tail(self):
+        tail = bytes(range(1, 10))
+        sec = lf.check(lf.encode(level(header_tail=tail)), BOXID0, BOXN)
+        self.assertEqual(sec['hdr'][lf.HDR_LEN:], tail)      # after the 32-byte header, as LV_HDR gets it
+        with self.assertRaises(AssertionError):             # the section must stay under a page
+            lf.encode(level(header_tail=bytes(256 - lf.HDR_LEN)))
+
     def test_directory_sized_by_the_game(self):
         with self.assertRaises(AssertionError):     # an entry short
-            lf.encode(level(directory=bytes(lf.DIR_ENTRY * (BOXID0 + BOXN - 1))))
-        with self.assertRaises(AssertionError):     # a mask short
-            lf.encode(level(masks=bytes(2 * (BOXID0 - 1))))
+            lf.encode(level(directory=bytes(lf.dir_len(BOXID0, BOXN) - 2)))
+        with self.assertRaises(AssertionError):     # an entry over
+            lf.encode(level(directory=bytes(lf.dir_len(BOXID0, BOXN) + 2)))
 
     def test_limits(self):
         with self.assertRaises(AssertionError):
