@@ -1,19 +1,26 @@
 // beebgame's measurement harness: a frame-exact driver for a game under jsbeeb.
+// Exports: findJsbeeb, dbgPath, loadLabels, loadBanks, imgOk and the Harness class
+// (at/atIn/inBank, rd/wr/rd16/rds16/wr16, cyc, runTo, installMeter, sceneRanges,
+// fingerprint; a game subclasses it for gameScene).  No game symbols are assumed
+// beyond frame_top, render_frame, render_done, irq_handler, flip_req and the state
+// named in sceneRanges, each taken from the game's labels.txt (and its defs_ld.inc).
 //
 // WHY THIS EXISTS.  The old benchmark advanced the machine in 20000-cycle polls and
 // checked a frame counter afterwards, so every wait overshot by a variable amount and
 // every key write landed at an arbitrary point inside a frame.  Whether the logic saw
 // a key this frame or the next then depended on sub-frame phase -- which depends on
 // absolute timing, which depends on code size.  One frame of drift at the first
-// location put the world somewhere else for every location after it (measured: f0 64
-// vs 65 at location 1, and by location 10 one build's Cleo had died and restarted the
-// level).  The costs being compared were of different scenes.
+// location put the world somewhere else for every location after it (an old
+// measurement, date unknown: f0 64 vs 65 at location 1, and by location 10 one
+// build's Cleo had died and restarted the level).  The costs being compared were of
+// different scenes.
 //
 // THE FIX.  jsbeeb's debugInstruction hook stops execution *before* the instruction
-// when a handler returns true, so an exact PC break is available at full speed.  Every
-// wait here is therefore "run to the next frame_top", a symbol the game places at the
-// one point reached exactly once per rendered frame, before its logic reads 'keys'.  Inputs are written while stopped there.  Nothing in the protocol can
-// observe a cycle count, so nothing in it can observe code size.
+// when a handler returns true (6502.js executeInternal), so an exact PC break is
+// available at full speed.  Every wait here is therefore "run to the next frame_top",
+// a symbol the game places at the one point reached exactly once per rendered frame,
+// before its logic reads 'keys'.  Inputs are written while stopped there.  Nothing in
+// the protocol can observe a cycle count, so nothing in it can observe code size.
 //
 // WHAT IS STILL NOT INVARIANT, and why that is honest rather than a bug: moving code
 // changes real cycle counts, because a taken 6502 branch costs an extra cycle when its
@@ -29,6 +36,8 @@ import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
+// jsbeeb as npx installs it: the newest ~/.npm/_npx/*/node_modules/jsbeeb with a
+// src/machine-session.js (the first directory found, not the newest)
 export function findJsbeeb() {
   const npx = path.join(homedir(), ".npm", "_npx");
   for (const d of readdirSync(npx)) {
@@ -43,12 +52,14 @@ export function dbgPath(labels) {
   const d = path.dirname(labels), g = path.join(d, "game.dbg");
   return existsSync(g) ? g : path.join(d, "cleo.dbg");
 }
+// labels.txt ("al <hex> .<name>" lines, ld65's -Ln) as {name: address}
 export function loadLabels(file) {
   const A = {};
   for (const m of readFileSync(file, "utf8").matchAll(/^al ([0-9A-F]+) \.(\w+)$/gm)) A[m[2]] = parseInt(m[1], 16);
   // the build's constants too (defs_ld.inc, beside labels.txt: build.sh writes it from
-  // the game's equates -- the screen's shape, the loader's addresses), where a label
-  // of the same name does not say otherwise; an older build has none of them
+  // the game's equates -- the screen's shape, the loader's addresses -- as "NAME = $hex"
+  // or "NAME = decimal"), where a label of the same name does not say otherwise; an
+  // older build has none of them
   try {
     for (const m of readFileSync(path.join(path.dirname(file), "defs_ld.inc"), "utf8").matchAll(/^(\w+) = (\$?)([0-9A-Fa-f]+)$/gm))
       if (!(m[1] in A)) A[m[1]] = parseInt(m[3], m[2] ? 16 : 10);
@@ -56,25 +67,29 @@ export function loadLabels(file) {
   return A;
 }
 
-const CHUNK = 90_000;          // < jsbeeb's MaxCyclesPerIter (100000) so each runFor is
-                               // exactly one execute() call -- see runTo for why
+const CHUNK = 90_000;          // < jsbeeb's MaxCyclesPerIter (tests/test-machine.js:
+                               // 100000) so each runFor is one execute() call -- see runTo
 const WRAP = 2_000_000;        // cpu.currentCycles wraps at 2e6 (cycleSeconds ticks)
 
 // A banked build (the Model B's layout, on either machine) has code and state in
 // sideways RAM, where one address names a different byte in each bank: the linker's
-// debug file says which bank each label is in (by its segment), so a PC break waits
-// for that bank to be paged ($F4, ROMSEL's copy) and a state read pages it first.
+// debug file says which bank each label is in (by its segment's name), so a PC break
+// waits for that bank to be paged (romsel_cpy, ROMSEL's copy; $F4 in a build without
+// the label) and a state read pages it first.  The driver segments D8271N/D1770N are
+// not bank 7's: the NMI stubs run from main RAM.
 const SEGBANK = [[/^SPR4/, 4], [/^(SPR5|MAP5)/, 5], [/^TIL/, 6],
-                 [/^(COMMON7|GAME|ENG|MNU|KRN|LGC|D8271[HC]|D1770[HC])/, 7]];   // (LGC: builds before the rename; D: the driver slot)
+                 [/^(COMMON7|GAME|ENG|MNU|KRN|LGC|D8271[HC]|D1770[HC])/, 7]];   // (LGC, COMMON7: older builds; D: the driver slot)
 // Bank 7 below its kernel holds one of two images, the game's (GAME*, ENG*) or the menus'
-// (MNU*), and the kernel's ld_img says which (disc.s load_image): a break in either
-// waits for that image as well as the bank.
+// (MNU*), and the kernel's ld_img says which (ldprog.s ld_image writes it): a break in
+// either waits for that image as well as the bank.
 const SEGIMG = [[/^(GAME|ENG|LGC)/, 0], [/^MNU/, 1]];
+// the banks and images of a build's labels, from its debug file: {byName, byPc,
+// imgByName, imgByPc} (byPc -1 where two banks share an address), or null without one
 export function loadBanks(dbgFile) {
   if (!existsSync(dbgFile)) return null;
   const segBank = new Map(), segImg = new Map(), byName = new Map(), byPc = new Map(), imgByName = new Map(), imgByPc = new Map();
   const t = readFileSync(dbgFile, "utf8");
-  const kernel = /name="KRNCODE"/.test(t);        // (before the kernel: the menus were bank 6's overlay)
+  const kernel = /name="KRNCODE"/.test(t);        // (an old build without a kernel: the menus were bank 6's overlay)
   for (const m of t.matchAll(/^seg\tid=(\d+),name="(\w+)"/gm)) {
     const e = !kernel && /^MNU/.test(m[2]) ? [null, 6] : SEGBANK.find(([re]) => re.test(m[2]));
     if (e) segBank.set(m[1], e[1]);
@@ -93,14 +108,15 @@ export function loadBanks(dbgFile) {
   }
   return { byName, byPc, imgByName, imgByPc };
 }
-// is bank 7's image the one a label at pc is in? (read with bank 7 paged: ld_img is
-// the kernel's)
+// is bank 7's image the one a label at pc is in?  (ld_img is the kernel's, in bank 7:
+// the caller has bank 7 paged, or asks about a label of no image)
 export function imgOk(cpu, A, banks, pc) {
   const i = banks?.imgByPc.get(pc);
   return i === undefined || i < 0 || A.ld_img === undefined || cpu.readmem(A.ld_img) === i;
 }
 
 export class Harness {
+  // s: a jsbeeb MachineSession; A: loadLabels'; banks: loadBanks' (null: one bank)
   constructor(s, A, banks = null) { this.s = s; this.A = A; this.cpu = s._machine.processor; this.banks = banks; }
   // is the CPU at pc, in the bank that label lives in?
   at(pc, p) { if (p !== pc) return false; const b = this.banks?.byPc.get(pc); return (b === undefined || b < 0 || this.cpu.readmem((this.A.romsel_cpy ?? 0xf4)) === b) && imgOk(this.cpu, this.A, this.banks, pc); }
@@ -115,20 +131,24 @@ export class Harness {
     try { return f(); } finally { this.cpu.writemem(0xfe30, was); }
   }
 
+  // memory as the CPU sees it now (the bank paged, the Master's ACCCON as set)
   rd(a) { return this.cpu.readmem(a); }
   wr(a, v) { this.cpu.writemem(a, v); }
   rd16(a) { return this.rd(a) | (this.rd(a + 1) << 8); }
   rds16(a) { const v = this.rd16(a); return v >= 32768 ? v - 65536 : v; }
   wr16(a, v) { this.wr(a, v & 255); this.wr(a + 1, (v >> 8) & 255); }
-  cyc() { return this.cpu.currentCycles + this.cpu.cycleSeconds * WRAP; }
+  cyc() { return this.cpu.currentCycles + this.cpu.cycleSeconds * WRAP; }   // cycles since boot
 
-  // Run until PC is exactly `pc`.  jsbeeb skips the hook check on the FIRST
+  // Run until PC is exactly `pc`, in its bank and image (at()); returns the cycles
+  // taken, or throws after `budget` cycles.  jsbeeb skips the hook check on the FIRST
   // instruction of each execute() call, so a chunk boundary landing on the target
   // would silently run past it.  Two things make this safe: we chunk ourselves at
   // less than MaxCyclesPerIter (one execute per runFor), and we test cpu.pc after
   // every chunk -- so a chunk that *ended* on the target is detected here rather
   // than resumed past.  Resuming from the target is only ever done deliberately, by
   // the next runTo call, which is exactly the "advance to the next occurrence" we want.
+  // (A stop leaves jsbeeb's cycle target ahead of the CPU; the next runFor runs that
+  // remainder out as well as its own chunk, which the hook makes harmless here.)
   async runTo(pc, budget = 40_000_000) {
     const t0 = this.cyc();
     const h = this.cpu.debugInstruction.add((p) => this.at(pc, p));
@@ -144,18 +164,20 @@ export class Harness {
   // ---- render-work measurement, with the interrupt separated out ------------------
   // The window is the instruction after render_frame's spin ..render_done.  render_frame
   // opens with wait_flip, inlined (engine/frame.s: `lda flip_req / bne wait_flip`, both
-  // labels at the same address), an idle spin of 6-23k cycles that is not work.  The
-  // vsync/timer ISR fires inside that window, and how many times depends on where the
-  // CRTC phase happens to sit -- so it is accounted separately rather than left to
-  // pollute the figure.
+  // labels at the same address), an idle spin for the pending flip that is not work.
+  // The vsync/timer ISR fires inside that window, and how many times depends on where
+  // the CRTC phase happens to sit -- so it is accounted separately (irq_handler to the
+  // instruction after its RTI) rather than left to pollute the figure.
   // Also counts instructions retired in the window.  Cycles move when code moves --
   // a taken branch costs an extra cycle across a page -- so for a change of a few
   // hundred cycles the cycle figure cannot tell a real win from a relocation.  The
   // instruction count can: it is exactly what the code did, wherever it sits.
+  // Returns and keeps (this.meter) {work, isr, isrCount, frames, instrs, logic,
+  // logicI}, each the last completed frame's; 'frames' counts completed windows.
   installMeter() {
-    // 'work' is the render window.  'logic' is frame_top..render_frame, the two game
-    // steps -- about 18000 cycles a frame, and invisible to the render figure, so a
-    // change to the logic measures as nothing at all unless it is timed separately.
+    // 'work' is the render window.  'logic' is frame_top..render_frame, the game's
+    // steps -- invisible to the render figure, so a change to the logic measures as
+    // nothing at all unless it is timed separately.
     const A = this.A, m = { work: 0, isr: 0, isrCount: 0, frames: 0, instrs: 0, logic: 0, logicI: 0 };
     let t0 = -1, inWin = false, isrAt = -1, exiting = false;
     this.meter = m;
@@ -200,6 +222,8 @@ export class Harness {
   // ---- the scene the renderer sees ------------------------------------------------
   // Every input to render_frame's cost, named by label so it is build-independent: the
   // engine's, then the game's (gameScene, a subclass's: the game state the scene is of).
+  // An entry is [name, address, length, kind?]; kind names a reading below (a function
+  // reads the value itself); entries whose label the build lacks are dropped.
   gameScene() { return []; }
   sceneRanges() {
     const A = this.A, MAXSPR = 32, MAXREC = 32;
@@ -214,6 +238,8 @@ export class Harness {
       ...this.gameScene(),
     ].filter(([, a]) => a !== undefined);
   }
+  // {fp: 16 hex digits of a sha256 over every range, parts: {name: hex bytes}}; the
+  // banked ranges are read with their bank paged (inBank)
   fingerprint() {
     const h = createHash("sha256"), parts = {};
     for (const [name, addr, len, kind] of this.sceneRanges()) {

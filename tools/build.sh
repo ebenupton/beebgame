@@ -1,46 +1,55 @@
 #!/bin/sh
-# beebgame's build: a game's sources with the engine's, both machines, one disc.  The
-# game's build.sh sets the variables below and runs this from its own directory, where
-# build/ is made.  The sources are assembled twice against one sector table: BHW=1 for
-# the Model B's hardware into build/modelb/, BHW=0 for the Master's into build/master/
-# -- the same structure, each level gathered into the banks by the engine's loader.
-# The boot loader picks the machine's bank images (BANKSB, BANKSM); each machine's
-# LDPROG and bank 7 images (IMG7: MENU, GAME) are its own; everything else, the levels
-# included, is on the disc once.
+# beebgame's build: a game's sources with the engine's, both machines, one disc.  The game's
+# build.sh sets the variables below and runs this from its own directory, where build/ is
+# made.  The sources are assembled twice against one sector table: BHW=1 (the default) for
+# the Model B's hardware into build/modelb/, BHW=0 and the 65C02 for the Master's into
+# build/master/ -- the same structure, the Master's data pinned to the Model B's addresses
+# (pincfg.py), each level gathered into the banks by the engine's loader.  The boot loader
+# picks the machine's bank images (BANKSB, BANKSM); each machine's LDPROG and bank 7 images
+# (IMG7: MENU, GAME) are its own; everything else, the levels included, is on the disc once.
+# Output: $DISC_OUT, and under build/ each machine's objects, listings, map, labels and
+# debug file, the generated includes (files.inc, levelfmt.inc, defs_ld.inc, img7fix.inc,
+# gamename.inc) and the pieces.  The checks it runs: levelfile.py check on the level files,
+# the two machines' shared files and assets.inc compared, the boot header's addresses
+# compared, and layoutcheck.py.
 #
 #   GAME_MAIN    the game's root source (it includes the engine's: see README.md)
 #   GAME_SRC     the game's include directory
-#   GAME_ASSETS  run once per machine (TARGET, BD set): writes build/$TARGET's assets
-#                -- assets.inc, the level files, SPRC, SPRX, BAR, img_tab.bin and what
-#                the game's own sources .incbin -- and build/TILES0-2
+#   GAME_ASSETS  run once per machine (TARGET, BD set): writes build/$TARGET's assets --
+#                assets.inc, the level files, SPRC, SPRX, BAR, img_tab.bin and what the
+#                game's own sources .incbin -- and build/TILES0-2
 #   GAME_MUSIC   run once first (may be empty)
-#   DISC_TITLE   the disc's title; DISC_OUT the disc image (build/game.ssd); GAME_NAME
-#                the game's name, for the boot loader's messages (DISC_TITLE)
+#   DISC_TITLE   the disc's title; DISC_OUT the disc image (build/game.ssd); GAME_NAME the
+#                game's name, for the boot loader's messages (DISC_TITLE by default)
 #   SKIP_ASSETS=1 skips GAME_MUSIC and GAME_ASSETS
-#   MASTERONLY=1 builds the Master alone: no Model B assembly, link or files, the
-#                Master linked unpinned, its own layout the level files' (a game too big
-#                for the Model B; the boot loader says so on one)
-#   GAMEHAZEL=1  the game's own code in HAZEL (segments HAZCODE, HAZDATA, HAZBSS), a
-#                piece of BANKS the boot loader copies once; the Master only, and SPRX
-#                is then read at every level load (no copy is kept in HAZEL/ANDY)
-#   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound
-#                effects (the game's player, resident: its code in HAZEL, say)
-#   TALLMAP=1    maps up to 256 tiles tall (the window's char row keeps its high bits
-#                for draw_rect's map row); the Master alone
-#   DRAWFLAGS=1  the sprite list carries draw flags in the high bits of its x (bit 7:
-#                mirror the image), so one image is drawn either way round
-#   TIGHTBSS=1   the engine's bank 7 variables packed: the sprite records 9 bytes (the
-#                rectangle's column high bits in the height's byte) and ENGBSS not
-#                page aligned (after GAMEBSS as it falls)
-#   MAXSPR=n     the sprite slots (the most sprites on screen at once), over the
-#                game's assets.inc MAXSPRDEF; 28 when neither sets it
+# The options, passed to the assembler as -D flags (cpu.inc defaults each to 0):
+#   MASTERONLY=1 builds the Master alone: no Model B assembly, link or files, the Master
+#                linked unpinned, its own layout the level files' (a game too big for the
+#                Model B; the boot loader says so on one)
+#   GAMEHAZEL=1  the game's own code in HAZEL (segments HAZCODE, HAZDATA, HAZBSS), a piece of
+#                BANKS the boot loader copies once; the Master only, and SPRX is then staged
+#                from the disc at every level load (ldprog.s SPRXKEEP: no copy is kept in
+#                HAZEL and ANDY)
+#   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound effects
+#                (kernel.s)
+#   TALLMAP=1    maps taller than 128 tiles (tiles.s: the map row keeps the window row's
+#                high bits); the Master alone, its 32-row ring
+#   DRAWFLAGS=1  the sprite list carries draw flags in the high byte of its x (bit 7: mirror
+#                the image), so one image is drawn either way round (frame.s)
+#   TIGHTBSS=1   the engine's bank 7 variables packed: 9-byte sprite records stored as
+#                arrays (engine/defs.s), and ENGBSS not page aligned (after GAMEBSS as it
+#                falls)
+#   ALLLEVELS=1  a test build: every level on the chooser, every bonus level taken (the
+#                game's menu.s and game.s read it)
+#   MAXSPR=n     the sprite slots (the most sprites on screen at once), over the game's
+#                assets.inc MAXSPRDEF; 28 when neither sets it (engine/defs.s)
 BG=$(cd "$(dirname "$0")/.." && pwd)
 : "${GAME_MAIN:?}" "${GAME_SRC:?}" "${GAME_ASSETS:?}" "${DISC_TITLE:?}"
 DISC_OUT=${DISC_OUT:-build/game.ssd}
 GAME_NAME=${GAME_NAME:-$DISC_TITLE}
 set -e
 mkdir -p build
-# the options, as the assembler's flags (cpu.inc defaults each to 0)
+# the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
 for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS; do
     eval "v=\$$o"
@@ -50,21 +59,25 @@ done
 [ -z "$MAXSPR" ] || OPTDEFS="$OPTDEFS -D MAXSPR=$MAXSPR"
 [ "$GAMEHAZEL" = 0 ] || [ "$MASTERONLY" = 1 ] || { echo "GAMEHAZEL=1 needs MASTERONLY=1: the Model B has no HAZEL"; exit 1; }
 if [ "$MASTERONLY" = 1 ]; then TARGETS=master; else TARGETS="modelb master"; fi
-settarget() {                       # $1: modelb or master
+# settarget: $1 is modelb or master; sets TARGET, BD (its build directory), CPU, DEFS and CFG
+# (one linker map for both: the Master's own areas are empty on the Model B)
+settarget() {
     TARGET=$1
     if [ "$TARGET" = master ]; then
         BD=build/master; CPU=65C02; DEFS="-D BHW=0 $OPTDEFS"
     else
         BD=build/modelb; CPU=6502; DEFS="$OPTDEFS"
     fi
-    CFG=$BG/cfg/banks.cfg           # (one map: the Master's own areas are empty on the Model B)
+    CFG=$BG/cfg/banks.cfg
     export BD TARGET
 }
 [ -n "$SKIP_ASSETS" ] || [ -z "$GAME_MUSIC" ] || sh -c "$GAME_MUSIC"
-cfgval() {                          # $1: a cfg, $2: an area, $3: start|size -> its hex digits
+# cfgval: $1 a cfg, $2 an area, $3 start|size -> its hex digits (no $)
+cfgval() {
     sed -n "s/^ *$2: *.*$3 = [\$]\([0-9A-F]*\).*/\1/p" $1
 }
-incval() {                          # $1: an .inc, $2: a constant -> its value (hex or decimal)
+# incval: $1 an .inc, $2 a constant -> its value, hex as 0x... or decimal
+incval() {
     sed -n "s/^$2 = \([\$]*[0-9A-Fa-f]*\).*/\1/p" $1 | sed 's/^\$/0x/'
 }
 for t in $TARGETS; do
@@ -72,20 +85,23 @@ for t in $TARGETS; do
     mkdir -p $BD
     [ -n "$SKIP_ASSETS" ] || sh -c "$GAME_ASSETS"
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
-    [ "$TIGHTBSS" = 1 ] && sed -i.bak '/^ *ENGBSS:/s#, align = \$100##' $BD/game.cfg   # (ENGBSS where GAMEBSS ends)
-    # the banks' code must end where the game's packer starts their data (assets.inc:
-    # the level files bake the addresses): the areas sized to it, so an overflow fails
-    # the link.  Bank 6's ends at the first tile slot, TILES + (TOFF+1)*64
+    # TIGHTBSS: ENGBSS where GAMEBSS ends, not at the next page
+    [ "$TIGHTBSS" = 1 ] && sed -i.bak '/^ *ENGBSS:/s#, align = \$100##' $BD/game.cfg
+    # the banks' code must end where the game's packer starts their data (assets.inc: the
+    # level files bake the addresses): the areas sized to it, so an overflow fails the link.
+    # Bank 6's ends at the first tile slot, TILES + (TOFF+1)*64
     B4S=$(printf '%04X' $(( $(incval $BD/assets.inc B4_CODE_END) - 0x$(cfgval $CFG B4X start) )))
     B5S=$(printf '%04X' $(( $(incval $BD/assets.inc B5_CODE_END) - 0x$(cfgval $CFG B5X start) )))
     B6S=$(printf '%04X' $(( $(incval $BD/assets.inc TILES) + ($(incval $BD/assets.inc TOFF) + 1) * 64 - 0x$(cfgval $CFG B6X start) )))
     sed -i.sz -e "s#^\( *B4X: *start = [$][0-9A-F]*, size = [$]\)[0-9A-F]*#\1$B4S#" \
               -e "s#^\( *B5X: *start = [$][0-9A-F]*, size = [$]\)[0-9A-F]*#\1$B5S#" \
               -e "s#^\( *B6X: *start = [$][0-9A-F]*, size = [$]\)[0-9A-F]*#\1$B6S#" $BD/game.cfg
+    # the files the sector table needs sizes for exist before the first pass, empty
     for f in BANKS MENU GAME IMG7 LDPROG; do [ -f $BD/$f ] || : > $BD/$f; done
-    python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc     # (the loader's: one definition)
+    # the level file's format, for the loader: one definition (levelfile.py)
+    python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc
 done
-# what both machines read goes on the disc once (the Model B's copy): the packs agree
+# what both machines read goes on the disc once (the Model B's copy): the packs must agree
 # (the files the engine's loader reads, by these names: ldprog.s)
 B=build/modelb M=build/master
 if [ "$MASTERONLY" = 1 ]; then REF=$M; else REF=$B
@@ -95,10 +111,10 @@ done
 fi
 python3 $BG/tools/levelfile.py check $REF/assets.inc $(for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do echo $REF/L$l; done)
 
-# the disc's file list, in disc order: the boot files, each machine's pieces, the
-# shared files together, the levels after them.  A game's start reads LDPROG, the
-# game's image (IMG7) and BAR in turn, so they are neighbours: the Model B's in that
-# order, the Master's around them
+# the disc's file list, in disc order: the boot files, each machine's pieces, the shared
+# files together, the levels after them.  A game's start reads LDPROG, the game's image
+# (IMG7) and BAR in turn, so they are neighbours: the Model B's in that order, the Master's
+# around them
 if [ "$MASTERONLY" = 1 ]; then
 DISC="!BOOT:build/BOOT LOADER:build/LOADER BANKSM:$M/BANKS"
 DISC="$DISC IMG7M:$M/IMG7 LDPROGM:$M/LDPROG BAR:$REF/BAR"
@@ -112,9 +128,9 @@ DISC="$DISC TILES2:build/TILES2"
 [ -f build/LOADER ] || : > build/LOADER
 printf '*RUN LOADER\r' > build/BOOT
 
-# Passes: the sector table (files.inc) needs the files' sizes, and bank 7 and LDPROG
-# carry entries from it.  No size depends on a sector number, so the second pass is
-# stable (the third checks that).
+# Passes: the sector table (files.inc) needs the files' sizes, and bank 7 and LDPROG carry
+# entries from it.  No size depends on a sector number, so the second pass is stable (the
+# third checks that: it only rebuilds the table and compares).
 for pass in 1 2 3; do
     [ $pass = 3 ] && cp $REF/files.inc $REF/files.prev
     python3 $BG/tools/mkdfs.py table $REF/files.inc $DISC
@@ -124,17 +140,19 @@ for pass in 1 2 3; do
         settarget $t
         ca65 -g --cpu $CPU $DEFS -I $BD -I $GAME_SRC -I $BG/src --bin-include-dir $BD \
              -o $BD/main.o $GAME_MAIN -l $BD/main.lst
-        # the top of bank 7, down from KRNHW at $BF00: the driver slot, as big as the
-        # larger driver (disc.s: the boot loader copies in the machine's one), the
-        # kernel below it, its tables kept inside a page; then the game's image, ending
-        # at the kernel: the game's data and code, then the engine's.  From the Model B's
-        # sizes (od65: the object's segments, before any link); the Master's, pinned to
-        # the Model B's, fall short (MASTERONLY: the Master's own, there is no Model B)
+        # The top of bank 7, down from KRNHW at B7H ($BF00): the driver slot, as big as the
+        # larger driver (disc.s: the boot loader copies in the machine's one), the kernel
+        # below it, its tables (KRNDATA) kept inside a page; then the game's image, ending at
+        # the kernel: the game's data and code, then the engine's.  From the Model B's sizes
+        # (od65: the object's segments, before any link); the Master's, pinned to the Model
+        # B's, fall short (MASTERONLY: the Master's own, there is no Model B).
         if [ $TARGET = modelb ] || [ "$MASTERONLY" = 1 ]; then
             SZ=$(od65 --dump-segsize $BD/main.o)
+            # seg: the summed size of the segments matching the regex $1
             seg() { echo "$SZ" | awk -v p="^ +($1):" '$0 ~ p {s += $2} END {print s + 0}'; }
             D1=$(seg 'D8271H|D8271N|D8271C'); D2=$(seg 'D1770H|D1770N|D1770C')
-            DRVN=$(( D1 > D2 ? D1 : D2 )); DRVS=$(( 0x$(cfgval $CFG B7H start) - DRVN ))   # (the slot ends at B7H)
+            # the slot ends at B7H
+            DRVN=$(( D1 > D2 ? D1 : D2 )); DRVS=$(( 0x$(cfgval $CFG B7H start) - DRVN ))
             KD=$(seg KRNDATA)
             KRNS=$(( DRVS - $(seg 'KRNDATA|KRNCODE|KRNBSS') ))
             [ $(( (KRNS & 255) + KD )) -gt 256 ] && KRNS=$(( (KRNS & 0xFF00) + 256 - KD ))
@@ -147,12 +165,13 @@ for pass in 1 2 3; do
                   -e "s#^\( *B7M: *start = [$][0-9A-F]*, size = [$]\)[0-9A-F]*#\1$MSZ#" \
                   -e "s#^\( *B7K: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$KRNS, size = \$$KSZ#" \
                   -e "s#^\( *DRV[0-9]*: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$DRVS, size = \$$DRVN#" $BD/game.cfg
-        # the Master's segments at the Model B's addresses (linked just before): its
-        # shorter 65C02 code leaves gaps, and the data lies alike on both
+        # the Master's segments at the Model B's addresses (linked just before): its shorter
+        # 65C02 code leaves gaps, and the data lies alike on both (pincfg.py)
         LCFG=$BD/game.cfg
         [ $TARGET = master ] && [ "$MASTERONLY" = 0 ] && { python3 $BG/tools/pincfg.py $BD/game.cfg $B/game.dbg > $BD/pinned.cfg; LCFG=$BD/pinned.cfg; }
         ld65 -C $LCFG -o $BD/unused.bin $BD/main.o -m $BD/map.txt -Ln $BD/labels.txt --dbgfile $BD/game.dbg
-        # what the loaders need from the game: its addresses
+        # what the loaders need from the game: its addresses, as defs_ld.inc; and the bank 7
+        # images and their patch lists
         python3 - <<'EOF'
 import re
 want = ['boot','dsk_type','dsk_drv','read_sectors','ld_sec','ld_n','ld_dst',
@@ -168,30 +187,30 @@ for l in open(BD + '/labels.txt'):
     if len(p) >= 3 and p[0] == 'al':
         addr[p[2].lstrip('.')] = int(p[1], 16)
 # draw_rect's @s0f (a cheap label: in the debug info, not labels.txt): the solid's
-# lda #fill, whose operand the loader patches.  Its @ scope is draw_rect's, or on the
-# Model B RINGHIOP's (defined at draw_rect's head: a symbol starts a new @ scope)
+# lda #fill, whose operand the loader patches (SOLIDF).  Its @ scope is draw_rect's, or on
+# the Model B RINGHIOP's (defined at draw_rect's head: a symbol starts a new @ scope)
 dbg = open(BD + '/game.dbg').read()
 dids = '|'.join(re.findall(r'^sym\tid=(\d+),name="(?:draw_rect|RINGHIOP)",', dbg, re.M))
 s0f = re.search(r'^sym\tid=\d+,name="@s0f",[^\n]*parent=(?:%s),[^\n]*val=0x([0-9A-F]+)' % dids, dbg, re.M)
 addr['SOLIDF'] = int(s0f.group(1), 16) + 1
 want.append('SOLIDF')
-# the game's hooks (README.md): equates, so in the debug info and not labels.txt --
-# the load-time program goes on to the hooks after an image load (ldprog.s ld_entry).
-# (The bar's address, BARADDR, and the other constants come from ldconst.s below.)
+# the game's hooks (docs/GUIDE.md): equates, so in the debug info and not labels.txt -- the
+# load-time program goes on to the hooks after an image load (ldprog.s ld_entry).  (The
+# bar's address, BARADDR, and the other constants come from ldconst.s below.)
 for h in ('hook_title', 'hook_image', 'hook_over'):
     addr[h] = int(re.search(r'^sym\tid=\d+,name="%s",[^\n]*val=0x([0-9A-F]+)' % h, dbg, re.M).group(1), 16)
     if h not in want:
         want.append(h)
-# bank 7's images (ldprog.s image_load): the game's, the linker's b7.bin (its code,
-# from GAMEDATA; its variables are not in the file), and the menus', MENU
-# (one file on the disc, IMG7: the menus' image to a whole sector, then the game's,
-# which ldprog.s reads as two)
+# bank 7's images (ldprog.s image_load): the game's, the linker's b7.bin (its code, from
+# GAMEDATA; its variables are not in the file), and the menus', MENU (one file on the disc,
+# IMG7: the menus' image to a whole sector, then the game's, which ldprog.s reads as two)
 import shutil
 shutil.copy(BD + '/b7.bin', BD + '/GAME')
 menu = open(BD + '/MENU', 'rb').read()
 open(BD + '/IMG7', 'wb').write(menu + bytes(-len(menu) % 256) + open(BD + '/GAME', 'rb').read())
-img = {'GAME': (addr['__B7_START__'], os.path.getsize(BD + '/GAME')),       # (the files start
-       'MENU': (addr['__B7M_START__'], os.path.getsize(BD + '/MENU'))}      #  where their areas do)
+# (the files start where their areas do)
+img = {'GAME': (addr['__B7_START__'], os.path.getsize(BD + '/GAME')),
+       'MENU': (addr['__B7M_START__'], os.path.getsize(BD + '/MENU'))}
 assert img['MENU'][0] + img['MENU'][1] <= addr['__KRNDATA_RUN__'] and img['GAME'][0] + img['GAME'][1] <= addr['__KRNDATA_RUN__']
 with open(BD + '/defs_ld.inc', 'w') as f:
     f.write('; generated by build.sh from build/labels.txt\n')
@@ -202,25 +221,26 @@ with open(BD + '/defs_ld.inc', 'w') as f:
             f.write('; %s: not in labels.txt (a constant?)\n' % n)
     for k, (a, n) in img.items():
         f.write('%s_ADDR = $%04X\n%s_LEN = %d\n' % (k, a, k, n))
-    # the image's variables (GAMEBSS then ENGBSS, from a page), zeroed as it comes in,
-    # to their last byte: below its code, which may start in their last page
+    # the image's variables (GAMEBSS then ENGBSS, from a page), zeroed as it comes in, to
+    # their last byte: below its code, which may start in their last page
     bss, bssn = addr['__GAMEBSS_RUN__'], addr['__ENGBSS_RUN__'] + addr['__ENGBSS_SIZE__'] - addr['__GAMEBSS_RUN__']
     assert bss & 255 == 0 and bss + bssn <= addr['__B7_START__'] and bssn >= 256, 'the game image\'s variables run into its code'
     f.write('GAME_BSS = $%04X\nGAME_BSS_PAGES = %d\nGAME_BSS_REM = %d\n' % (bss, bssn // 256, bssn % 256))
-# each image's own patch lists (bank 7 entries of the linker's, cpu.inc BANKREF and
-# wrsel, that fall in it): image_load applies them after every read, as the boot
-# loader does BANKS's
+# each image's own patch lists (bank 7 entries of the linker's, cpu.inc BANKREF and wrsel,
+# that fall in it): image_load applies them after every read, as the boot loader does
+# BANKS's
 fix, wr = open(BD + '/bankfix.bin', 'rb').read(), open(BD + '/wrfix.bin', 'rb').read()
 fixe = [(fix[i], fix[i + 1] | fix[i + 2] << 8) for i in range(0, len(fix), 3)]
 wre = [(wr[i], wr[i + 1] | wr[i + 2] << 8, wr[i + 3]) for i in range(0, len(wr), 4)]
-# The two images share their addresses, so a list entry (bank, address) cannot say
-# which it is in: the menus' carry none (they read PBANK: cpu.inc ldpbank), and the
-# debug info's site labels (@bf_, @wr_) are checked for it.  Every bank 7 entry below
-# the kernel is the game's.
+# The two images share their addresses, so a list entry (bank, address) cannot say which it
+# is in: the menus' carry none (they read PBANK: cpu.inc ldpbank), and the debug info's site
+# labels (@bf_, @wr_) are checked for it.  Every bank 7 entry below the kernel is the
+# game's.
 for mm in re.finditer(r'^sym\tid=\d+,name="@(bf|wr)_\w+",[^\n]*seg=(\d+)', dbg, re.M):
     sg = re.search(r'^seg\tid=%s,name="(\w+)"' % mm.group(2), dbg, re.M).group(1)
     assert not sg.startswith('MNU'), 'a bank-number or write-bank site in the menus\' image (%s): use ldpbank' % sg
 def inimg(k, bank, a):
+    """True if (bank, address) falls in image k: only the game's has entries."""
     return k == 'GAME' and bank == 7 and img[k][0] <= a < img[k][0] + img[k][1]
 with open(BD + '/img7fix.inc', 'w') as f:
     f.write('; generated by build.sh: bank 7 images\' bank numbers and write-bank stores\n')
@@ -239,9 +259,10 @@ EOF
         # BANKS: the fixed pieces with their table, then the bank-number patch list (every
         # byte of the pieces that holds a bank number, cpu.inc BANKREF) ending in $FF: the
         # boot loader rewrites those bytes to the banks it found RAM in.  Each entry is
-        # checked against the pieces here: a wrong bank on a bankimm would land outside
-        # them or on a byte that is no bank number.  Then the write-bank store list (cpu.inc
-        # wrsel: bank, address, kind; every entry must sit on a `sta $FE30`), ending in $FF.
+        # checked against the pieces here: a wrong bank on a bankimm would land outside them
+        # or on a byte that is no bank number.  Then the write-bank store list (cpu.inc
+        # wrsel: bank, address, kind; every entry must sit on a `sta $FE30`, or wrback's
+        # `sta $FF30`), ending in $FF.
         python3 - <<'EOF'
 import os, re
 BD = os.environ['BD']
@@ -254,18 +275,23 @@ for l in open(BD + '/labels.txt'):
 K = {m.group(1): int(m.group(3), 16 if m.group(2) else 10)
      for m in re.finditer(r'^(\w+) = (\$?)([0-9A-Fa-f]+)$', open(BD + '/defs_ld.inc').read(), re.M)}
 # each piece: its bank (the code's number; the drivers' flagged by their controller,
-# PIECE_8271/PIECE_1770, main RAM's filed under bank 7) and its address (the cfg's area)
+# PIECE_8271/PIECE_1770, main RAM's filed under bank 7) and its address (the cfg's area):
+# banks 4, 5 and 6; main RAM (BOOTRAM: start-up and the low-RAM image); the kernel
+# (resident, the top of bank 7); the driver slot: the 8271's (an 8271 only) or the 1770's
+# (loader.s)
 pieces = [(4, lab['__B4X_START__'], 'b4x.bin'), (4, lab['__B4T_START__'], 'b4t.bin'),
           (5, lab['__B5X_START__'], 'b5x.bin'), (5, lab['__B5T_START__'], 'b5t.bin'),
           (6, lab['__B6X_START__'], 'b6x.bin'),
-          (7, lab['__BOOTRAM_START__'], 'boot.bin'),    # main RAM (BOOTRAM): start-up and the low-RAM image
-          (7, lab['__KRNDATA_RUN__'], 'b7k.bin'),       # the kernel: resident, the top of bank 7
-          (7 | K['PIECE_8271'], lab['__DRV8271_START__'], 'drv8271.bin'),   # the driver slot: the 8271's (an
-          (7 | K['PIECE_1770'], lab['__DRV1770_START__'], 'drv1770.bin')]   # 8271 only) or the 1770's: loader.s
+          (7, lab['__BOOTRAM_START__'], 'boot.bin'),
+          (7, lab['__KRNDATA_RUN__'], 'b7k.bin'),
+          (7 | K['PIECE_8271'], lab['__DRV8271_START__'], 'drv8271.bin'),
+          (7 | K['PIECE_1770'], lab['__DRV1770_START__'], 'drv1770.bin')]
 if os.environ.get('TARGET') == 'master':
-    pieces.append((7, lab['__MRAM_START__'], 'mcode.bin'))    # main RAM: the Master's handler, chain, keys, sound
+    # main RAM: the Master's handler, chain, keys, sound
+    pieces.append((7, lab['__MRAM_START__'], 'mcode.bin'))
 if os.environ.get('GAMEHAZEL') == '1':
-    pieces.append((K['PIECE_HAZEL'], lab['__HAZ_START__'], 'hazel.bin'))   # HAZEL (ACCCON Y), last
+    # HAZEL (ACCCON Y), last
+    pieces.append((K['PIECE_HAZEL'], lab['__HAZ_START__'], 'hazel.bin'))
 assert K['PIECE_LEN'] == 5 and K['FIX_LEN'] == 3 and K['WR_LEN'] == 4, 'the record sizes written below'
 tab, body, img = bytearray([len(pieces)]), bytearray(), {}
 for bank, addr, fn in pieces:
@@ -273,7 +299,9 @@ for bank, addr, fn in pieces:
     tab += bytes([bank, addr & 255, addr >> 8, len(d) & 255, len(d) >> 8])
     body += d
     img[(bank, addr)] = d
-def piece_bytes(bank, addr, n):             # (no patch in a driver: it is one of two)
+def piece_bytes(bank, addr, n):
+    """The n bytes at (bank, addr) in the one piece that holds them (no patch is in a driver:
+    it is one of two)."""
     hit = [d[addr - a:addr - a + n] for (b, a), d in img.items() if b == bank and a <= addr and addr + n <= a + len(d)]
     assert len(hit) == 1, 'patch %d:$%04X is in no piece' % (bank, addr)
     return hit[0]
@@ -302,8 +330,8 @@ open(BD + '/BANKS', 'wb').write(banks)
 print('BANKS: %d pieces, %d bytes, %d bank patches, %d write-bank stores' % (len(pieces), len(tab) + len(body), len(fix) // 3, len(wr) // 4))
 EOF
     done
-    # the boot loader, one for both machines: the start-up header it writes and the
-    # entry it jumps to are at the same addresses on both (init.s)
+    # the boot loader, one for both machines: the start-up header it writes and the entry it
+    # jumps to are at the same addresses on both (init.s)
     [ "$MASTERONLY" = 1 ] || for n in boot dsk_type dsk_drv DSK_BANKS dsk_board; do
         [ "$(grep "^$n = " $B/defs_ld.inc)" = "$(grep "^$n = " $M/defs_ld.inc)" ] || { echo "$n differs between the machines"; exit 1; }
     done
@@ -311,7 +339,8 @@ EOF
     ca65 --cpu 6502 -D MASTERONLY=$MASTERONLY -D GAMEHAZEL=$GAMEHAZEL -I $REF -I build -I $BG/src -o build/loader.o $BG/src/loader.s
     ld65 -C $BG/cfg/loader.cfg -o build/LOADER build/loader.o
 done
-LDA=$(cfgval $BG/cfg/loader.cfg LOAD start)      # the boot loader's load and run address (its cfg)
+# the boot loader's load and run address (its cfg)
+LDA=$(cfgval $BG/cfg/loader.cfg LOAD start)
 python3 $BG/tools/mkdfs.py build $DISC_OUT "$DISC_TITLE" \
     "!BOOT:build/BOOT:0000:FFFF" "LOADER:build/LOADER:$LDA:$LDA" \
     $(echo $DISC | tr ' ' '\n' | grep -v '^!BOOT\|^LOADER' | tr '\n' ' ')

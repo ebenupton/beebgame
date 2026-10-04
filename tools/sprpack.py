@@ -1,32 +1,37 @@
-"""Where the sprites' images go in a bank: the order and the padding that
-cost the sprite loops least.
+"""Place the sprites' images in a bank: the order and padding that cost the sprite loops least.
 
-The cost is the pointers' page crossings.  A row of a sprite walks its column pointer
-across the image a column (`lines` bytes) at a time, and every page it crosses takes
-the carry path (spr_pinc: 9 cycles more than falling through; the mirrored walk's
-borrow about the same).  The walk of row r starts at base + 8r - lb0, lb0's
-low three bits the sprite's line phase, which is anything: the cost of a placement is
-the carries a draw expects over the eight phases, at the base's offset in its page.
-The reads that cross a page as well (a (zp),Y read whose index runs into the next
-page: 3.5 a draw for each page boundary inside an image) are the rest of it.
+The cost is page crossings.  A sprite's row loop (engine/sprloops.s) walks its source pointer
+across the image a column (`lines` bytes) at a time, and every page boundary the pointer
+crosses takes the out-of-line carry path (spr_pinc: CARRY cycles over falling through; the
+mirrored walk's borrow, spr_mdec, BORROW).  Row r's walk starts at base + 8r less the
+sprite's line phase (the low three bits of its first line, which is anything), so a
+placement's cost is the carries a draw expects averaged over the eight phases, at the base's
+offset in its page.  A (zp),Y read whose index runs into the next page costs as well: READ
+cycles a draw for each page boundary inside the image.
 
-A bank's run of sprites is items -- each image on its own -- in an
-order, with padding before any of them; the search swaps and moves items and moves
-padding, keeping what lowers the draws-weighted cost, within the run's room.  It is
-deterministic (seeded by its inputs) and cached (build/sprpack.cache): the same
-items in the same room come back the same without the search.
+A bank's run of sprites is a list of items -- each image on its own -- in some order, with
+padding before any of them.  optimise() swaps and moves items and moves padding, keeping
+every change that does not raise the draws-weighted cost, within the run's room.  The search
+is deterministic (seeded from its inputs) and cached (build/sprpack.cache, through
+load_cache/save_cache), so the same items in the same room come back the same without the
+search.  tools/assets.py is the caller.
 """
 import hashlib, json, os, random
 
-CARRY = 9.0             # cycles: the carry path over falling through
-BORROW = 7.0            # the mirrored walk's borrow path (spr_retm's dec ptr+1)
-READ = 3.5              # cycles a draw: the (zp),Y reads past a page boundary in an image
+# cycles: the carry path over falling through (sprloops.s spr_pinc)
+CARRY = 9.0
+# the mirrored walk's borrow path (spr_mdec's dec ptr+1)
+BORROW = 7.0
+# cycles a draw: the (zp),Y reads past a page boundary inside an image
+READ = 3.5
+# the cache's format: part of every signature, so a change here discards old entries
 VERSION = 2
 _tables = {}
 
 
 def _walk(o, cols, step, rstep, rows_of, phases):
-    """Carries a draw expects, over the phases: each row's walk from o + rstep*r - phase."""
+    """The page crossings a draw expects, averaged over the phases: for each phase ph, each of
+    rows_of(ph) rows walks from o + rstep*r - ph across cols*step bytes."""
     tot = 0
     for ph in range(phases):
         for r in range(rows_of(ph)):
@@ -36,9 +41,10 @@ def _walk(o, cols, step, rstep, rows_of, phases):
 
 
 def image_table(W, L, mirrored=False):
-    """cost a draw (cycles) of an image W columns by L lines at each page offset: the
-    walk from the first column up, or (mirrored) from the last column down -- the same
-    span one column lower, and the borrow path's cost"""
+    """The cost a draw (cycles) of an image W columns by L lines at each of the 256 page
+    offsets of its base: the walk from the first column up, or (mirrored) from the last
+    column down -- the same span one column lower, at the borrow path's price -- plus the
+    reads across each page boundary inside the image.  Memoised."""
     k = ('img', W, L, mirrored)
     if k not in _tables:
         n = W * L
@@ -53,6 +59,9 @@ def image_table(W, L, mirrored=False):
 
 
 def cost(items, lo, order, pads):
+    """The draws-weighted cost of laying the items out from lo in this order, pads[i] bytes
+    before the i-th: each item's weight times its table at its base's page offset (an item
+    with no table is free)."""
     a, c = lo, 0.0
     for i, idx in enumerate(order):
         a += pads[i]
@@ -64,8 +73,12 @@ def cost(items, lo, order, pads):
 
 
 def optimise(items, lo, hi, cache=None, iters=None, pad_penalty=1e-3):
-    """items: dicts key, size, w (draws a frame), table (256 costs, or None: free).
-    Returns ({key: address}, cost before, cost after), in cycles a frame."""
+    """Place the items in [lo, hi): items are dicts with key, size, w (draws a frame) and
+    table (256 costs by page offset, or None: free).  A random search of swaps, moves and
+    padding changes, iters steps (3000 + 600 n by default), accepts every change that does
+    not raise cost + pad_penalty * padding; the cache, keyed by a hash of the inputs, short-
+    cuts it.  Returns ({key: address}, cost before, cost after, the end address), the costs
+    in cycles a frame."""
     n = len(items)
     room = hi - lo - sum(it['size'] for it in items)
     assert room >= 0, ('does not fit', hi - lo, room)
@@ -86,20 +99,24 @@ def optimise(items, lo, hi, cache=None, iters=None, pad_penalty=1e-3):
         for _ in range(steps):
             o2, p2 = order[:], pads[:]
             mv = rnd.random()
-            if mv < 0.3 and n > 1:                          # swap two
+            if mv < 0.3 and n > 1:
+                # swap two items
                 i, j = rnd.randrange(n), rnd.randrange(n)
                 o2[i], o2[j] = o2[j], o2[i]
-            elif mv < 0.55 and n > 1:                       # move one
+            elif mv < 0.55 and n > 1:
+                # move one item
                 i, j = rnd.randrange(n), rnd.randrange(n)
                 o2.insert(j, o2.pop(i))
-            elif mv < 0.85:                                  # padding before one, more or less
+            elif mv < 0.85:
+                # more or less padding before one item, within the room
                 i = rnd.randrange(n)
                 d = rnd.choice((-8, -4, -2, -1, 1, 2, 4, 8, 16, 32))
                 v = p2[i] + d
                 if v < 0 or sum(p2) - p2[i] + v > room:
                     continue
                 p2[i] = v
-            else:                                            # padding from one to another
+            else:
+                # padding moved from one item to another
                 i, j = rnd.randrange(n), rnd.randrange(n)
                 d = rnd.randint(1, 32)
                 if p2[i] < d:
@@ -120,6 +137,8 @@ def optimise(items, lo, hi, cache=None, iters=None, pad_penalty=1e-3):
 
 
 def load_cache(path):
+    """The cache from its JSON file, {hash: (order, pads)}; empty if the file is missing or
+    unreadable."""
     try:
         with open(path) as f:
             return {k: tuple(v) for k, v in json.load(f).items()}
@@ -128,6 +147,7 @@ def load_cache(path):
 
 
 def save_cache(cache, path):
+    """Write the cache as JSON, through a temporary file and a rename."""
     tmp = path + '.tmp'
     with open(tmp, 'w') as f:
         json.dump(cache, f)

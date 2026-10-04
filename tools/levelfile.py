@@ -1,23 +1,30 @@
-"""beebgame's level files: the format the load-time program (src/ldprog.s lv_load)
-reads, written from a game's level in the engine's terms.  One definition of the
-format: the section order and the header's fields are here, and the loader takes
-them from here too (`python3 levelfile.py inc` writes levelfmt.inc, which ldprog.s
-includes), so the two cannot drift apart.
+"""beebgame's level files: the format the load-time program (src/ldprog.s lv_load) reads.
 
-A level file is a table of section offsets (two bytes each, from the file's start),
-then the sections in order.  The header may carry a tail of the game's own bytes
-(Level.header_tail): the loader copies the whole section to LV_HDR, so the tail lands
-at LV_HDR + HDR_LEN, where the game keeps memory for it.  The last, LV_PAGE0 (the Master's tile gather), is two
-whole sectors at the end, so the Model B's loader reads the file short of them.
+A game's packer writes a level in the engine's terms through Level and encode().  This file
+is the one definition of the format: the section order, the header's fields and the
+constants below are also what the loader assembles against (`python3 levelfile.py inc`
+writes levelfmt.inc, which ldprog.s includes), so the two cannot drift apart.
+
+A level file is a table of section offsets (two bytes each, from the file's start), then the
+sections in SECTIONS order.  The header may carry a tail of the game's own bytes
+(Level.header_tail): the loader copies the whole section to LV_HDR, so the tail lands at
+LV_HDR + HDR_LEN, where the game keeps memory for it.  The last section, LV_PAGE0 (the
+Master's tile gather table), is PAGE0_LEN bytes at a sector boundary at the end, so the
+Model B's loader reads the file short of it.  The whole file is whole sectors.
 
     import levelfile as lf
     data = lf.encode(lf.Level(lw=5, lh=5, game_header={2: x, ...}, shape=lf.Shape(...),
                               objects=b'...', tile_tables=(attr, altcls), tiles=b'...',
-                              placement=[(item, bank, img, extra), ...], map=b'...',
-                              flat=b'...', halves=b'...', hpair=b'...', mir=b'',
+                              placement=lf.placement([(item, bank, img, extra), ...]),
+                              map=b'...', flat=b'...', halves=b'...', hpair=b'...', mir=b'',
                               directory=lf.directory([None | (addr, bank), ...]),
                               page0=b'...', boxid0=103, boxn=15))
     lf.decode(data, 103, 15)    # the sections back, the map unpacked: for checks
+
+Usage from the command line:
+    python3 levelfile.py inc                             # levelfmt.inc to stdout
+    python3 levelfile.py check <assets.inc> <level file>...   # check() each; BOXID0 and BOXN
+                                                               # from the game's assets.inc
 """
 from dataclasses import dataclass, field
 import os, re, sys
@@ -29,10 +36,14 @@ SEC = {n: i for i, n in enumerate(SECTIONS)}
 
 # ---------------------------------------------------------------- the header, 32 bytes (LV_HDR)
 HDR_LEN = 32
-HDR_LW, HDR_LH = 0, 1           # log2 of the map's width and height in tiles
-HDR_NOBJ = 6                    # the objects' count (the loader copies 6 bytes each)
-HDR_SHAPE = 20                  # the tile set's shape, 12 bytes (Shape)
-HDR_GAME = tuple(range(2, 6)) + tuple(range(7, 20))   # the game's own fields
+# log2 of the map's width and height in tiles
+HDR_LW, HDR_LH = 0, 1
+# the objects' count (the loader copies OBJ_BYTES each)
+HDR_NOBJ = 6
+# the tile set's shape, 12 bytes (Shape)
+HDR_SHAPE = 20
+# the game's own fields
+HDR_GAME = tuple(range(2, 6)) + tuple(range(7, 20))
 SHAPE_FIELDS = ('zero', 'ntiles', 'map_shr', 'nhalf', 'half0', 'half1', 'half2', 'halfpage',
                 'halfoff', 'mir0', 'nmir', 'solidfill')
 HDR = {'HDR_' + f.upper(): HDR_SHAPE + i for i, f in enumerate(SHAPE_FIELDS) if f != 'zero'}
@@ -40,49 +51,58 @@ HDR = {'HDR_' + f.upper(): HDR_SHAPE + i for i, f in enumerate(SHAPE_FIELDS) if 
 
 @dataclass
 class Shape:
-    """the tile set as the blitter and the loader take it: the tile count, the map's row
-    shift (8 - lw), the half tiles (count, the three range boundaries, the page they
-    are in and HALFOFF), two bytes the format keeps from the removed mirrored tiles
-    (mir0: the ids the halves end at; nmir: 0), and the solid's fill byte (id 0)"""
+    """The tile set as the blitter and the loader take it: the stored tile count, the map's
+    row shift (8 - lw), the half tiles (count, the three range boundaries half0..half2, the
+    page they are in and HALFOFF), two bytes the format keeps from the removed mirrored tiles
+    (mir0: the id the halves end at; nmir: 0), and the solid's fill byte (id 0).  encode()
+    gives the 12 header bytes: a zero, then the fields in SHAPE_FIELDS order."""
     ntiles: int
     map_shr: int
     nhalf: int = 0
     half0: int = 0
     half1: int = 0
     half2: int = 0
-    halfpage: int = 0           # the page's high byte
+    # the page's high byte
+    halfpage: int = 0
     halfoff: int = 0
     mir0: int = 0
     nmir: int = 0
     solidfill: int = 0
 
     def encode(self):
+        """The shape's 12 header bytes."""
         return bytes([0] + [getattr(self, f) & 255 for f in SHAPE_FIELDS[1:]])
 
 
 # ---------------------------------------------------------------- the limits (src/defs.inc)
-OBJ_BYTES, OBJ_MAX = 6, 149     # LV_OBJS: 894 bytes, main RAM (levelfmt.inc carries both)
-                                # DIR_TABLE: 2 bytes a sprite id, BOXID0 + BOXN of them
-                                # (the game's numbers, from its assets.inc: Level.boxid0,
-                                # boxn)
-STAGE_LVL_B = 0x7C00 - 0x5C00   # the Model B's level stage (without LV_PAGE0)
-STAGE_M = 0x8000 - 0x3000       # the Master's stage
-MASTERONLY = os.environ.get('MASTERONLY') == '1'   # (the build's: no Model B, no limit of its)
+# LV_OBJS: OBJ_BYTES * OBJ_MAX = 894 bytes of main RAM (levelfmt.inc carries both)
+OBJ_BYTES, OBJ_MAX = 6, 149
+# the Model B's level stage, LV_OBJS - STAGE_LVL (the file short of LV_PAGE0)
+STAGE_LVL_B = 0x7C00 - 0x5C00
+# the Master's stage, its STAGE_LVL to the banks (the whole file)
+STAGE_M = 0x8000 - 0x3000
+# the build's: no Model B, so no limit of its
+MASTERONLY = os.environ.get('MASTERONLY') == '1'
 PAGE0_LEN = 512
 
 
 def dir_len(boxid0, boxn):
-    """the directory section's length: 2 bytes a sprite id"""
+    """The directory section's length: 2 bytes a sprite id, BOXID0 + BOXN ids (the game's
+    counts, from its assets.inc)."""
     return 2 * (boxid0 + boxn)
 
 
 # ---------------------------------------------------------------- the map's run length code
-RLE_LIT_MAX = 128               # c < RLE_LIT_MAX: c+1 literal bytes follow
-RLE_RUNBASE = 126               # else the next byte, c - RLE_RUNBASE times (2..129)
+# a code byte c < RLE_LIT_MAX: c+1 literal bytes follow
+RLE_LIT_MAX = 128
+# else the next byte repeats c - RLE_RUNBASE times (2..129)
+RLE_RUNBASE = 126
 
 
 def rle(data):
-    """c < 128: c+1 literal bytes follow; c >= 128: the next byte, c-126 times (2..129)"""
+    """Run-length encode: runs of 2..129 equal bytes as (RLE_RUNBASE + run, byte); the rest
+    as literal blocks of up to RLE_LIT_MAX bytes, each cut short where a run of three
+    begins."""
     out, i, n = bytearray(), 0, len(data)
     while i < n:
         j = i
@@ -99,6 +119,7 @@ def rle(data):
 
 
 def unrle(data, n=None):
+    """Decode rle()'s output; with n, stop once n bytes are out."""
     out, i = bytearray(), 0
     while i < len(data) and (n is None or len(out) < n):
         c = data[i]; i += 1
@@ -110,15 +131,17 @@ def unrle(data, n=None):
 
 
 # ---------------------------------------------------------------- the sprites' sections
-PLACE_LEN = 6                   # a placement entry: item, bank, image address (2), extra (2)
+# a placement entry: item, bank, image address (2), extra (2)
+PLACE_LEN = 6
 PL_ITEM, PL_BANK, PL_ADDR, PL_EXTRA = 0, 1, 2, 4
-PL_END = 0xFF                   # the item byte that ends the list
+# the item byte that ends the list
+PL_END = 0xFF
 
 
 def placement(items):
-    """(item, bank, image address, extra) for each image the level places from the
-    shared files, in item order; PL_END ends it.  extra is 0, or for an item the loader
-    bakes (ldprog.s bake) its tile: x | y << 8"""
+    """The placement section: (item, bank, image address, extra) for each item the level
+    places from the shared files, in the order given, PL_END after them.  extra is 0, or for
+    an item the loader bakes (ldprog.s bake) its tile: x | y << 8.  Banks are 4 or 5."""
     out = bytearray()
     for item, bank, img, extra in items:
         assert 0 <= item < PL_END and bank in (4, 5), (item, bank)
@@ -127,10 +150,12 @@ def placement(items):
 
 
 def directory(entries):
-    """DIR_TABLE, the directory's level part: for every sprite id, None or (address, bank);
-    the addresses' low bytes, then their high bytes -- 0 for None, bit 7 clear for bank
-    5 (the images are all at $8000..$BFFF: bit 7 is always set in the address itself).
-    The geometry is the game's own tables (SPRG_*), the same in every level."""
+    """The directory section (DIR_TABLE, the directory's level part): for every sprite id,
+    None or (address, bank).  The addresses' low bytes, then their high bytes -- 0 for None,
+    bit 7 cleared for bank 5 (every image is at $8000..$BFFF, so bit 7 is set in the address
+    itself and its absence marks the bank).  A bank-5 image at $80xx would read as none, so
+    it is refused.  The geometry is the game's own tables (sprg_*), the same in every
+    level."""
     lo, hi = bytearray(), bytearray()
     for e in entries:
         if e is None:
@@ -145,29 +170,49 @@ def directory(entries):
 # ---------------------------------------------------------------- a level
 @dataclass
 class Level:
+    """A level as the packer hands it to encode(): the engine's fields, and the game's own
+    bytes where the format leaves room for them (game_header, header_tail, objects, the tile
+    tables)."""
     lw: int
     lh: int
     shape: Shape
-    objects: bytes              # OBJ_BYTES each: the game's (copied to LV_OBJS)
-    tile_tables: tuple          # two 256-byte tables by tile id: the game's (LV_ATTR0, LV_ALTCLS)
-    tiles: bytes                # the tile list: the files, each with its full tiles' indices
-    placement: bytes            # placement()
-    map: bytes                  # 1 << (lw + lh) tile ids, row major
-    flat: bytes                 # FLATTAB's pairs
-    halves: bytes               # the half tiles: index in file, row, file
-    hpair: bytes                # the halves' fill palette (8 first bytes, 8 second), then
-                                # each half's low bits (fill row, colour)
-    mir: bytes                  # section 10, empty: the format keeps the removed MIRTAB's slot
-    directory: bytes            # directory()
-    page0: bytes                # LV_PAGE0: the Master's gather table, 512 bytes
-    boxid0: int = 0             # the game's sprite ids: BOXID0 images, then BOXN boxes
-    boxn: int = 0               #  (assets.inc)
-    game_header: dict = field(default_factory=dict)   # offset -> byte, HDR_GAME only
-    header_tail: bytes = b''    # the game's bytes after the header: the loader copies
-                                # them on to LV_HDR + HDR_LEN (the game's memory there)
+    # OBJ_BYTES each: the game's (copied to LV_OBJS)
+    objects: bytes
+    # two 256-byte tables by tile id: the game's (LV_ATTR0, LV_ALTCLS)
+    tile_tables: tuple
+    # the tile list: the files, each with its full tiles' indices
+    tiles: bytes
+    # placement()
+    placement: bytes
+    # 1 << (lw + lh) tile ids, row major
+    map: bytes
+    # FLATTAB's pairs
+    flat: bytes
+    # the half tiles, two bytes each: the index in its file, then the stored row's bit |
+    # (the file's place in the tile list) << 1
+    halves: bytes
+    # the halves' fill palette (8 first bytes, 8 second), then each half's low bits (fill
+    # row, colour)
+    hpair: bytes
+    # section 10, empty: the format keeps the removed mirrored tiles' slot
+    mir: bytes
+    # directory()
+    directory: bytes
+    # LV_PAGE0: the Master's gather table, PAGE0_LEN bytes
+    page0: bytes
+    # the game's sprite ids: BOXID0 images, then BOXN boxes (its assets.inc)
+    boxid0: int = 0
+    boxn: int = 0
+    # offset -> byte, HDR_GAME offsets only
+    game_header: dict = field(default_factory=dict)
+    # the game's bytes after the header: the loader copies them on to LV_HDR + HDR_LEN
+    header_tail: bytes = b''
 
 
 def header(lv):
+    """The header section: HDR_LEN bytes (lw, lh, the object count, the game's fields, the
+    shape) followed by the game's tail.  The loader copies the section whole, its length
+    from the section table's low bytes, so the whole must stay under a page."""
     h = bytearray(HDR_LEN)
     h[HDR_LW], h[HDR_LH] = lv.lw, lv.lh
     assert len(lv.objects) % OBJ_BYTES == 0 and len(lv.objects) // OBJ_BYTES <= OBJ_MAX
@@ -176,13 +221,14 @@ def header(lv):
         assert o in HDR_GAME, 'header byte %d is the engine\'s' % o
         h[o] = v
     h[HDR_SHAPE:] = lv.shape.encode()
-    # the loader copies the section whole, its length from the section table's low
-    # bytes: under a page
     assert HDR_LEN + len(lv.header_tail) < 256, 'the header\'s tail is too long'
     return bytes(h) + lv.header_tail
 
 
 def encode(lv):
+    """The level file: the section table, then the sections, the map run-length coded,
+    LV_PAGE0 padded to a sector boundary.  Checks the sizes against the map, the directory,
+    PAGE0_LEN and the two machines' stages."""
     assert len(lv.map) == 1 << (lv.lw + lv.lh), (len(lv.map), lv.lw, lv.lh)
     assert all(len(t) == 256 for t in lv.tile_tables) and len(lv.tile_tables) == 2
     assert lv.boxid0 > 0 and len(lv.directory) == dir_len(lv.boxid0, lv.boxn)
@@ -196,7 +242,8 @@ def encode(lv):
     table, data = bytearray(), bytearray()
     for name in SECTIONS:
         if name == 'page0':
-            data += bytes(-(off + len(data)) % 256)     # to a sector boundary
+            # pad to a sector boundary
+            data += bytes(-(off + len(data)) % 256)
         o = off + len(data)
         table += bytes([o & 255, o >> 8])
         data += body[name]
@@ -208,15 +255,15 @@ def encode(lv):
 
 
 def decode(data, boxid0, boxn):
-    """the sections by name (the map unpacked, the header's fields as well); boxid0 and
-    boxn, the game's, say how long the directory is: the padding to LV_PAGE0's sector
-    follows it, as 'pad'"""
+    """The sections by name, the map unpacked and the header's fields under 'fields' (lw, lh,
+    nobj and the shape's).  boxid0 and boxn, the game's, say how long the directory is: the
+    padding between it and LV_PAGE0's sector follows as 'pad'."""
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     ends = offs[1:] + [len(data)]
     sec = {n: data[o:e] for n, o, e in zip(SECTIONS, offs, ends)}
     sec['page0'] = sec['page0'][:PAGE0_LEN]
     n = dir_len(boxid0, boxn)
-    sec['pad'] = sec['dir'][n:]                     # (to LV_PAGE0's sector)
+    sec['pad'] = sec['dir'][n:]
     sec['dir'] = sec['dir'][:n]
     h = sec['hdr']
     sec['map'] = unrle(sec['map'], 1 << (h[HDR_LW] + h[HDR_LH]))
@@ -227,6 +274,9 @@ def decode(data, boxid0, boxn):
 
 # ---------------------------------------------------------------- the loader's constants
 def inc():
+    """levelfmt.inc: the section numbers (SEC_*), the header's offsets (HDR_*), HDR_LEN,
+    the object record, the placement entry's layout, the run-length constants and
+    LV_PAGE0's sector count, as ca65 equates."""
     lines = ['; generated by beebgame/tools/levelfile.py: the level file\'s sections and header']
     lines += ['SEC_%s = %d' % (n.upper(), i) for i, n in enumerate(SECTIONS)]
     lines += ['HDR_LW = %d' % HDR_LW, 'HDR_LH = %d' % HDR_LH, 'HDR_NOBJ = %d' % HDR_NOBJ]
@@ -240,9 +290,12 @@ def inc():
 
 
 def check(data, boxid0, boxn):
-    """a level file's invariants, as the loader relies on them: the table, the sections
-    in order, the header's counts against the sections, the map whole, LV_PAGE0 last and
-    sector aligned; returns the decoded sections"""
+    """A level file's invariants, as the loader relies on them: whole sectors; the section
+    table in order, starting after itself; LV_PAGE0 last, sector aligned, PAGE0_LEN long;
+    the stages' limits; the header's counts against the sections; the map whole and
+    map_shr = 8 - lw; the tile tables, halves, mir and directory sizes; zero padding before
+    LV_PAGE0; the placements whole, ended by PL_END, their banks 4 or 5.  Returns the
+    decoded sections; raises AssertionError with the failing invariant's name."""
     assert len(data) % 256 == 0, 'not whole sectors'
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     assert offs[0] == 2 * len(SECTIONS) and offs == sorted(offs), 'the section table'

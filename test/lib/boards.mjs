@@ -1,12 +1,15 @@
-// Write-select sideways RAM boards, emulated on a jsbeeb Model B (jsbeeb has none).
-// Emulate a write-select sideways RAM board on a jsbeeb Model B: reads page through
-// ROMSEL as ever, a store into $8000-$BFFF goes to the bank the board's register names
-// -- Watford: the last store to $FF30-$FF3F (its low nibble); Solidisk: user VIA port B
-// bits 0-3 (ORB & DDRB).  Both start at bank 0, as a fresh machine would, more or less.
+// Write-select sideways RAM boards, emulated on a jsbeeb Model B (jsbeeb has none):
+// reads page through ROMSEL as ever, but a store into $8000-$BFFF goes to the bank the
+// board's register names -- Watford: the low nibble of the address of the last store to
+// $FF30-$FF3F; Solidisk: user VIA port B bits 0-3 (ORB & DDRB, stores to $FE60/$FE62 or
+// their $FE70/$FE72 images).  Both start at bank 0, as a fresh machine would, more or
+// less.  The store lands only when that socket is RAM (cpu.model.swram).
 // cpu.boardMismatch counts, by PC, every store the game makes into a bank other than
-// the one paged for reading -- what a missing or wrong write-bank store does.  Code in
-// main RAM $0D00-$1FFF (the boot loader, the NMI stubs, LDPROG) is left out: it
-// copies between banks on purpose.
+// the one paged for reading (cpu.romsel) -- what a missing or wrong write-bank store
+// does.  Code in main RAM $0D00-$1FFF (the NMI stub at $0D00, LDPROG from $0E00, the
+// boot loader from $1900) is left out: it copies between banks on purpose.  Stores
+// into the sideways range still reach a debugWrite hook (cpu._debugWrite is called).
+//   boardEmu(cpu, "watford" | "solidisk")   (anything else throws)
 export function boardEmu(cpu, kind) {
   if (kind !== "watford" && kind !== "solidisk") throw new Error(`BBOARD: ${kind}?`);
   const orig = cpu.writemem.bind(cpu);

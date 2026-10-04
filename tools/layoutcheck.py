@@ -1,27 +1,39 @@
-"""The two machines' layouts, compared: every segment both builds have must start at
-the same address, and every variable or table (a label in a segment that is not
-code) both builds have must sit at the same address -- the Master's shorter 65C02
-code is padded out to the Model B's, so nothing after it moves.  Code labels may
-differ (a CMOS instruction is shorter); so may the pieces that only run once at
-start-up, and each machine's own data, which the segments LOWHW and KRNHW put after
-the shared (the Master's handler keeps its state in MRAMBSS, main RAM).  Zero page has
-no exception: every zero-page variable must exist on both machines at one address.
-Exit 1 on any difference.
-    python3 tools/layoutcheck.py [modelb_dir=build/modelb] [master_dir=build/master]"""
+"""Check that the two machines' builds lay their data out alike.
+
+Every segment both builds have must start at the same address, and every label in a segment
+that is not code must sit at the same address in both -- the Master's shorter 65C02 code is
+pinned out to the Model B's layout (pincfg.py), so nothing after it may move.  Exempt: labels
+in the code segments (a CMOS instruction is shorter), the start-up pieces that run once and
+are overwritten (STARTUP), and the segments one machine alone has after the shared data (OWN:
+LOWHW, KRNHW, and MRAMBSS, the Master's handler state in main RAM).  Zero page has no
+exemption: every zero-page label must exist on both machines, at one address.
+
+Reads each build directory's game.dbg (cleo.dbg is accepted as an older name).  Prints every
+difference (the moved labels capped at 40) and a summary line; exits 1 on any difference.
+
+Usage:
+    python3 tools/layoutcheck.py [modelb_dir=build/modelb] [master_dir=build/master]
+"""
 import os, re, sys
 
 
-def dbgfile(d):                     # (game.dbg; cleo.dbg before the engine was its own)
+def dbgfile(d):
+    """The build directory's ld65 debug file: game.dbg, or cleo.dbg where that is the name."""
     g = os.path.join(d, 'game.dbg')
     return g if os.path.exists(g) else os.path.join(d, 'cleo.dbg')
 
 CODE = {'MRAMCODE', 'TILCODE', 'GAMECODE', 'SPR4CODE', 'SPR5CODE', 'MAP5CODE',
         'TIL6ENT', 'MNUCODE', 'LOWCODE', 'D8271C', 'D1770C', 'D8271N', 'D1770N', 'KRNCODE', 'ENGCODE', 'MUSCODE'}
-STARTUP = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX'}      # run once, then overwritten
-OWN = {'LOWHW', 'KRNHW', 'MRAMBSS'}                      # one machine's own, after the shared
+# run once at start-up, then overwritten
+STARTUP = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX'}
+# one machine's own, placed after the shared data
+OWN = {'LOWHW', 'KRNHW', 'MRAMBSS'}
 
 
 def load(d):
+    """The build's layout from its debug file: ({segment: (start, size)} for the non-empty
+    segments, {label: (segment, address)} for every plain label, no linker '__' symbols, no
+    cheap '@' labels, no equates)."""
     dbg = open(dbgfile(d)).read()
     segs = {}
     for m in re.finditer(r'^seg\tid=(\d+),name="(\w+)",start=0x([0-9A-F]+),size=0x([0-9A-F]+)', dbg, re.M):

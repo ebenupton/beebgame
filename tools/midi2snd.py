@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""Convert a MIDI file into a 50Hz 3-voice note stream for the engine's SN76489 music
-player (engine.s music_tick: the game puts the stream at music_addr).
+"""Convert a MIDI file into the engine's three-voice tune stream (engine/menus.s music_tick).
 
-   python3 beebgame/tools/midi2snd.py <in.mid> <out> [<voices>]
+The stream is stepped once a vsync (50 Hz).  The game puts it in its menus' image at
+music_addr; menus.s reads the period table there and the sequence after it.
+
+Usage:
+    python3 beebgame/tools/midi2snd.py <in.mid> <out> [<voices>]
 
 <voices> says where each of the three voices takes its note from, a frame at a time:
-"CHANNELS:RANK" three times, comma-separated channels, joined by "/"; RANK is max, min,
-max2 (the second highest) or min2 (the second lowest) of the notes sounding on those
-MIDI channels.  The default, Cleo's tune, is "1:max/0:min/0:min2" (the melody the
-highest note of channel 1, the backing the two lowest of channel 0).
+"CHANNELS:RANK" three times, joined by "/", CHANNELS a comma-separated list of MIDI
+channels and RANK one of max, min, max2 (the second highest) or min2 (the second lowest)
+of the notes sounding on those channels.  The default, Cleo's tune, is "1:max/0:min/0:min2":
+voice 0 the highest note of channel 1 (the melody), voices 1 and 2 the two lowest of
+channel 0 (the backing).
 
-Output: the period table, 72 x 2 bytes for MIDI notes 24..95; then
-records of 4 bytes: frames, note0, note1, note2 (0 = rest, else the MIDI note, which
-indexes the period table); terminated by frames=0.  Voice 0 = melody, voices 1/2 =
-backing (lowest two notes of any chord).
+Output: the period table, 72 x 2 bytes (little-endian) for MIDI notes 24..95, the
+SN76489's 10-bit period 125000 / f (notes below 47 are transposed up by octaves until their
+period fits); then the sequence, 4-byte records (frames, note0, note1, note2: 0 a rest, else
+the MIDI note, which the player turns into a table index), run-length merged; then a record
+of four zeros, which the player loops at.  A run is capped at 255 frames.  Only the first
+tempo meta event is honoured; running status and the common channel messages are decoded,
+note-on with velocity 0 counts as note-off.
 """
 import struct, os, sys
 
@@ -25,6 +32,8 @@ for v in (sys.argv[3] if len(sys.argv) > 3 else '1:max/0:min/0:min2').split('/')
     VOICES.append(([int(c) for c in chs.split(',')], rank))
 assert len(VOICES) == 3, 'three voices'
 def pick(notes, rank):
+    """The note of the given rank among those sounding (a set of MIDI notes), or 0 when the
+    set has too few notes for the rank."""
     ns = sorted(notes)
     k = {'max': -1, 'min': 0, 'max2': -2, 'min2': 1}[rank]
     return ns[k] if len(ns) > (k if k >= 0 else -k - 1) else 0
@@ -32,17 +41,20 @@ def pick(notes, rank):
 d = open(SRC, 'rb').read()
 
 def rd_var(d, p):
+    """A MIDI variable-length quantity at d[p]: (value, the position after it)."""
     v = 0
     while True:
         b = d[p]; p += 1; v = (v << 7) | (b & 0x7f)
         if not b & 0x80:
             return v, p
 
+# the header chunk: its length, format, track count and ticks a quarter note
 hl = struct.unpack('>I', d[4:8])[0]
 fmt, ntrk, div = struct.unpack('>HHH', d[8:14])
 p = 8 + hl
 tempo = 500000
-events = []   # (tick, channel, note, on)
+# every note on and off, as (tick, channel, note, on), from all the tracks
+events = []
 for t in range(ntrk):
     ln = struct.unpack('>I', d[p + 4:p + 8])[0]; q = p + 8; end = q + ln
     tm = 0; status = 0
@@ -52,12 +64,15 @@ for t in range(ntrk):
         if b & 0x80:
             status = b; q += 1
         if status == 0xFF:
+            # a meta event: only the tempo ($51, microseconds a quarter note) is used
             typ = d[q]; l, q = rd_var(d, q + 1); data = d[q:q + l]; q += l
             if typ == 0x51:
                 tempo = int.from_bytes(data, 'big')
         elif status in (0xF0, 0xF7):
+            # a sysex: skipped
             l, q = rd_var(d, q); q += l
         else:
+            # a channel message: two data bytes except program change and channel pressure
             hi = status & 0xF0; ch = status & 0xF
             if hi in (0x80, 0x90, 0xA0, 0xB0, 0xE0):
                 a, b2 = d[q], d[q + 1]; q += 2
@@ -69,11 +84,12 @@ for t in range(ntrk):
                 events.append((tm, ch, a, False))
     p = end
 
-ticks_per_frame = 1e6 / 50 / (tempo / div)     # ticks per 20ms
+# ticks in one 20 ms frame; note-offs sort before note-ons at the same tick
+ticks_per_frame = 1e6 / 50 / (tempo / div)
 events.sort(key=lambda e: (e[0], e[3]))
 last_tick = max(e[0] for e in events)
 nframes = int(last_tick / ticks_per_frame) + 1
-# per frame active notes per channel
+# frame by frame, the notes sounding on each channel, and each voice's pick from them
 active = {ch: set() for ch in range(16)}
 frames = []
 ei = 0
@@ -87,7 +103,7 @@ for f in range(nframes):
             active[ch].discard(note)
     frames.append(tuple(pick(set().union(*(active[c] for c in chs)), rank) for chs, rank in VOICES))
 
-# run-length encode
+# equal consecutive frames merge into one record, 255 frames at most
 records = []
 cur = None; run = 0
 for fr in frames:
@@ -99,7 +115,8 @@ for fr in frames:
         cur = fr; run = 1
 records.append((run, cur))
 out = bytearray()
-# period table for MIDI notes 24..95 (notes below 47 transposed up an octave to fit 10 bits)
+# the period table: 125000 / f (the chip's 4 MHz clock over 32), clamped to 10 bits; notes
+# below 47 are raised by octaves first
 for n in range(24, 96):
     nn = n
     while nn < 47:

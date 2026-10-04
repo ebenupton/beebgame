@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Compare the CODE of two assembler sources, ignoring comments, blank lines and
-layout: every line's comment is stripped (a ';' outside quotes), whitespace is
-collapsed, and a label is split from the instruction that follows it on its line, so
-moving a comment, rewrapping one, or putting a label on its own line is no change.
-Prints the first difference and exits 1 if the code differs.
-    python3 tools/codecmp.py old.s new.s"""
+"""Compare the code of two ca65 sources, ignoring comments and layout.
+
+Every line has its comment stripped (a ';' outside quotes), its whitespace collapsed, and a
+label split from the instruction that shares its line, so moving or rewrapping a comment, or
+putting a label on its own line, is no change.  Prints the first difference and exits 1 if
+the code differs, 0 if it is the same.
+
+Usage:
+    python3 tools/codecmp.py old.s new.s
+"""
 import sys, re
 
 def strip(line):
+    """The line up to its comment: a ';' inside a single- or double-quoted string is kept."""
     out, q = [], None
     for ch in line:
         if q:
@@ -22,6 +27,9 @@ def strip(line):
     return ''.join(out)
 
 def tokens(path):
+    """The file's code items as (text, line number): a label (cheap, anonymous or plain) and
+    the instruction after it on the same line are two items; a line that is only a comment
+    or blank is none.  A line starting ':=' is an equate, not an anonymous label."""
     toks = []
     for n, line in enumerate(open(path), 1):
         s = ' '.join(strip(line).split())

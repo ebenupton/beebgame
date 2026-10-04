@@ -1,13 +1,19 @@
-"""tools/levelfile.py: the level file's writer against its reader, the run length code,
-the directory, the header's tail, and the loader's use of its constants.
-    python3 -m unittest discover beebgame/test"""
+"""tools/levelfile.py: the level file's writer (encode) against its reader (decode,
+check), the map's run length code (rle/unrle), the split directory and its bank-5
+flag, the header's protected fields and its tail, the directory's and objects' size
+limits, and the loader's use of the format's constants (ldprog.s names only SEC_/HDR_
+symbols levelfile.inc() defines, and no section by number).  A small level is built
+by level(): two tile tables, 7 objects, a 32 x 16 map, two placements, a directory
+with an image in bank 4 and one in bank 5, a game header.
+    python3 -m unittest discover beebgame/test       (or: cd beebgame && python3 -m unittest discover test)
+11 tests."""
 import os, random, re, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'tools'))
 import levelfile as lf
 
-BOXID0, BOXN = 10, 3            # a game's sprite ids (deliberately not Cleo's 103, 15)
-NIDS = BOXID0 + BOXN            # the directory: an entry a sprite id, images then boxes
+BOXID0, BOXN = 10, 3            # a game's box sprites: first id, count (not Cleo's 103, 75)
+NIDS = BOXID0 + BOXN            # the directory: an entry (2 bytes, split) a sprite id, images then boxes
 
 
 def level(**kw):
@@ -39,7 +45,9 @@ class RLE(unittest.TestCase):
             self.assertEqual(lf.unrle(lf.rle(c)), c)
 
     def test_codes_in_range(self):
-        # a run is 2..129 (c = 128..255), a literal 1..128 (c = 0..127)
+        # a run is 2..129 (c = 128..255: the next byte c - 126 times), a literal 1..128
+        # (c = 0..127: c + 1 bytes follow) -- levelfile.rle's docstring; walked here by
+        # those lengths, the walk must end exactly at the end
         e = lf.rle(b'\x07' * 1000 + bytes(range(200)))
         i = 0
         while i < len(e):
