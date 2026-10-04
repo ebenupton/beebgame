@@ -1,46 +1,111 @@
 ; ============================================================================
-; Low RAM, $0140-$02FF, both machines: what has to be visible whatever bank is paged
-; in.  The crossings between the banks, the Model B's interrupt stub (its body is in
-; bank 7: engine.s isr_body) and the tile blitter's map row; engine.s's map_row, map_byte,
-; map_put and page_logic land here too, and its LOWBSS (the buffers' state, the sprite
-; list).  boot copies the code down from the BOOT piece.
+; low.s -- low RAM, $0140-$02FF, both machines: what has to be visible whatever
+; bank is paged in
+;
+; The crossings between the banks and the Model B's interrupt stub (its body is in
+; bank 7: kernel.s isr_body); engine/lowram.s's map access and page_logic land in the
+; same segment, and the LOWBSS variables that more than one bank touches (the rest of
+; them are vars.s's).  init.s boot copies the code down from the BOOT piece.  ROMSEL_CPY
+; is written before ROMSEL at every switch, so an interrupt between the two puts back
+; the bank being entered: the handler restores ROMSEL from it.
+;
+;   irq_handler  (Model B) the interrupt stub: bank 7 in, to isr_body; irq_vret and
+;                irq_ret the ways back
+;   map_strip    the tile row's gather, in bank 5, then bank 6 back
+;   page6        bank 6 in
+;   selbb        select_backbuf in bank 6, with a write window
+;   validate     scroll_validate in bank 6
+;   call_bank    a bank's entry (BANKENTRY), A = the bank, then bank 7 back
+;
+; Segments: LOWCODE (the code, copied down), LOWBSS, LOWBSS2 (GATHERL, above the
+; code), LOWHW (the Model B's mirror notes, after the shared).  The .if BHW blocks
+; are the first blessed placement (the Master's handler is at IRQ1V itself) and
+; hardware (the mirror).
 ; ============================================================================
+
+; ---------------------------------------------------------------- the variables
+        .segment "LOWBSS"
+GATHERH:   .res GATHERN            ; a tile row's gather (gather5 writes it from bank
+                                   ;  5, draw_rect reads it from bank 6): each tile's
+                                   ;  page or kind, GATHERN of them at most
+clip_mask: .res 1                  ; REC_CLIP when the window has moved since the back
+                                   ;  buffer last drew, else 0 (select_backbuf writes
+                                   ;  it; match_sprites reads it)
+krlo:      .res 1                  ; select_backbuf's, for match_sprites' moved
+krhi2:     .res 1                  ;  records: the rows and columns the back buffer's
+kclo:      .res 1                  ;  last window and this one share, relative to this
+kchi2:     .res 1                  ;  one -- krlo .. krhi2-2, kclo .. kchi2-2; krlo
+                                   ;  or kclo $FF for none (then the other pair is
+                                   ;  not read)
+sprc_ok:   .res 1                  ; the resident sprites (SPRC) are in bank 4, and
+sprx_ok:   .res 1                  ;  (the Master) SPRX in HAZEL/ANDY: ldprog.s's
+                                   ;  alone, across loads
+; What the interrupt stores, in main RAM so that it stores into no bank and needs no
+; write bank of its own (cpu.inc: the write bank is 7's but for short windows)
+mus_dur:   .res 1                  ; the tune's player (menus.s music_tick, from the
+MUSNOTE:   .res 3                  ;  interrupt's tail; music_start): the record's
+isr_t1:    .res 1                  ;  frames to go, each voice's note, and two bytes
+isr_t2:    .res 1                  ;  of scratch
+        .segment "LOWBSS2"         ; the rest of low RAM, above the code
+GATHERL:   .res GATHERN            ; the gather's low bytes (GATHERH's pair)
+  .if BHW                          ; hardware: the mirror (mirror.s)
+        .segment "LOWHW"           ; (after the shared)
+; The mirror's bookkeeping, per buffer: the tile blitter (bank 6), the sprite
+; prologue and copy_partial (bank 7) note what they wrote to the ring's last slot row
+; (MIRDIRTY_BODY); mirror_copy (bank 7) reads and resets it.
+MIRDTY:    .res 2                  ; 1: the row has been written since the copy
+MIRLO:     .res 2                  ; and which chars of it, in slot chars 0..79 (MIRLO
+MIRHI:     .res 2                  ;  $FF: none)
+MIRWCX:    .res 2                  ; the wcxm the copy was made for
+MIRMR:     .res 2                  ; and the mrow
+  .endif
+
+; ---------------------------------------------------------------- the code
         .segment "LOWCODE"
-
-; ---------------------------------------------------------------- the crossings
-; A bank cannot page another over itself, so every crossing is here: fixed thunks for
-; what bank 7 calls in the others (call_bank, selbb, validate) and for the tile
-; blitter's gather (map_strip).  No table, no dispatch in any bank.  ROMSEL_CPY is
-; written before ROMSEL every time, so an interrupt in between puts back the bank
-; being entered: the handler restores ROMSEL from it.
-
-; ---------------------------------------------------------------- interrupts
-; The Model B's: the chain step and the vsync work are in bank 7 with their tables,
-; and this pages it in around them: page_logic inlined and a jmp each way, because
-; every cycle before the step's first CRTC write is lead the chain's timing (VS2T's
-; STUBLAT) has to allow for, in place of the hold loop the Master's handler has.  The
-; body comes back to irq_ret from a step, to irq_vret from the vsync, which steps the
-; title tune: its player is in the menus' image of bank 7, mus_on is set only while that
-; image is in, and the vsync's sound_tick raises mus_tick.
-  .if BHW                          ; (the Master's handler is in main RAM with its
-irq_handler:                       ;  chain: engine.s)
+  .if BHW                          ; blessed placement: the Master's is in main RAM
+; ----------------------------------------------------------------------------
+; irq_handler: the Model B's interrupt stub (IRQ1V)
+;   In:    A saved at MOS_IRQA by the MOS's entry
+;   Out:   to isr_body (kernel.s) with bank 7 paged in for reading, X and Y saved in
+;          irq_x, irq_y, the interrupted ROMSEL_CPY pushed; D clear
+; The chain step and the vsync work are in bank 7 with their tables, and this pages
+; it in around them: page_logic in line and a jmp each way, because every cycle
+; before the step's first CRTC write is lead the chain's timing has to allow for
+; (kernel.s VS2T, STUBLAT), in place of the hold loop the Master's handler has.  The
+; write bank is left as it was: the interrupt stores into no bank (cpu.inc).
+; ----------------------------------------------------------------------------
+irq_handler:
         cld                        ; the NMOS 6502 keeps D through an interrupt: the
-                                    ;  body's adc/sbc must not see the game's sed (BCD
-                                    ;  score; the 65C02 clears D itself).  RTI puts it back
+                                   ;  body's adc/sbc must not see the game's sed (the
+                                   ;  BCD score); rti puts it back.  The 65C02 clears
+                                   ;  D itself
         stx irq_x
         sty irq_y
         lda ROMSEL_CPY
         pha
-        bankimm lda, BANK_LVL, 0   ; bank 7, for reading (page_logic's, inline: the
-        sta ROMSEL_CPY             ; interrupt stores into no bank, so the write bank
-        sta ROMSEL                 ; is left as it was -- cpu.inc)
+        bankimm lda, BANK_LVL, 0   ; bank 7, for reading (page_logic's, in line)
+        sta ROMSEL_CPY
+        sta ROMSEL
         jmp isr_body
-irq_vret:                          ; the vsync's way back: the tune's step, while it plays
+
+; ----------------------------------------------------------------------------
+; irq_vret: the vsync's way back: step the title tune, then irq_ret
+;   In:    mus_tick = mus_on, raised by the vsync's sound_tick; bank 7 paged in
+;   Out:   mus_tick = 0; the tune stepped (menus.s music_tick) if it was set
+; The player is in the menus' image of bank 7, and mus_on is set only while that
+; image is in (music_stop clears it before any load).
+; ----------------------------------------------------------------------------
+irq_vret:
         lda mus_tick
         beq irq_ret
-        dec mus_tick               ; (1 -> 0: mus_on's value, which is 0 or 1)
+        dec mus_tick               ; 1 -> 0: mus_on's value, which is 0 or 1
         jsr music_tick             ; (bank 7: paged above)
-irq_ret:                           ; a step's way back
+; ----------------------------------------------------------------------------
+; irq_ret: a step's way back
+;   In:    the interrupted ROMSEL_CPY on the stack (irq_handler's pha)
+;   Out:   that bank paged in again; X, Y, A restored; rti
+; ----------------------------------------------------------------------------
+irq_ret:
         pla
         sta ROMSEL_CPY
         sta ROMSEL
@@ -50,75 +115,74 @@ irq_ret:                           ; a step's way back
         rti
   .endif
 
-; ---------------------------------------------------------------- the tile blitter's map
-; draw_rect's row loop runs in bank 6 and reads the map in bank 5: the row pointer is arithmetic
-; (a map is 32, 64, 128 or 256 tiles wide: row * 2^lw is row * 256 shifted right by
-; map_shr = 8 - lw, which the loader sets from the header) and the strip copy is the
-; one bank switch a tile row costs.
-map_strip:                         ; (ptr) = the row's first tile: its gather, run in
-        bankimm lda, BANK_MAP, 0   ; bank 5 beside the map (engine.s gather5), into
-        sta ROMSEL_CPY             ; GATHERL/GATHERH here; bank 6 back (read only: no
-        sta ROMSEL                 ; write bank: draw_rect's window, 6's, stays open)
+; ----------------------------------------------------------------------------
+; map_strip: a tile row's gather, run in bank 5 beside the map, then bank 6 back
+;   In:    ptr = the row's first tile in the map, rc_nt (gather5's)
+;   Out:   GATHERL/GATHERH filled; A = bank 6's number (N = 0: it is 4..7 after
+;          patching), X, Y clobbered
+;   Pre:   called from bank 6 (draw_rect's row loop)
+;   Post:  bank 6 paged again, for reading; the write bank untouched (draw_rect's
+;          window, bank 6, stays open: gather5 stores into no bank)
+; The one bank switch a tile row costs.
+; ----------------------------------------------------------------------------
+map_strip:
+        bankimm lda, BANK_MAP, 0
+        sta ROMSEL_CPY
+        sta ROMSEL
         jsr gather5
-page6:  bankimm lda, BANK_TILES, 0 ; (selbb and validate: page6 first; selbb the write
-        sta ROMSEL_CPY             ; bank for what it stores in bank 6)
+; ----------------------------------------------------------------------------
+; page6: page bank 6 in, for reading
+;   Out:   A = bank 6's number (as wrsel wants it)
+;   Keeps: X Y
+; map_strip falls into it; selbb, validate and init.s boot call it.
+; ----------------------------------------------------------------------------
+page6:
+        bankimm lda, BANK_TILES, 0
+        sta ROMSEL_CPY
         sta ROMSEL
         rts
 
-; bank 7's two calls a frame into bank 6 that are not the blitter's entry:
-; select_backbuf (it patches draw_rect's ring operand) and scroll_validate (it draws the
-; new strips with draw_rect itself)
-selbb:  jsr page6
-        wrsel BANK_TILES, 0        ; a write window: select_backbuf patches draw_rect
+; ----------------------------------------------------------------------------
+; selbb: select_backbuf (tiles.s), from bank 7
+;   In:    cur_buf; the window (select_backbuf's)
+;   Out:   select_backbuf's: the blitters pointed at the back buffer, recp,
+;          clip_mask, the shared rows and columns; A, X clobbered, Y kept
+;   Post:  bank 7 paged again
+; With a write window: select_backbuf patches draw_rect's ring operand in bank 6.
+; Called by render_frame and the menus.
+; ----------------------------------------------------------------------------
+selbb:
+        jsr page6
+        wrsel BANK_TILES, 0        ; the window opens
         jsr select_backbuf
-        wrback 0, 1                ; (closed)
-        jmp page_logic
-validate:
-        jsr page6                  ; (no write bank: scroll_validate stores into no
-        jsr scroll_validate        ;  bank, and draw_rect opens and closes its own window)
+        wrback 0, 1                ; and closes
         jmp page_logic
 
-; ---------------------------------------------------------------- the direct switch
-; Once a sprite and once a rect: page the bank, call its entry -- BANKENTRY, the start
-; of banks 4, 5 and 6: the sprite row loop in 4 and 5, bank6_entry + draw_rect_clip in 6
-; (each sets its own write bank) -- and page bank 7 back (page_logic).
-call_bank:                         ; A = the bank (the write bank is set by the
-        sta ROMSEL_CPY             ; entry itself where it stores: ds_entry -- A still
-        sta ROMSEL                 ; holds the bank there; draw_rect_clip stores nothing)
+; ----------------------------------------------------------------------------
+; validate: scroll_validate (tiles.s), from bank 7
+;   In:    cur_buf, the window, the buffer's BUF_CY/CXL/CXH
+;   Out:   the strips the window moved onto drawn; A, X, Y clobbered
+;   Post:  bank 7 paged again
+; No write window: scroll_validate stores into no bank, and draw_rect opens and
+; closes its own.  Called by render_frame.
+; ----------------------------------------------------------------------------
+validate:
+        jsr page6
+        jsr scroll_validate
+        jmp page_logic
+
+; ----------------------------------------------------------------------------
+; call_bank: page a bank in and call its entry, then bank 7 back
+;   In:    A = the bank (4, 5 or 6), its entry at BANKENTRY: the sprite row loop's
+;          ds_entry (banks 4 and 5), bank6_entry + draw_rect_clip (6)
+;   Out:   the entry's; X, Y as it leaves them
+;   Post:  bank 7 paged again (page_logic)
+; Once a sprite and once a rect (draw_sprite, erase_old, draw_dirty).  The write
+; bank is the entry's business where it stores: ds_entry opens its window with A
+; still the bank; draw_rect_clip stores nothing and draw_rect has its own.
+; ----------------------------------------------------------------------------
+call_bank:
+        sta ROMSEL_CPY
+        sta ROMSEL
         jsr BANKENTRY
         jmp page_logic
-
-        .segment "LOWBSS"
-GATHERH:  .res GATHERN             ; a tile row's gather (gather5): 21 tiles at most
-clip_mask: .res 1                  ; REC_CLIP when the window has moved since the back
-                                    ;  buffer last drew (select_backbuf; match_sprites)
-krlo:     .res 1                   ; select_backbuf: the rows and columns the back buffer's
-krhi2:    .res 1                   ;  last window and this one share (relative to this one;
-kclo:     .res 1                   ;  the high bounds + 2), for match_sprites' moved records
-kchi2:    .res 1
-        .segment "LOWBSS2"          ; the rest of low RAM, above the code
-GATHERL:  .res GATHERN
-        .segment "LOWBSS"
-; the Model B's mirror bookkeeping (mirror.s): the tile blitter (bank 6), the sprite
-; prologue and copy_partial (bank 7) note what they wrote to the ring's last slot row,
-; mirror_copy (bank 7) reads it
-  .if BHW
-        .segment "LOWHW"            ; (after the shared)
-MIRDTY:   .res 2                   ; per buffer: the row has been written since the copy
-MIRLO:    .res 2                   ; and which chars of it (in slot chars, 0..79)
-MIRHI:    .res 2
-MIRWCX:   .res 2                   ; the wcxm the copy was made for
-MIRMR:    .res 2                   ; and the mrow
-        .segment "LOWBSS"
-  .endif
-; (the level's shape, map_shr and map_stride, and the tune's mus_on and mus_tick are
-; zero page's: engine.s)
-sprc_ok:  .res 1                   ; the resident sprites (SPRC) are in bank 4, and (the
-sprx_ok:  .res 1                   ;  Master) SPRX in HAZEL/ANDY: ldprog.s
-; What the interrupt stores, in main RAM so that it stores into no bank and needs no
-; write bank of its own (cpu.inc: the write bank is 7's but for short windows) -- last
-; in low RAM, so that nothing else moved for it
-mus_dur:    .res 1                 ; the tune's player (music_tick, the menus' image;
-MUSNOTE:   .res 3                  ;  mus_on is in zero page): the note's steps to go,
-isr_t1:     .res 1                 ;  each channel's note, and its scratch
-isr_t2:     .res 1

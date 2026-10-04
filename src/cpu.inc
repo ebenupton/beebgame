@@ -1,71 +1,87 @@
 ; ============================================================================
-; The Master is a 65C02; the Model B is a 6502.  Every 65C02 spelling the engine
-; and the logic use goes through a macro here, so one source assembles for both.  On
-; the Master each macro is its one instruction; on the Model B an expansion that has
-; side effects the 65C02 form has not, and every site is audited for them.  The set
-; (each macro's own header, at the end of this file, gives the two expansions and the
-; flags):
+; cpu.inc -- the two machines in one source: the hardware flag, the build options,
+; the bank patching and the write bank, the 6502 spellings of the 65C02's forms
 ;
-;   stz m        A is DEAD at the site (the 6502 form is lda #0 / sta).  Both leave
-;                N,Z set from the zero on the 6502; no site branches on the flags
-;                across either.
-;   zero m, ...  stz of each of up to eight addresses, one lda #0 on the 6502.
-;   sta0 m, ...  the same where A is ALREADY 0 (the 6502 stores it, no lda #0).
-;   stzx m       A is live and X dead (ldx #0 / stx).
-;   stz01 m      m is a 0/1 flag that is 1 here (dec m).
-;   inca, deca   A +/- 1; the CARRY is DESTROYED on the 6502 (clc / adc #1, sec / sbc #1).
-;   incax        A + 1 with X dead; the carry survives on both (tax / inx / txa).
-;   ldaz, cmpz   lda / cmp (zp) with no index: Y is DESTROYED (ldy #0).
-;   ldaz0, staz0 lda / sta (zp) where Y is ALREADY 0 (the ,y form).
-;   ldazx zp     lda (zp) where Y is live and X dead (ldx #0 / lda (zp,x)).
-;   ldy1         Y = 1 where Y is 0 (iny).
-;   bitimm v     bit #imm: Z from A & v, A and X preserved, through mtmp.
-;   bra t        the 6502's jmp (the Master's own instruction: no macro there).
+; Included first, by the game's main assembly and by ldconst.s.  The Master is a
+; 65C02; the Model B is a 6502.  Every 65C02 spelling the engine and the logic use
+; in shared code goes through a macro here, so one source assembles for both: on the
+; Master each is its one instruction, on the Model B an expansion whose side effects
+; (a register loaded, the flags) every site is audited for.  Inside .if .not BHW
+; (Master-only code) the instruction is written natively.  The set (each macro's
+; own header, at the end of this file, gives the two expansions and the flags):
+;
+;   stz m        A is DEAD at the site (the 6502 form is lda #0 / sta)
+;   zero m, ...  stz of each of up to eight addresses, one lda #0 on the 6502
+;   sta0 m, ...  the same where A is ALREADY 0 (the 6502 stores it, no lda #0)
+;   stzx m       A is live and X dead (ldx #0 / stx)
+;   stz01 m      m is a 0/1 flag that is 1 here (dec m)
+;   inca, deca   A +/- 1; the CARRY is DESTROYED on the 6502 (clc / adc, sec / sbc)
+;   incax        A + 1 with X dead; the carry survives on both (tax / inx / txa)
+;   ldaz, cmpz   lda / cmp (zp) with no index: Y is DESTROYED (ldy #0)
+;   ldaz0, staz0 lda / sta (zp) where Y is ALREADY 0 (the ,y form)
+;   ldazx zp     lda (zp) where Y is live and X dead (ldx #0 / lda (zp,x))
+;   ldy1         Y = 1 where Y is 0 (iny)
+;   bitimm v     bit #imm: Z from A & v, A and X kept, through mtmp
+;   bra t        the 6502's jmp (the Master's own instruction: no macro there)
 ;
 ; mtmp is zero page scratch bitimm owns; nothing that runs in the interrupt uses
 ; bitimm (its two sites are the sprite prologue's, frame.s).
+;
+; Sections:
+;   the hardware flag and the build options
+;   PLACEH            a segment by hardware: the interrupt's work
+;   bank numbers      BANKREF, bankimm, setbank, ldpbank: the boot loader's patching
+;   the write bank    WRREC, wrsel, wrback: the Solidisk and Watford boards
+;   placement         SAMEPAGE, PAD
+;   the spellings     the macros above, one definition a CPU
 ; ============================================================================
-; One structure, two machines: code in the sideways banks with the data it reads,
-; the level gathered into the banks at load.  BHW is the Model B's HARDWARE: a 6502,
-; one screen of main RAM (two software rings with mirror rows), the 8271 or Acorn
-; 1770, the write-select boards.  BHW=0 is the Master's: 65C02, the hardware-wrapped
-; ring in main and shadow RAM, its interrupt handler in main RAM, its 1770.
-; build.sh builds both.
-        .ifndef BHW
+
+; ---------------------------------------------------------------- the hardware flag
+; One structure, two machines (docs/DESIGN.md): code in the sideways banks with the
+; data it reads, the level gathered into the banks at load.  BHW is the Model B's
+; HARDWARE: a 6502, one screen of main RAM (two software rings with mirror rows), the
+; 8271 or Acorn 1770, the write-select boards.  BHW=0 is the Master's: 65C02, the
+; hardware-wrapped ring in main and shadow RAM, its interrupt handler in main RAM,
+; its 1770.  tools/build.sh builds both (-D BHW=0 for the Master).
+  .ifndef BHW
 BHW = 1
-        .endif
+  .endif
 ; The build's options (tools/build.sh says what each does), 0 unless it sets them.
-        .ifndef MASTERONLY
+  .ifndef MASTERONLY
 MASTERONLY = 0                     ; the Master alone: no Model B build
-        .endif
-        .ifndef GAMEHAZEL
+  .endif
+  .ifndef GAMEHAZEL
 GAMEHAZEL = 0                      ; the game's code in HAZEL too (the Master alone)
-        .endif
-        .ifndef GAMESOUND
+  .endif
+  .ifndef GAMESOUND
 GAMESOUND = 0                      ; the game's own sound player (hook_sound)
-        .endif
-        .ifndef TALLMAP
+  .endif
+  .ifndef TALLMAP
 TALLMAP = 0                        ; maps taller than 128 tiles (the Master alone)
-        .endif
+  .endif
   .if TALLMAP && BHW
         .error "TALLMAP needs the Master's 32-row ring (the Model B's ring is 23 rows)"
   .endif
-        .ifndef DRAWFLAGS
+  .ifndef DRAWFLAGS
 DRAWFLAGS = 0                      ; draw flags in the sprite list's x high byte
-        .endif
-        .ifndef TIGHTBSS
+  .endif
+  .ifndef TIGHTBSS
 TIGHTBSS = 0                       ; 9-byte sprite records, ENGBSS not page aligned
-        .endif
-        .ifndef ALLLEVELS
-ALLLEVELS = 0                      ; a test build: every level on the chooser, every bonus
-        .endif                     ;  level taken (the game's)
+  .endif
+  .ifndef ALLLEVELS
+ALLLEVELS = 0                      ; a test build: every level on the chooser, every
+  .endif                           ;  bonus level taken (the game's)
   .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
         .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
   .endif
 
-.macro PLACEH mseg, bseg           ; the segment by HARDWARE: the interrupt handler's own
-  .if ::BHW                        ; work, which is in bank 7 with the Model B's
-        .segment bseg              ; handler and in main RAM with the Master's
+; ---------------------------------------------------------------- PLACEH
+; PLACEH mseg, bseg: the segment by hardware for the interrupt handler's own work
+; and state -- bank 7 with the Model B's handler body (bseg), main RAM with the
+; Master's (mseg).  The first of the Master's three blessed placements (DESIGN.md).
+.macro PLACEH mseg, bseg
+  .if ::BHW                        ; blessed placement: the handler and its state
+        .segment bseg
   .else
         .segment mseg
   .endif
@@ -79,13 +95,15 @@ ALLLEVELS = 0                      ; a test build: every level on the chooser, e
 ; starts (the BANKFIX table, appended to BANKS).  Bank 7's game image comes off the
 ; disc later and is patched as it comes in (ldprog.s image_load, from its own lists);
 ; other code that comes off the disc -- the level loader, the menus' image -- is not
-; patched: it reads the physical bank from PBANK (low BSS, four bytes indexed by bank
-; - 4).
+; patched: it reads the physical bank from PBANK (low BSS, four bytes indexed by
+; bank - 4).
 ;   bankimm op, n, b   op #n, the operand a bank number: in bank b's image (0 = the
 ;                      low-RAM image, in the BOOT piece); a fourth argument tells two
 ;                      alike sites in one routine apart
 ;   setbank n, b       page bank n in, from code in bank b (A destroyed); likewise
 ;   ldpbank op, n      op #n from code the loader cannot patch: PBANK's byte instead
+;                      (no site today; tools/build.sh refuses a bankimm in the menus'
+;                      image and names this)
 ;   BANKREF name, b    the byte just emitted is a bank number
 ; The site is marked with a cheap label, @bf_<name>, because any other kind of symbol
 ; would end the enclosing routine's @ scope; so two sites in one routine need
@@ -96,19 +114,20 @@ ALLLEVELS = 0                      ; a test build: every level on the chooser, e
         .ident(.concat("@bf_", name)):
         .pushseg
         .segment "BANKFIX"
-    .if b = 0                      ; low RAM: its image, in the BOOT piece (main RAM,
-        .byte BANK_LVL             ; filed under bank 7 in BANKS)
+  .if b = 0                        ; low RAM: its image, in the BOOT piece (main RAM,
+        .byte BANK_LVL             ;  filed under bank 7 in BANKS).  The operand is
+                                   ;  the byte before the label: op #n is 2 bytes
         .word .ident(.concat("@bf_", name)) - 1 - __LOWCODE_RUN__ + __LOWCODE_LOAD__
-    .else
+  .else
         .byte b
         .word .ident(.concat("@bf_", name)) - 1
-    .endif
+  .endif
         .popseg
 .endmacro
 .macro bankimm op, n, b, tag
-    .if .blank(b)
+  .if .blank(b)
         .error "bankimm: the Model B needs the bank the code is in"
-    .endif
+  .endif
         op #n
   .if .blank(tag)
         BANKREF .sprintf("%s_%d", .string(op), n), b
@@ -116,39 +135,49 @@ ALLLEVELS = 0                      ; a test build: every level on the chooser, e
         BANKREF .sprintf("%s_%d_%d", .string(op), n, tag), b
   .endif
 .endmacro
-.macro setbank n, b, tag           ; ROMSEL_CPY first: ROMSEL's copy,
-        bankimm lda, n, b, tag     ; which the interrupt restores from (the read bank
-        sta ROMSEL_CPY             ; alone: the write bank stays 7's -- below)
+.macro setbank n, b, tag           ; ROMSEL_CPY first: ROMSEL's copy, which the
+        bankimm lda, n, b, tag     ;  interrupt restores from (the read bank alone:
+        sta ROMSEL_CPY             ;  the write bank stays 7's -- below)
         sta ROMSEL
+.endmacro
+.macro ldpbank op, n
+        op ::PBANK + (n - ::BANK_SPR)
 .endmacro
 
 ; ---------------------------------------------------------------- the write bank
-; Solidisk and Watford boards choose the bank a STORE goes to with a register of their
-; own -- Solidisk: user VIA port B bits 0-3 ($FE62 = $0F, then $FE60 = bank); Watford:
-; a store to $FF30 + bank -- and read through ROMSEL like everyone else.  So every
-; switch that a store into sideways RAM may follow carries a companion store, assembled
-; as a second `sta ROMSEL` (harmless: A holds the bank) and listed in the WRFIX segment
-; for the boot loader to rewrite by board: Watford `sta $FF3n` (n the socket) or, where
-; the bank is in X as well, `sta $FF30,x`; Solidisk `sta $FE60`.  (wrback's is `sta
-; $FF30` as assembled: a store into the MOS's ROM, nothing on a plain machine, where
-; ROMSEL would page bank 7 in.)  On the Master the macros are empty.
-; The rule: the write bank is bank 7's, always, but in a WINDOW -- a store into another
-; bank, between a wrsel to it and a wrback that puts 7's back (the sprite banks' entry,
-; map_put, selbb, boot).  Nothing else moves it: a switch that only reads (every other
-; crossing, page_logic, setbank) leaves it be, and the interrupt stores into no bank
-; (what it keeps is in main RAM), so it neither needs a write bank nor sets one -- an
-; interrupt inside a window finds the window's and leaves it.
+; Solidisk and Watford boards choose the bank a STORE goes to with a register of
+; their own -- Solidisk: user VIA port B bits 0-3 (UVIA_DDRB = SOLIDISK_BITS, then
+; WRSEL_SOLIDISK = bank); Watford: a store to WRSEL_WATFORD + bank -- and read through
+; ROMSEL like everyone else.  So every switch that a store into sideways RAM may
+; follow carries a companion store, assembled as a second `sta ROMSEL` (harmless: A
+; holds the bank) and listed in the WRFIX segment for the boot loader to rewrite by
+; board: Watford `sta $FF3n` (n the socket), Solidisk `sta $FE60`.  (wrback's is
+; `sta WRSEL_WATFORD` as assembled: a store into the MOS's ROM, nothing on a plain
+; machine, where a second sta ROMSEL would page bank 7 in under the code running.)
+; On the Master the macros are empty: it has no board.
+; The rule: the write bank is bank 7's, always, but in a WINDOW -- a store into
+; another bank, between a wrsel to it and a wrback that puts 7's back (the sprite
+; banks' entry, map_put, selbb, boot, draw_rect).  Nothing else moves it: a switch
+; that only reads (every other crossing, page_logic, setbank) leaves it be, and the
+; interrupt stores into no bank (what it keeps is in main RAM), so it neither needs
+; a write bank nor sets one -- an interrupt inside a window finds the window's and
+; leaves it.
 ;   wrsel n, b [, tag]   after a switch to the constant bank n (A = n), in bank b's
 ;                        image (0 = the low-RAM image, as BANKREF)
-;   wrselx b             after a switch to the bank in A AND X
 ;   wrback b [, tag]     a window's end: the write bank back to 7's (A lost)
-WR_INX = $FE                       ; a record's kind for "the bank in X" (else the bank, 4..7)
-.macro WRREC kind, b, name         ; (the record: the image's bank, the store's address,
-  .if ::BHW                        ;  the kind: 4..7 a constant bank, WR_INX "in X")
+;   WRREC kind, b, name  the record: the image's bank, the store's address, the kind
+;                        -- 4..7 a constant bank, or WR_INX, the bank in X (`sta
+;                        $FF30,x` on a Watford board: no emitter today; ldprog.s and
+;                        build.sh still know the kind)
+; Every .if BHW here is hardware: the boards.
+WR_INX = $FE                       ; a record's kind for "the bank in X"
+WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches it
+.macro WRREC kind, b, name
+  .if ::BHW
         .ident(.concat("@wr_", name)):
         .pushseg
         .segment "WRFIX"
-    .if b = 0
+    .if b = 0                      ; (the label is past the 3-byte sta abs)
         .byte BANK_LVL
         .word .ident(.concat("@wr_", name)) - 3 - __LOWCODE_RUN__ + __LOWCODE_LOAD__
     .else
@@ -170,11 +199,11 @@ WR_INX = $FE                       ; a record's kind for "the bank in X" (else t
   .endif
 .endmacro
 .macro wrback b, tag               ; A = bank 7's (Solidisk's store writes A), then a
-  .if ::BHW                        ; store the boot loader makes the board's -- but not
-    .if .blank(tag)                ; a second sta ROMSEL, which would page bank 7 in under
-        bankimm lda, ::BANK_LVL, b, 99   ; whatever runs here: sta WRSEL_WATFORD, a store
-        sta ::WRSEL_WATFORD        ; into the MOS's ROM, nothing on a plain machine
-        WRREC ::BANK_LVL, b, "s_7_99"
+  .if ::BHW                        ;  store the boot loader makes the board's
+    .if .blank(tag)
+        bankimm lda, ::BANK_LVL, b, ::WRBACK_TAG
+        sta ::WRSEL_WATFORD
+        WRREC ::BANK_LVL, b, .sprintf("s_7_%d", ::WRBACK_TAG)
     .else
         bankimm lda, ::BANK_LVL, b, tag
         sta ::WRSEL_WATFORD
@@ -182,32 +211,29 @@ WR_INX = $FE                       ; a record's kind for "the bank in X" (else t
     .endif
   .endif
 .endmacro
-.macro wrselx b
-  .if ::BHW
-        sta ROMSEL
-        WRREC WR_INX, b, "x"
-  .endif
-.endmacro
-.macro SAMEPAGE from, to           ; after a hot branch: it and its target in one page
+
+; ---------------------------------------------------------------- placement
+; SAMEPAGE from, to: after a hot branch, assert it and its target share a page
+; (checked at link time; a PAD before it fixes it).  PAD b, m: bytes of padding, the
+; Model B's and the Master's (pads.inc), to move the code after it off a page
+; boundary: the code differs in length between the machines, so the pads do, while
+; the data after lies alike whatever they are (tools/pincfg.py pins it).
+.macro SAMEPAGE from, to
         .assert >(from) = >(to), warning, "a hot branch crosses a page (+1 cycle when taken)"
-.endmacro                          ; (checked at link time; a PAD before it fixes it)
-.macro PAD b, m                    ; bytes of padding, the Model B's and the Master's, to
-  .if ::BHW                        ; move the code after it off a page boundary (the code
-        .res b                     ; differs in length, so the pads do; the data after
-  .else                            ; lies alike whatever they are: pinned)
+.endmacro
+.macro PAD b, m
+  .if ::BHW                        ; CPU spelling: the code lengths differ
+        .res b
+  .else
         .res m
   .endif
-.endmacro
-.macro ldpbank op, n
-        op PBANK + (n - 4)
 .endmacro
 
 ; ---------------------------------------------------------------- the spellings
 ; Each macro: what it is for, the Master's expansion, the Model B's, and the flags.
-; "kept" means the expansion leaves the flag as it found it.  Inside .if .not BHW
-; (Master-only code) the instruction is written natively; the macros are for shared
-; code.  The Master's definitions are one instruction each, so the comments below sit
-; with the Model B's.
+; "kept" means the expansion leaves the flag as it found it.  The Master's
+; definitions are one instruction each, so the notes sit with the Model B's.
+; Every .if here is CPU spelling.
   .if .not ::BHW
         .setcpu "65C02"
   .else
@@ -220,11 +246,11 @@ WR_INX = $FE                       ; a record's kind for "the bank in X" (else t
   .if ::BHW
 .macro stz arg, ix
         lda #0
-.if .paramcount = 2
+  .if .paramcount = 2
         sta arg,ix
-.else
+  .else
         sta arg
-.endif
+  .endif
 .endmacro
   .endif
 
@@ -288,7 +314,7 @@ WR_INX = $FE                       ; a record's kind for "the bank in X" (else t
   .endif
 
 ; inca, deca: A + 1, A - 1.  The CARRY IS DESTROYED on the Model B: only for a site
-; where the next use of C is a write (every site follows with lsr, or sets C itself).
+; where the next use of C is a write.
 ;   Master   inc a / dec a           N, Z from A; C, V kept
 ;   Model B  clc / adc #1            N, Z, V from A; C = 1 only if A was $FF
 ;            sec / sbc #1            N, Z, V from A; C = 0 only if A was 0
