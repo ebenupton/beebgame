@@ -9,13 +9,13 @@
 ; Assembled, each in the bank of the code that indexes it: the row multiples are
 ; bank 7's (calc_ring, ring_addr7, the chain), the ring modulus bank 6's (ringaddr).
         .segment "KRNDATA"          ; (the kernel's: calc_ring and ring_addr7 are there)
-        .assert RINGROWS <= 32, error, "the row multiples are sized for 32"
-mul_rowlo:                         ; (32 rows on both machines, the Master's ring, so
-.repeat 32, i                      ; bank 7's data lies alike: the Model B reads 23)
-        .byte <(i*ROWCHARS)
+        .assert RINGROWS <= MAXRINGROWS, error, "the row multiples are sized for MAXRINGROWS"
+mul_rowlo:                         ; (MAXRINGROWS rows on both machines, the Master's
+.repeat MAXRINGROWS, i             ; ring, so bank 7's data lies alike: the Model B
+        .byte <(i*ROWCHARS)        ; reads 23)
 .endrepeat
 mul_rowhi:
-.repeat 32, i
+.repeat MAXRINGROWS, i
         .byte >(i*ROWCHARS)
 .endrepeat
 
@@ -29,10 +29,10 @@ mul_rowhi:
 .endrepeat
 .endmacro
 ; 4-bit sprites: the game's expansion tables (its palette: nibtab.bin, L0TAB, L1TAB and
-; NMASK, 768 bytes, from its asset step) and the dot reversal, in both sprite banks
+; NMASK, NIBTAB_LEN bytes, from its asset step) and the dot reversal, in both sprite banks
 .macro NIB_TABLES
         .assert * = L0TAB, error, "the expansion tables must be at L0TAB"
-        .incbin "nibtab.bin", 0, 768
+        .incbin "nibtab.bin", 0, NIBTAB_LEN
         SWAP_TABLE
 .endmacro
         .segment "SPR4TAB"
@@ -56,7 +56,7 @@ mir_dirty:
 
         .segment "ENGCODE"          ; (the engine's per-level clear: load_level's)
 lv_reset:
-        lda #$80                   ; both buffers invalid: an unreachable window x
+        lda #BUF_INVALID           ; both buffers invalid: an unreachable window x
         sta BUF_CXH                ; (scroll_validate redraws them whole)
         sta BUF_CXH+1
         lda #0                     ; (the caller stores this A: it must be 0)
@@ -70,7 +70,7 @@ lv_reset:
         .segment "ENGLVL"           ; the level's tables, loaded by ldprog.s (the
 LV_ATTR0:   .res 256               ; objects go to main RAM: LV_OBJS, defs.inc)
 LV_ALTCLS:  .res 256               ; alt class by tile id
-LV_HDR:     .res 32                ; header: lw, lh, nobj, the tile set's shape, and
+LV_HDR:     .res HDR_LEN           ; header: lw, lh, nobj, the tile set's shape, and
                                     ; the game's own fields (tools/levelfile.py); the
                                     ; game's header tail follows, in its own memory
         .segment "ENGBSS"           ; the engine's: the sprite directory

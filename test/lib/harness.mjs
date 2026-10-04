@@ -46,6 +46,13 @@ export function dbgPath(labels) {
 export function loadLabels(file) {
   const A = {};
   for (const m of readFileSync(file, "utf8").matchAll(/^al ([0-9A-F]+) \.(\w+)$/gm)) A[m[2]] = parseInt(m[1], 16);
+  // the build's constants too (defs_ld.inc, beside labels.txt: build.sh writes it from
+  // the game's equates -- the screen's shape, the loader's addresses), where a label
+  // of the same name does not say otherwise; an older build has none of them
+  try {
+    for (const m of readFileSync(path.join(path.dirname(file), "defs_ld.inc"), "utf8").matchAll(/^(\w+) = (\$?)([0-9A-Fa-f]+)$/gm))
+      if (!(m[1] in A)) A[m[1]] = parseInt(m[3], m[2] ? 16 : 10);
+  } catch { /* no defs_ld.inc: labels alone */ }
   return A;
 }
 

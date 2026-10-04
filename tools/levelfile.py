@@ -61,7 +61,7 @@ class Shape:
 
 
 # ---------------------------------------------------------------- the limits (src/defs.inc)
-OBJ_BYTES, OBJ_MAX = 6, 149     # LV_OBJS: 894 bytes, main RAM
+OBJ_BYTES, OBJ_MAX = 6, 149     # LV_OBJS: 894 bytes, main RAM (levelfmt.inc carries both)
                                 # DIR_TABLE: 2 bytes a sprite id, BOXID0 + BOXN of them
                                 # (the game's numbers, from its assets.inc: Level.boxid0,
                                 # boxn)
@@ -77,18 +77,22 @@ def dir_len(boxid0, boxn):
 
 
 # ---------------------------------------------------------------- the map's run length code
+RLE_LIT_MAX = 128               # c < RLE_LIT_MAX: c+1 literal bytes follow
+RLE_RUNBASE = 126               # else the next byte, c - RLE_RUNBASE times (2..129)
+
+
 def rle(data):
     """c < 128: c+1 literal bytes follow; c >= 128: the next byte, c-126 times (2..129)"""
     out, i, n = bytearray(), 0, len(data)
     while i < n:
         j = i
-        while j + 1 < n and data[j + 1] == data[i] and j - i < 128:
+        while j + 1 < n and data[j + 1] == data[i] and j - i < RLE_LIT_MAX:
             j += 1
         run = j - i + 1
         if run >= 2:
-            out += bytes([126 + run, data[i]]); i += run; continue
+            out += bytes([RLE_RUNBASE + run, data[i]]); i += run; continue
         j = i
-        while j < n and j - i < 128 and not (j + 2 < n and data[j] == data[j + 1] == data[j + 2]):
+        while j < n and j - i < RLE_LIT_MAX and not (j + 2 < n and data[j] == data[j + 1] == data[j + 2]):
             j += 1
         out += bytes([j - i - 1]) + data[i:j]; i = j
     return bytes(out)
@@ -98,23 +102,28 @@ def unrle(data, n=None):
     out, i = bytearray(), 0
     while i < len(data) and (n is None or len(out) < n):
         c = data[i]; i += 1
-        if c < 128:
+        if c < RLE_LIT_MAX:
             out += data[i:i + c + 1]; i += c + 1
         else:
-            out += bytes([data[i]]) * (c - 126); i += 1
+            out += bytes([data[i]]) * (c - RLE_RUNBASE); i += 1
     return bytes(out)
 
 
 # ---------------------------------------------------------------- the sprites' sections
+PLACE_LEN = 6                   # a placement entry: item, bank, image address (2), extra (2)
+PL_ITEM, PL_BANK, PL_ADDR, PL_EXTRA = 0, 1, 2, 4
+PL_END = 0xFF                   # the item byte that ends the list
+
+
 def placement(items):
     """(item, bank, image address, extra) for each image the level places from the
-    shared files, in item order; $FF ends it.  extra is 0, or for an item the loader
+    shared files, in item order; PL_END ends it.  extra is 0, or for an item the loader
     bakes (ldprog.s bake) its tile: x | y << 8"""
     out = bytearray()
     for item, bank, img, extra in items:
-        assert 0 <= item < 255 and bank in (4, 5), (item, bank)
+        assert 0 <= item < PL_END and bank in (4, 5), (item, bank)
         out += bytes([item, bank, img & 255, img >> 8, extra & 255, extra >> 8])
-    return bytes(out + b'\xff')
+    return bytes(out + bytes([PL_END]))
 
 
 def directory(entries):
@@ -222,6 +231,10 @@ def inc():
     lines += ['SEC_%s = %d' % (n.upper(), i) for i, n in enumerate(SECTIONS)]
     lines += ['HDR_LW = %d' % HDR_LW, 'HDR_LH = %d' % HDR_LH, 'HDR_NOBJ = %d' % HDR_NOBJ]
     lines += ['%s = %d' % kv for kv in HDR.items()]
+    lines += ['HDR_LEN = %d' % HDR_LEN, 'OBJ_BYTES = %d' % OBJ_BYTES, 'OBJ_MAX = %d' % OBJ_MAX]
+    lines += ['PLACE_LEN = %d' % PLACE_LEN, 'PL_ITEM = %d' % PL_ITEM, 'PL_BANK = %d' % PL_BANK,
+              'PL_ADDR = %d' % PL_ADDR, 'PL_EXTRA = %d' % PL_EXTRA, 'PL_END = $%02X' % PL_END]
+    lines += ['RLE_LIT_MAX = %d' % RLE_LIT_MAX, 'RLE_RUNBASE = %d' % RLE_RUNBASE]
     lines += ['LV_PAGE0_SECS = %d' % (PAGE0_LEN // 256)]
     return '\n'.join(lines) + '\n'
 
@@ -246,7 +259,7 @@ def check(data, boxid0, boxn):
     assert len(sec['dir']) == dir_len(boxid0, boxn), 'the directory'
     assert not any(sec['pad']) and len(sec['pad']) < 256, 'the padding before LV_PAGE0'
     p = sec['place']
-    assert len(p) % 6 == 1 and p[-1] == 0xFF and all(p[i + 1] in (4, 5) for i in range(0, len(p) - 1, 6)), 'the placements'
+    assert len(p) % PLACE_LEN == 1 and p[-1] == PL_END and all(p[i + PL_BANK] in (4, 5) for i in range(0, len(p) - 1, PLACE_LEN)), 'the placements'
     return sec
 
 

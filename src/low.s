@@ -46,7 +46,7 @@ irq_ret:                           ; a step's way back
         sta ROMSEL
         ldy irq_y
         ldx irq_x
-        lda $FC
+        lda MOS_IRQA
         rti
   .endif
 
@@ -89,15 +89,15 @@ call_bank:                         ; A = the bank (the write bank is set by the
         jmp page_logic
 
         .segment "LOWBSS"
-GATHERH:  .res 21                  ; a tile row's gather (gather5): 21 tiles at most
-clip_mask: .res 1                  ; $80 when the window has moved since the back buffer
-                                    ;  last drew (select_backbuf; match_sprites)
+GATHERH:  .res GATHERN             ; a tile row's gather (gather5): 21 tiles at most
+clip_mask: .res 1                  ; REC_CLIP when the window has moved since the back
+                                    ;  buffer last drew (select_backbuf; match_sprites)
 krlo:     .res 1                   ; select_backbuf: the rows and columns the back buffer's
 krhi2:    .res 1                   ;  last window and this one share (relative to this one;
 kclo:     .res 1                   ;  the high bounds + 2), for match_sprites' moved records
 kchi2:    .res 1
         .segment "LOWBSS2"          ; the rest of low RAM, above the code
-GATHERL:  .res 21
+GATHERL:  .res GATHERN
         .segment "LOWBSS"
 ; the Model B's mirror bookkeeping (mirror.s): the tile blitter (bank 6), the sprite
 ; prologue and copy_partial (bank 7) note what they wrote to the ring's last slot row,

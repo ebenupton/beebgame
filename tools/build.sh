@@ -61,12 +61,27 @@ settarget() {                       # $1: modelb or master
     export BD TARGET
 }
 [ -n "$SKIP_ASSETS" ] || [ -z "$GAME_MUSIC" ] || sh -c "$GAME_MUSIC"
+cfgval() {                          # $1: a cfg, $2: an area, $3: start|size -> its hex digits
+    sed -n "s/^ *$2: *.*$3 = [\$]\([0-9A-F]*\).*/\1/p" $1
+}
+incval() {                          # $1: an .inc, $2: a constant -> its value (hex or decimal)
+    sed -n "s/^$2 = \([\$]*[0-9A-Fa-f]*\).*/\1/p" $1 | sed 's/^\$/0x/'
+}
 for t in $TARGETS; do
     settarget $t
     mkdir -p $BD
     [ -n "$SKIP_ASSETS" ] || sh -c "$GAME_ASSETS"
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
     [ "$TIGHTBSS" = 1 ] && sed -i.bak '/^ *ENGBSS:/s#, align = \$100##' $BD/game.cfg   # (ENGBSS where GAMEBSS ends)
+    # the banks' code must end where the game's packer starts their data (assets.inc:
+    # the level files bake the addresses): the areas sized to it, so an overflow fails
+    # the link.  Bank 6's ends at the first tile slot, TILES + (TOFF+1)*64
+    B4S=$(printf '%04X' $(( $(incval $BD/assets.inc B4_CODE_END) - 0x$(cfgval $CFG B4X start) )))
+    B5S=$(printf '%04X' $(( $(incval $BD/assets.inc B5_CODE_END) - 0x$(cfgval $CFG B5X start) )))
+    B6S=$(printf '%04X' $(( $(incval $BD/assets.inc TILES) + ($(incval $BD/assets.inc TOFF) + 1) * 64 - 0x$(cfgval $CFG B6X start) )))
+    sed -i.sz -e "s#^\( *B4X: *start = [$][0-9A-F]*, size = [$]\)[0-9A-F]*#\1$B4S#" \
+              -e "s#^\( *B5X: *start = [$][0-9A-F]*, size = [$]\)[0-9A-F]*#\1$B5S#" \
+              -e "s#^\( *B6X: *start = [$][0-9A-F]*, size = [$]\)[0-9A-F]*#\1$B6S#" $BD/game.cfg
     for f in BANKS MENU GAME IMG7 LDPROG; do [ -f $BD/$f ] || : > $BD/$f; done
     python3 $BG/tools/levelfile.py inc > $BD/levelfmt.inc     # (the loader's: one definition)
 done
@@ -119,17 +134,17 @@ for pass in 1 2 3; do
             SZ=$(od65 --dump-segsize $BD/main.o)
             seg() { echo "$SZ" | awk -v p="^ +($1):" '$0 ~ p {s += $2} END {print s + 0}'; }
             D1=$(seg 'D8271H|D8271N|D8271C'); D2=$(seg 'D1770H|D1770N|D1770C')
-            DRVN=$(( D1 > D2 ? D1 : D2 )); DRVS=$(( 0xBF00 - DRVN ))
+            DRVN=$(( D1 > D2 ? D1 : D2 )); DRVS=$(( 0x$(cfgval $CFG B7H start) - DRVN ))   # (the slot ends at B7H)
             KD=$(seg KRNDATA)
             KRNS=$(( DRVS - $(seg 'KRNDATA|KRNCODE|KRNBSS') ))
             [ $(( (KRNS & 255) + KD )) -gt 256 ] && KRNS=$(( (KRNS & 0xFF00) + 256 - KD ))
             B7N=$(seg 'GAMEDATA|GAMECODE|ENGCODE')
             B7S=$(printf '%04X' $(( KRNS - B7N ))); B7N=$(printf '%04X' $B7N)
-            MSZ=$(printf '%04X' $(( KRNS - 0x8000 ))); KSZ=$(printf '%04X' $(( DRVS - KRNS )))
+            MSZ=$(printf '%04X' $(( KRNS - 0x$(cfgval $CFG B7M start) ))); KSZ=$(printf '%04X' $(( DRVS - KRNS )))
             KRNS=$(printf '%04X' $KRNS); DRVS=$(printf '%04X' $DRVS); DRVN=$(printf '%04X' $DRVN)
         fi
         sed -i.b7 -e "s#^\( *B7: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$B7S, size = \$$B7N#" \
-                  -e "s#^\( *B7M: *start = [$]8000, size = [$]\)[0-9A-F]*#\1$MSZ#" \
+                  -e "s#^\( *B7M: *start = [$][0-9A-F]*, size = [$]\)[0-9A-F]*#\1$MSZ#" \
                   -e "s#^\( *B7K: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$KRNS, size = \$$KSZ#" \
                   -e "s#^\( *DRV[0-9]*: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$DRVS, size = \$$DRVN#" $BD/game.cfg
         # the Master's segments at the Model B's addresses (linked just before): its
@@ -143,7 +158,7 @@ import re
 want = ['boot','dsk_type','dsk_drv','read_sectors','ld_sec','ld_n','ld_dst',
         'LV_HDR','LV_OBJS','LV_ATTR0','LV_ALTCLS','TILES','DIR_TABLE','map_shr','map_stride','FLATTAB',
         'half0','halfhi5','half_sub','HLOW','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
-        'MAP5','LDZP','BARADDR','STAGE','STAGE_LVL','LDPROG','PBANK','pboard','DSK_BANKS','dsk_board',
+        'MAP5','LDZP','STAGE','STAGE_LVL','LDPROG','PBANK','pboard','DSK_BANKS','dsk_board',
         'ld_img','ld_open','load_req','game_in']
 addr = {}
 import os
@@ -160,11 +175,10 @@ dids = '|'.join(re.findall(r'^sym\tid=(\d+),name="(?:draw_rect|RINGHIOP)",', dbg
 s0f = re.search(r'^sym\tid=\d+,name="@s0f",[^\n]*parent=(?:%s),[^\n]*val=0x([0-9A-F]+)' % dids, dbg, re.M)
 addr['SOLIDF'] = int(s0f.group(1), 16) + 1
 want.append('SOLIDF')
-# the game's hooks (README.md) and the bar's address (engine/defs.s BARADDR, the
-# machine's): equates, so in the debug info and not labels.txt -- the load-time
-# program goes on to the hooks after an image load (ldprog.s ld_entry) and reads
-# the bar's template to BARADDR
-for h in ('hook_title', 'hook_image', 'hook_over', 'BARADDR'):
+# the game's hooks (README.md): equates, so in the debug info and not labels.txt --
+# the load-time program goes on to the hooks after an image load (ldprog.s ld_entry).
+# (The bar's address, BARADDR, and the other constants come from ldconst.s below.)
+for h in ('hook_title', 'hook_image', 'hook_over'):
     addr[h] = int(re.search(r'^sym\tid=\d+,name="%s",[^\n]*val=0x([0-9A-F]+)' % h, dbg, re.M).group(1), 16)
     if h not in want:
         want.append(h)
@@ -229,24 +243,30 @@ EOF
         # them or on a byte that is no bank number.  Then the write-bank store list (cpu.inc
         # wrsel: bank, address, kind; every entry must sit on a `sta $FE30`), ending in $FF.
         python3 - <<'EOF'
-import os
+import os, re
 BD = os.environ['BD']
 lab = {}
 for l in open(BD + '/labels.txt'):
     p = l.split()
     if len(p) >= 3 and p[0] == 'al':
         lab[p[2].lstrip('.')] = int(p[1], 16)
-pieces = [(4, 0x8000, 'b4x.bin'), (4, 0xBC00, 'b4t.bin'),
-          (5, 0x8000, 'b5x.bin'), (5, 0xBC00, 'b5t.bin'),
-          (6, 0x8000, 'b6x.bin'),                                 # (B6X in the cfg)
-          (7, 0x7000, 'boot.bin'),        # main RAM (BOOTRAM): start-up and the low-RAM image
-          (7, lab['__KRNDATA_RUN__'], 'b7k.bin'),   # the kernel: resident, the top of bank 7
-          (7 | 0x80, lab['__DRV8271_START__'], 'drv8271.bin'),   # the driver slot: the 8271's (bit 7: an
-          (7 | 0x40, lab['__DRV1770_START__'], 'drv1770.bin')]   # 8271 only) or the 1770's (bit 6): loader.s
+# the file's format, as the sources have it (defs.inc, cpu.inc: through defs_ld.inc)
+K = {m.group(1): int(m.group(3), 16 if m.group(2) else 10)
+     for m in re.finditer(r'^(\w+) = (\$?)([0-9A-Fa-f]+)$', open(BD + '/defs_ld.inc').read(), re.M)}
+# each piece: its bank (the code's number; the drivers' flagged by their controller,
+# PIECE_8271/PIECE_1770, main RAM's filed under bank 7) and its address (the cfg's area)
+pieces = [(4, lab['__B4X_START__'], 'b4x.bin'), (4, lab['__B4T_START__'], 'b4t.bin'),
+          (5, lab['__B5X_START__'], 'b5x.bin'), (5, lab['__B5T_START__'], 'b5t.bin'),
+          (6, lab['__B6X_START__'], 'b6x.bin'),
+          (7, lab['__BOOTRAM_START__'], 'boot.bin'),    # main RAM (BOOTRAM): start-up and the low-RAM image
+          (7, lab['__KRNDATA_RUN__'], 'b7k.bin'),       # the kernel: resident, the top of bank 7
+          (7 | K['PIECE_8271'], lab['__DRV8271_START__'], 'drv8271.bin'),   # the driver slot: the 8271's (an
+          (7 | K['PIECE_1770'], lab['__DRV1770_START__'], 'drv1770.bin')]   # 8271 only) or the 1770's: loader.s
 if os.environ.get('TARGET') == 'master':
-    pieces.append((7, 0x0600, 'mcode.bin'))         # main RAM: the Master's handler, chain, keys, sound
+    pieces.append((7, lab['__MRAM_START__'], 'mcode.bin'))    # main RAM: the Master's handler, chain, keys, sound
 if os.environ.get('GAMEHAZEL') == '1':
-    pieces.append((1, 0xC000, 'hazel.bin'))         # HAZEL (bank "1" to the loader: ACCCON Y), last
+    pieces.append((K['PIECE_HAZEL'], lab['__HAZ_START__'], 'hazel.bin'))   # HAZEL (ACCCON Y), last
+assert K['PIECE_LEN'] == 5 and K['FIX_LEN'] == 3 and K['WR_LEN'] == 4, 'the record sizes written below'
 tab, body, img = bytearray([len(pieces)]), bytearray(), {}
 for bank, addr, fn in pieces:
     d = open(os.path.join(BD, fn), 'rb').read()
@@ -275,9 +295,9 @@ wr = b''.join(wr0[i:i + 4] for i in range(0, len(wr0), 4) if not ingame(wr0[i], 
 for i in range(0, len(wr), 4):
     bank, addr, kind = wr[i], wr[i + 1] | (wr[i + 2] << 8), wr[i + 3]
     assert piece_bytes(bank, addr, 3) in (b'\x8d\x30\xfe', b'\x8d\x30\xff'), 'write-bank store %d:$%04X is not sta $FE30 (or wrback\'s sta $FF30)' % (bank, addr)
-    assert kind in (4, 5, 6, 7, 0xFE), 'write-bank store %d:$%04X: kind $%02X' % (bank, addr, kind)
+    assert kind in (4, 5, 6, 7, K['WR_INX']), 'write-bank store %d:$%04X: kind $%02X' % (bank, addr, kind)
 banks = tab + body + fix + b'\xff' + wr + b'\xff'
-assert 0x2000 + len(banks) <= 0x7000, 'BANKS (read to $2000) would run into the start-up piece at $7000'
+assert K['BANKSBUF'] + len(banks) <= lab['__BOOTRAM_START__'], 'BANKS (read to BANKSBUF) would run into the start-up piece (BOOTRAM)'
 open(BD + '/BANKS', 'wb').write(banks)
 print('BANKS: %d pieces, %d bytes, %d bank patches, %d write-bank stores' % (len(pieces), len(tab) + len(body), len(fix) // 3, len(wr) // 4))
 EOF
@@ -291,8 +311,9 @@ EOF
     ca65 --cpu 6502 -D MASTERONLY=$MASTERONLY -D GAMEHAZEL=$GAMEHAZEL -I $REF -I build -I $BG/src -o build/loader.o $BG/src/loader.s
     ld65 -C $BG/cfg/loader.cfg -o build/LOADER build/loader.o
 done
+LDA=$(cfgval $BG/cfg/loader.cfg LOAD start)      # the boot loader's load and run address (its cfg)
 python3 $BG/tools/mkdfs.py build $DISC_OUT "$DISC_TITLE" \
-    "!BOOT:build/BOOT:0000:FFFF" "LOADER:build/LOADER:1900:1900" \
+    "!BOOT:build/BOOT:0000:FFFF" "LOADER:build/LOADER:$LDA:$LDA" \
     $(echo $DISC | tr ' ' '\n' | grep -v '^!BOOT\|^LOADER' | tr '\n' ' ')
 if [ "$MASTERONLY" = 1 ]; then
 ls -l $M/BANKS $DISC_OUT

@@ -25,24 +25,24 @@ take_over:
         lda #>irq_handler
         sta IRQ1V+1
         ; ---- every source off, on both VIAs
-        lda #$7F
+        lda #<~VIA_ISET            ; clear bits 0-6: every source
         sta VIA_IER
         sta UVIA_IER
-        ; ---- T1 continuous, its first period 40 lines
+        ; ---- T1 continuous, its first period IDLE_LINES lines
         lda VIA_ACR
-        and #$3F
-        ora #$40                   ; T1 continuous
+        and #<~VIA_ACR_T1
+        ora #VIA_ACR_T1CONT        ; T1 continuous
         sta VIA_ACR
-        lda #<(40*LINE)
+        lda #<(IDLE_LINES*LINE)
         sta VIA_T1LL
-        .assert <(40*LINE) = 0, error, "take_over clears flip_req with the latch's low byte"
+        .assert <(IDLE_LINES*LINE) = 0, error, "take_over clears flip_req with the latch's low byte"
         sta flip_req               ; A = 0: no flip pending
-        lda #>(40*LINE)
+        lda #>(IDLE_LINES*LINE)
         sta VIA_T1CH               ; (starts T1)
         ; ---- CA1 and T1 on, their flags cleared
-        lda #$C2                   ; enable CA1 (vsync) + T1
+        lda #VIA_ISET|VIA_IT1|VIA_ICA1   ; enable CA1 (vsync) + T1
         sta VIA_IER
-        sta VIA_IFR                ; $C2: T1 and CA1, the only sources ever enabled
+        sta VIA_IFR                ; and clear both flags (the only sources ever enabled)
         cli
         rts
 
@@ -55,19 +55,23 @@ take_over:
 ; takes over, as after a load.  Every register in order, R0 up to R13, so R12/R13
 ; (the bar's address) are written last.  R8 = 0: no interlace -- the MOS's MODE 1 leaves
 ; interlace sync on, which puts every other field's vsync half a scanline later.
-; R10 = $20: the cursor off.
+; R10 = R10_CUROFF: the cursor off.
 ; ============================================================================
         .segment "BOOT"
 crtc_init:
-        ldx #0
+        ldx #R_HTOT
 @w:     stx CRTC_IDX               ; X is the register number
         lda @val,x
         sta CRTC_DAT
         inx
-        cpx #14
+        cpx #CRTC_NREGS
         bne @w
         lda #LDR7
         sta cur_r7
         rts
-; the values, R0 first
-@val:   .byte 127, ROWCHARS, 98, $28, LDR4, 0, VISROWS, LDR7, 0, 7, $20, 8, >BARCRTC, <BARCRTC
+; the values, R0 first: MODE 1's horizontal shape, the load frame's rows (LDR4, no
+; adjust lines, VISROWS shown, the vsync on LDR7), no interlace, 8-line rows, the cursor
+; off, the bar's address
+@val:   .byte MODE1_R0, ROWCHARS, MODE1_R2, MODE1_R3, LDR4, 0, VISROWS, LDR7, 0
+        .byte CHARLINES-1, R10_CUROFF, MODE1_R11, >BARCRTC, <BARCRTC
+        .assert * - @val = CRTC_NREGS, error, "crtc_init: a value a register, R0 to R13"

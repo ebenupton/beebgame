@@ -252,9 +252,9 @@ SPR_YH:    .res MAXSPR
         PLACEH "MRAMBSS", "KRNHW"
 BUF_SEC0:  .res 4                  ; each buffer's section 0 (the bar): CRTC address
 BUF_SEC0T1: .res 4                 ; and its T1 count
-SECTAB:    .res 2*48               ; each buffer's chain (kernel.s build_sections)
-BUF_QS:    .res 3                  ; each buffer's Q entry (-> qsect), by 2 x the buffer
+SECTAB:    .res 2*SECBYTES         ; each buffer's chain (kernel.s build_sections)
+BUF_QS:    .res 2+1                ; each buffer's Q entry (-> qsect), by 2 x the buffer
     .if BHW
-BUF_KS:    .res 3                  ; and its two-line P2's (-> ksect); $FF for none
+BUF_KS:    .res 2+1                ; and its two-line P2's (-> ksect); SECT_NONE for none
     .endif                         ;  (the Model B's palette kill: kernel.s)
 

@@ -26,16 +26,18 @@
 ;         the Model B)
 ;   Runs in bank 5 (called by map_strip, low.s), last tile first.
 ;
-; What a pair means to the row loop (the Model B's; the Master's table holds the same):
+; What a pair means to the row loop (the Model B's; the Master's table holds the same;
+; the names are defs.inc's GH_*, GL_*):
 ;   GATHERH = 0             id 0, the level's solid (GATHERL unread)
-;   GATHERH = $40           a flat tile: GATHERL indexes its pair in FLATTAB
+;   GATHERH = GH_FLAT       a flat tile: GATHERL indexes its pair in FLATTAB
 ;   GATHERH bit 7 set       a full tile: GATHERH:GATHERL its address in bank 6 (low
 ;                           bits clear)
-;   GATHERH $06-$3F         a half: its row's page less $80 (bit 7 clear marks it, so
-;                           draw_rect sends it the rare way, at @run), GATHERL the row's
-;                           offset (bits 5-7), which of its char rows is the fill (bit 3
-;                           the top, bit 4 the bottom, neither: both rows stored) and
-;                           the fill's colour in the level's palette (bits 0-2)
+;   GATHERH $06-$3F         a half: its row's page less GH_TILE (bit 7 clear marks it,
+;                           so draw_rect sends it the rare way, at @run), GATHERL the
+;                           row's offset (GL_ROWMASK, bits 5-7), which of its char rows
+;                           is the fill (GL_FILLTOP, GL_FILLBOT; neither: both rows
+;                           stored) and the fill's colour in the level's palette
+;                           (GL_COLMASK, bits 0-2)
 ; A fill is flagged by bit 7 of the high byte clear -- the row loop's bpl.
 ;
 ; Model B, the tile kinds by id range:
@@ -76,18 +78,18 @@ gather5:
 
         ; ---- a full tile: slot id + TOFF, so the first tile (id 1) is TOFF+1 slots
         ; up from TILES, past the code (assets.inc)
-        adc #TOFF+4*(>TILES-$80)   ; C = 0 from the cmp: the slot + (TILES's page less
-        tax                        ;  $80) * 4, < $100 while the tile is below $C000
-        and #3
+        adc #TOFF+TILES_PER_PAGE*(>TILES-GH_TILE)   ; C = 0 from the cmp: the slot + (TILES's page
+        tax                        ;  less $80) * 4, < $100 while the tile is below $C000
+        and #TILES_PER_PAGE-1
         lsr
         ror
         ror                        ; (id & 3) << 6
         sta GATHERL,y
         txa
         lsr
-        sec                        ; bit 7 (slot >> 2 < $80): ora #$80 a byte shorter
+        sec                        ; bit 7 (slot >> 2 < $80): ora #GH_TILE a byte shorter
         ror                        ; slot >> 2 + >TILES: 4 slots a page
-        .assert >TILES >= $80 && <TILES = 0, error, "gather5: TILES in the bank, page aligned"
+        .assert >TILES >= GH_TILE && <TILES = 0 && TILES_PER_PAGE = 4, error, "gather5: TILES in the bank, page aligned, four slots a page"
         ; on into the solid's store: a full tile's high byte last, so the two share it
 
         ; ---- the solid: a zero high byte (GATHERL unread)
@@ -100,7 +102,7 @@ gather5:
 @gflat: sbc #FLAT0                 ; C is set, from the cmp
         asl
         sta GATHERL,y
-        lda #$40                   ; a fill (the row loop's bpl), not the solid (0)
+        lda #GH_FLAT               ; a fill (the row loop's bpl), not the solid (0)
         sta GATHERH,y
         dey
         bpl @gl
@@ -115,7 +117,7 @@ gather5:
         lsr
         lsr
         clc
-        adc halfhi5                ; + (k >> 3): 8 half rows a page (halfhi5 less $80:
+        adc halfhi5                ; + (k >> 3): 8 half rows a page (halfhi5 less GH_TILE:
                                     ;  the loader's -- a half's mark)
         sta GATHERH,y
         txa

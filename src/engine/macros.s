@@ -182,7 +182,7 @@ n2:     tax
 .macro spnext cold
         lda sp
         clc
-        adc #8
+        adc #CHARBYTES
         sta sp
   .if .blank(cold)
         bcc :++                    ; past the fold's own anonymous label

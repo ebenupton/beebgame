@@ -15,17 +15,18 @@ DSK_BANKS: .res 4
 dsk_board: .res 1
         .import __LOWCODE_LOAD__: absolute, __LOWCODE_RUN__: absolute, __LOWCODE_SIZE__: absolute
         .import __TILBSS_RUN__: absolute, __TILBSS_SIZE__: absolute
-boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $7000, the entry $7007"
+        .import __BOOTRAM_START__: absolute
+boot:   .assert dsk_type = __BOOTRAM_START__ && boot = dsk_type + 7, error, "the loader's header: the start of BOOTRAM, the entry 7 bytes on"
         sei
-        ldx #$3F                   ; the stack is 64 bytes: $0100-$013F
+        ldx #STACKTOP              ; the stack is 64 bytes: $0100-$013F
         txs
         lda #0                     ; zero page $00-$EF (zp,x wrapping) and $0114-$0203,
         ldx #$F0                   ; the low RAM and the stack above $0113 (nothing is
 :       sta $FF,x                  ; on it yet); interrupts are off until take_over
-        sta $0113,x
+        sta IRQ1V-$F1,x            ; ($0113,x: up to IRQ1V-1 -- IRQ1V is take_over's)
         dex
         bne :-
-        .assert __TILBSS_RUN__ + __TILBSS_SIZE__ <= TILES + (TOFF+1)*64, error, "bank 6's code and variables run into the first tile: raise TOFF (the game's packer)"
+        .assert __TILBSS_RUN__ + __TILBSS_SIZE__ <= TILES + (TOFF+1)*TILEBYTES, error, "bank 6's code and variables run into the first tile: raise TOFF (the game's packer)"
         ldy #$0F                   ; (A = 0) and zero page $F0-$FF
 :       sta $F0,y
         dey
@@ -42,7 +43,7 @@ boot:   .assert dsk_type = $7000 && boot = $7007, error, "the loader's header: $
         wrsel BANK_LVL, BANK_LVL
         .assert dsk_board = DSK_BANKS + 4 && pboard = PBANK + 4, error, "the board byte follows the banks"
         .assert dsk_drv = dsk_type + 1 && DSK_BANKS = dsk_type + 2 && drv_unit = drv_type + 1 && ld_sec = drv_type + 2 && ld_n = drv_type + 4, error, "boot copies the driver's bytes beside the banks"
-        ldx #4                     ; the physical banks and the board, from where the
+        ldx #pboard-PBANK          ; the physical banks and the board, from where the
 @pb:    lda DSK_BANKS,x            ; loader put them (the loop above has just zeroed
         sta PBANK,x                ; the low BSS); and the disc driver's own copies
         lda dsk_type,x             ; (this piece is screen memory once play starts):

@@ -14,17 +14,23 @@
 ; leaves in the start-up piece's header (init.s, $7000).
 ; ============================================================================
         .setcpu "6502"
+        .include "hw.inc"           ; the chips: ROMSEL, ACCCON, the user VIA, the boards'
+                                    ;  write-bank registers; the MOS's ROM table, a ROM's header
         .include "defs_ld.inc"      ; boot, dsk_type, dsk_drv, DSK_BANKS, dsk_board,
-                                    ; BOARD_*, WRSEL_* (build.sh)
-OSFILE  = $FFDD
+                                    ; BOARD_*, BANKSBUF, PIECE_*, FIX_LEN, WR_LEN, WR_INX (build.sh)
+OSFILE  = $FFDD                    ; the MOS's entries, and what this asks of them
 OSGBPB  = $FFD1
 OSBYTE  = $FFF4
 OSWRCH  = $FFEE
-ROMSEL  = $FE30
-ROMSELC = $F4
-ROMTYPE = $02A1                    ; the MOS's ROM table: the type byte of every ROM
-                                    ; it recognised at BREAK, 0 for the other sockets
-BUF     = $2000
+OSB_MOSVER = 0                     ; OSBYTE 0, X = 1: the MOS version in X
+OSB_INKEY  = $81                   ; OSBYTE $81, X = a negative INKEY code: is the key down?
+INKEY_W = $DE                      ;  W and I, as INKEY codes
+INKEY_I = $DA
+VDU_MODE = 22                      ; VDU 22, n: MODE n
+SCREEN_MODE = 1                    ; MODE 1 (the game's)
+OSF_LOAD = $FF                     ; OSFILE $FF: load a file, the address from its block
+OSGBPB_DRIVE = 6                   ; OSGBPB 6: the current drive's name
+NSOCK   = 16                       ; sideways sockets
 zsrc    = $70
 zdst    = $72
 ztab    = $74
@@ -34,13 +40,13 @@ ztmp    = $76
 start:
         ; ---- the machine: one disc, each machine its own bank images (BANKSB, BANKSM).
         ; OSBYTE 0 with X = 1 gives the MOS version in X: 3 and up are a Master's
-        lda #0
+        lda #OSB_MOSVER
         ldx #1
         jsr OSBYTE
-        cpx #3
+        cpx #MOS_MASTER
         bcc :+
         lda #'M'
-        sta fname+5
+        sta fname_m
   .if MASTERONLY
         bne :++                    ; (a Master: on)
 :       jmp no_master              ; a game built for the Master alone (build.sh MASTERONLY)
@@ -48,14 +54,14 @@ start:
   .else
 :
   .endif
-        lda ROMSELC
+        lda MOS_ROMSEL
         sta old_bank
         jsr find_ram               ; the four banks, into BANKMAP -- or fewer, and C set
         bcc :+
         jmp no_ram                 ; say so and go back to the MOS
 :
         ; ---- the drive: whichever DFS has current (OSGBPB 6: its name is the digit)
-        lda #6
+        lda #OSGBPB_DRIVE
         ldx #<gbpb
         ldy #>gbpb
         jsr OSGBPB
@@ -67,36 +73,36 @@ start:
         ; 0.90 and 1.20 (whose title is "DFS,NET" with no version at all); the 1770
         ; DFSs are 2.xx.  Hold W or I at boot to say so instead.
 
-        lda #$81
-        ldx #$DE                   ; W (negative INKEY code)
+        lda #OSB_INKEY
+        ldx #INKEY_W               ; W (negative INKEY code)
         ldy #$FF
         jsr OSBYTE
         inx                        ; X = $FF: W held
         bne :+
         inc fdc                    ; 0 (above) -> 1, Z clear
         bne @fdcdone
-:       ldx #$DA                   ; I (A = $81 still: OSBYTE keeps A)
+:       ldx #INKEY_I               ; I (A = OSB_INKEY still: OSBYTE keeps A)
         dey                        ; Y = $FF (0 from OSBYTE: W not held)
         jsr OSBYTE
         inx                        ; X = $FF: I held
         beq @fdcdone               ; 8271, as set
-        ldx #15
-@rom:   lda ROMTYPE,x              ; the MOS's ROM type table: service ROMs only
+        ldx #NSOCK-1
+@rom:   lda MOS_ROMTAB,x           ; the MOS's ROM type table: service ROMs only
         bpl @nextrom
-        stx ROMSELC
+        stx MOS_ROMSEL
         stx ROMSEL
         ldy #0
-:       lda $8009,y                ; the title
+:       lda ROMHDR_TITLE,y         ; the title
         beq :+
         iny
         bne :-
-:       lda $800A,y                ; the version follows its terminator
+:       lda ROMHDR_TITLE+1,y       ; the version follows its terminator
         cmp #'2'
         bne @nextrom
-        lda $8009                  ; only a DFS: the title starts "DFS" (Acorn's)
+        lda ROMHDR_TITLE           ; only a DFS: the title starts "DFS" (Acorn's)
         cmp #'D'
         bne @nextrom
-        lda $800A
+        lda ROMHDR_TITLE+1
         cmp #'F'
         bne @nextrom
         inc fdc                    ; 0 -> 1
@@ -105,47 +111,49 @@ start:
         dex
         bpl @rom
         lda old_bank
-        sta ROMSELC
+        sta MOS_ROMSEL
         sta ROMSEL
 @fdcdone:
-        lda #22                    ; MODE 1 first: the OS sets the ULA and the screen size
+        lda #VDU_MODE              ; MODE 1 first: the OS sets the ULA and the screen size
         jsr OSWRCH                 ; latch, the game reprograms only the CRTC -- and the
-        lda #1                     ; main-RAM pieces below land in what is now screen
+        lda #SCREEN_MODE           ; main-RAM pieces below land in what is now screen
         jsr OSWRCH                 ; memory, so the palette goes black before they do
-        lda #$F7                   ; logical colour 15 down to 0, each to black
+        lda #((PAL_N-1) << PAL_SHIFT) | (PCOL_BLACK ^ PAL_INV)   ; logical colour 15 down to 0, each to black
         sec
-:       sta $FE21
-        sbc #$10
+:       sta ULA_PAL
+        sbc #1 << PAL_SHIFT
         bcs :-                     ; ($07 - $10 borrows: the last one written)
         ; ---- the pieces: BANKS is a count, then (bank, address, length) x count, then
-        ; the pieces in that order, then the bank patches.  A disc driver's bank has a
-        ; controller flag (bit 7 the 8271, bit 6 the 1770) and only the machine's is copied.  A main-RAM piece is filed
-        ; under bank 7 (build.sh), which pages harmlessly; bank 0 would page nothing.
+        ; the pieces in that order, then the bank patches (defs.inc PIECE_*).  A disc
+        ; driver's bank has a controller flag (PIECE_8271, PIECE_1770) and only the
+        ; machine's is copied.  A main-RAM piece is filed under bank 7 (build.sh),
+        ; which pages harmlessly; bank 0 would page nothing.
         ; The whole file is loaded at once (OSFILE: a byte at a time through
         ; OSGBPB took the 1770 DFS twenty seconds) into what is now screen memory, and
         ; the pieces copied out.  From here on nothing calls the MOS again and the banks
         ; may hold ROMs it knows (find_ram's last resort), so interrupts stay off: a
         ; stray one would have it offer service calls to a ROM half overwritten.
-        lda #$FF                   ; OSFILE 255: load, address from the block
+        lda #OSF_LOAD              ; OSFILE 255: load, address from the block
         ldx #<block
         ldy #>block
         jsr OSFILE
         sei
-        lda BUF
+        lda BANKSBUF
         sta npieces
-        asl                        ; the first piece follows the table: BUF + 1 + 5n
+        asl                        ; the first piece follows the table: BANKSBUF + 1 + 5n
         asl
         adc npieces
-        adc #<(BUF+1)              ; (+1: C clear, 5n < 256)
+        .assert PIECE_LEN = 5, error, "the table's size is 4n + n"
+        adc #<(BANKSBUF+1)         ; (+1: C clear, 5n < 256)
         sta zsrc
-        .assert >BUF = >(BUF+1), error, "the table starts in BUF's page"
-        lda #>BUF                  ; (the table's page too; the stores keep the carry)
+        .assert >BANKSBUF = >(BANKSBUF+1), error, "the table starts in BANKSBUF's page"
+        lda #>BANKSBUF             ; (the table's page too; the stores keep the carry)
         sta ztab+1
         adc #0
         sta zsrc+1
-        lda #<(BUF+1)              ; the table
+        lda #<(BANKSBUF+1)         ; the table
         sta ztab
-@piece: ldy #4                     ; backwards: A ends as the bank, Y as 0
+@piece: ldy #PIECE_LEN-1           ; backwards: A ends as the bank, Y as 0
         lda (ztab),y
         sta plen+1
         dey
@@ -159,9 +167,9 @@ start:
         sta zdst
         dey
         lda (ztab),y               ; the piece's bank is the code's number (4..7):
-        cmp #$40                   ; the socket it goes to is BANKMAP's (main RAM: no paging)
+        cmp #PIECE_1770            ; the socket it goes to is BANKMAP's (main RAM: no paging)
         bcc @sel
-        cmp #$80                   ; a driver (disc.s): bit 7 the 8271's, bit 6 the 1770's,
+        cmp #PIECE_8271            ; a driver (disc.s): bit 7 the 8271's, bit 6 the 1770's,
         lda #0                     ; both for the same place -- only this machine's is
         rol                        ; copied
         eor fdc                    ; (1 = the 8271's piece; fdc 0 = an 8271)
@@ -170,18 +178,18 @@ start:
         sta zdst                   ; passed over (Y = 0)
         lda zsrc+1
         sta zdst+1
-        bne @cp                    ; (BUF is not in page 0)
+        bne @cp                    ; (BANKSBUF is not in page 0)
 @mine:  lda (ztab),y
-        and #$3F
+        and #PIECE_BANKMASK
 @sel:
   .if GAMEHAZEL
         php                        ; (the flags stand for the beq below)
-        cmp #1                     ; 1, HAZEL: ACCCON Y, and it stays set for the game
+        cmp #PIECE_HAZEL           ; HAZEL: ACCCON Y, and it stays set for the game
         bne :+
         plp
-        lda $FE34
-        ora #$08
-        sta $FE34
+        lda ACCCON
+        ora #ACC_Y
+        sta ACCCON
         bne :++                    ; (always)
 :       plp
   .endif
@@ -206,7 +214,7 @@ start:
 @cpdone:
         lda ztab
         clc
-        adc #5
+        adc #PIECE_LEN
         sta ztab
         dec npieces
         bne @piece
@@ -221,8 +229,9 @@ start:
         iny
         lda (zsrc),y
         sta zdst+1
-        tya                        ; past the entry: Y = 2, and the carry makes it 3
+        tya                        ; past the entry: Y = 2, and the carry makes it FIX_LEN
         sec
+        .assert FIX_LEN = 3, error, "an entry is passed as Y = 2 + C"
         adc zsrc
         sta zsrc
         bcc @fixp
@@ -235,10 +244,11 @@ start:
         bpl @fix                   ; (always: a socket is 0..15)
 @fixdone:
         ; ---- the write-bank stores: (bank, address, kind) x n, $FF, after the $FF above.
-        ; Each is a `sta $FE30` in the code, a harmless second write of the bank on a
-        ; plain machine and left alone there.  Watford: `sta $FF30+socket` for a constant
-        ; bank (kind 4..7 says which), `sta $FF30,x` (opcode $9D) where the code has the
-        ; bank in X (kind $FE); Solidisk: `sta $FE60` either way.
+        ; Each is a `sta ROMSEL` in the code, a harmless second write of the bank on a
+        ; plain machine and left alone there.  Watford: `sta WRSEL_WATFORD+socket` for
+        ; a constant bank (kind 4..7 says which), `sta WRSEL_WATFORD,x` (OP_STA_ABSX)
+        ; where the code has the bank in X (kind WR_INX); Solidisk: `sta WRSEL_SOLIDISK`
+        ; either way.
 @wfix:  ldy #1                     ; zsrc is on the byte before each entry (first the $FF)
         lda (zsrc),y
         bmi @wfixdone              ; the $FF (a bank is 4..7)
@@ -256,13 +266,13 @@ start:
         tax
         bcc @wsol                  ; Solidisk: sel_bank's wrx left C = the board's bit 0 (1 Watford)
         .assert <WRSEL_WATFORD <> 0 && >WRSEL_WATFORD <> 0, error, "the Watford branches below are always taken"
-        cpx #$FE
+        cpx #WR_INX
         beq @wdyn
         lda BANKMAP-4,x            ; Watford, a constant bank: sta $FF30 + its socket
         ora #<WRSEL_WATFORD
 @wwat:  ldx #>WRSEL_WATFORD
         bne @wadr                  ; (always: $FF)
-@wdyn:  lda #$9D                   ; Watford, the bank in X: sta $FF30,x
+@wdyn:  lda #OP_STA_ABSX           ; Watford, the bank in X: sta $FF30,x
         ldy #0
         sta (zdst),y
         lda #<WRSEL_WATFORD
@@ -276,7 +286,7 @@ start:
         sta (zdst),y
 @wnext: lda zsrc
         clc
-        adc #4
+        adc #WR_LEN
         sta zsrc
         bcc @wfix
         inc zsrc+1
@@ -293,7 +303,7 @@ start:
         sta dsk_type,x
         dex
         bpl @hdr
-        ldx #3
+        ldx #NBANKS-1
 :       lda BANKMAP,x
         sta DSK_BANKS,x
         dex
@@ -310,7 +320,7 @@ sel_bank:
         lda BANKMAP-4,x
         tax                        ; and into selwr
 ; X = a socket: page it for reading, and writing (into wrx)
-selwr:  stx ROMSELC
+selwr:  stx MOS_ROMSEL
         stx ROMSEL
 ; X = a socket: make it the one a store reaches, on a board that chooses that apart
 ; from ROMSEL.  A is destroyed.
@@ -343,6 +353,12 @@ wrx:    lda board
 ; are found by a signature written to each and read back -- not Elite's byte-for-byte
 ; comparison of the banks, which would call four blank banks one -- and the extra
 ; numbers dropped.  The four are the lowest-numbered of the best class.
+CSTR_LEN = 4                       ; the copyright string tested: 0, "(C)"
+SIG_TAG  = $C0                     ; the signature: the socket's number, tagged
+CLASS_FREE = 0                     ; a socket's class (SOCKCLASS): RAM with no ROM image,
+CLASS_IMAGE = 1                    ;  RAM with an image the MOS is not running, RAM
+CLASS_ROM  = 2                     ;  holding a ROM the MOS recognised
+NBANKS   = 4                       ; the banks the game wants
 find_ram:
         sei
         lda #BOARD_STD
@@ -358,8 +374,8 @@ find_ram:
         beq :+
         sta best
         inc bestb                  ; BOARD_WATFORD
-:       lda #$0F                   ; Solidisk: port B bits 0-3 as outputs
-        sta $FE62
+:       lda #SOLIDISK_BITS         ; Solidisk: port B bits 0-3 as outputs
+        sta UVIA_DDRB
         inc board                  ; BOARD_SOLIDISK
         jsr @count
         cmp best
@@ -368,57 +384,59 @@ find_ram:
 :       lda bestb
         sta board
         inx                        ; not a Solidisk: give the user port back (X = 0:
-        stx $FE62                  ; @count leaves X = $FF)
+        stx UVIA_DDRB              ; @count leaves X = $FF)
 @classify:
-        ldx #15
+        ldx #NSOCK-1
 @b:     lda #$FF                   ; not RAM until proven
         sta SOCKCLASS,x
         jsr @selflip
         bne @bnext
-        lda ROMTYPE,x              ; a ROM the MOS is using
+        lda MOS_ROMTAB,x           ; a ROM the MOS is using
         beq :+
-        lda #2
+        lda #CLASS_ROM
         bne @bsc
 @cstr:  .byte 0, "(C)"              ; (after the bne above: never executed)
+        .assert * - @cstr = CSTR_LEN, error, "the copyright string's length"
 :       stx ztmp                   ; a ROM image: 0 "(C)" at the copyright offset
-        ldy $8007
-        ldx #$FC                   ; -4 up to 0, through the four bytes
-@cchk:  lda $8000,y
-        cmp @cstr-$FC,x
+        ldy ROMHDR_COPY
+        ldx #<-CSTR_LEN            ; -4 up to 0, through the four bytes
+@cchk:  lda ROMBASE,y
+        cmp @cstr+CSTR_LEN-256,x
         bne @bfree
         iny                        ; (wraps in the page, as the unrolled reads did)
         inx
         bne @cchk
-        lda #1
-        .byte $2C                  ; (bit abs: skips the lda #0)
-@bfree: lda #0
+        lda #CLASS_IMAGE
+        .byte OP_BIT_ABS           ; (bit abs: skips the lda)
+@bfree: lda #CLASS_FREE
         ldx ztmp                   ; the socket again, for the store
 @bsc:   sta SOCKCLASS,x
 @bnext: dex
         bpl @b
-        ; the signatures: 15 down, each RAM bank's $8007 SAVED and its number written
-        ldx #15
+        ; the signatures: 15 down, each RAM bank's ROMHDR_COPY byte SAVED and its
+        ; number written there, tagged
+        ldx #NSOCK-1
 @sig:   lda SOCKCLASS,x
         bmi @snext
         jsr selwr
-        lda $8007
+        lda ROMHDR_COPY
         sta SAVED,x
         txa
-        ora #$C0
-        sta $8007
+        ora #SIG_TAG
+        sta ROMHDR_COPY
 @snext: dex
         bpl @sig
-        ldx #15
+        ldx #NSOCK-1
 @chk:   lda SOCKCLASS,x
         bmi @cnext
-        stx ROMSELC
+        stx MOS_ROMSEL
         stx ROMSEL
         txa
-        ora #$C0
-        cmp $8007
+        ora #SIG_TAG
+        cmp ROMHDR_COPY
         beq @cnext
         sta SOCKCLASS,x            ; another number reached this RAM after us and keeps
-                                    ; it (A = X+$C0: bit 7 set, still to be restored: not $FF)
+                                    ; it (A = X+SIG_TAG: bit 7 set, still to be restored: not $FF)
 @cnext: dex
         bpl @chk
         inx                        ; X = 0 (from $FF): restored in the reverse order of
@@ -427,16 +445,16 @@ find_ram:
         beq @rnext
         jsr selwr
         lda SAVED,x
-        sta $8007
+        sta ROMHDR_COPY
 @rnext: inx
-        cpx #16
+        cpx #NSOCK
         bne @res
         lda old_bank
-        sta ROMSELC
+        sta MOS_ROMSEL
         sta ROMSEL
         cli
         ; the choice: the lowest sockets of class 0, then of class 1, then of class 2
-        ldy #0
+        ldy #CLASS_FREE
         sty want
 @cls:   ldx #0
 @pick:  lda SOCKCLASS,x
@@ -445,21 +463,21 @@ find_ram:
         txa
         sta BANKMAP,y
         iny
-        cpy #4
+        cpy #NBANKS
         beq @found
 @pnext: inx
-        cpx #16
+        cpx #NSOCK
         bne @pick
         inc want
         lda want
-        cmp #3
+        cmp #CLASS_ROM+1
         bne @cls
-        rts                        ; fewer than four (C = 1: A = 3)
+        rts                        ; fewer than four (C = 1: A = CLASS_ROM+1)
         ; --- A = how many of the 16 banks take a write, the board being as set (the
         ; bank is left paged: interrupts are off until find_ram restores old_bank)
 @count: lda #0
         sta want                   ; (want is free until the choice below)
-        ldx #15
+        ldx #NSOCK-1
 :       jsr @selflip
         bne :+
         inc want
@@ -471,12 +489,12 @@ find_ram:
         ; of the ROM type byte, look, put it back
 @selflip:
         jsr selwr
-@flip:  lda $8006
+@flip:  lda ROMHDR_TYPE
         tay
         eor #1
-        sta $8006
-        cmp $8006
-        sty $8006                  ; (a store leaves the flags)
+        sta ROMHDR_TYPE
+        cmp ROMHDR_TYPE
+        sty ROMHDR_TYPE            ; (a store leaves the flags)
 @found: clc                        ; (the choice's exit: C = 0; Z is @flip's)
         rts
 
@@ -514,7 +532,7 @@ no_ram:                            ; X = 16 (find_ram's fewer-than-four exit)
         lda #' '
         jsr OSWRCH
 @dnext: inx
-        cpx #16
+        cpx #NSOCK
         bne @d
 :       lda msg2-16,x              ; X = 16 from the loop above
         beq :+
@@ -550,16 +568,17 @@ want:     .byte 0
 board:    .byte 0                  ; BOARD_STD / BOARD_WATFORD / BOARD_SOLIDISK
 best:     .byte 0                  ; find_ram: the most banks any way found, and which
 bestb:    .byte 0
-BANKMAP:      .res 4               ; the socket of each of banks 4..7
-SOCKCLASS:    .res 16              ; per socket: 0..2 as above, $FE an alias, $FF not RAM
-SAVED:    .res 16
-fname:    .byte "BANKSB", 13          ; (the B patched to M on a Master: start)
+BANKMAP:      .res NBANKS          ; the socket of each of banks 4..7
+SOCKCLASS:    .res NSOCK           ; per socket: CLASS_* as above, $FE an alias, $FF not RAM
+SAVED:    .res NSOCK
+fname:    .byte "BANKS"
+fname_m:  .byte "B", 13            ; (patched to M on a Master: start)
 gbpb:     .byte 0                  ; OSGBPB 6: the data address is all it reads
           .word DRVNAME, $FFFF
           .res 8
 DRVNAME:  .res 8                   ; <len> "<drive>" <len> <boot option>
 block:    .word fname
-          .dword $FFFF0000 | BUF   ; load address: the $FFFF names the I/O
+          .dword $FFFF0000 | BANKSBUF   ; load address: the $FFFF names the I/O
                                     ; processor, and DFS wants it even with no tube
           .dword $00000000         ; exec address: 0 here means "use the one above"
           .dword $00000000

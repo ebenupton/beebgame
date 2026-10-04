@@ -5,9 +5,10 @@
 ; player sits beside it, so the player needs no copy and plays only while that image
 ; is in bank 7 (music_stop, in the kernel, silences it: the menus' image may be gone).
 ; The stream (tools/midi2snd.py makes it):
-;   music_addr        the period table, 144 bytes: 72 x 2 for MIDI notes 24..95
-;   music_addr + 144  the sequence, 4-byte records: frames, note0..2 (0 = a rest, else
-;                     the MIDI note);  frames = 0 -> loop
+;   music_addr        the period table, MUS_TAB_LEN bytes: MUS_NNOTES x 2 for MIDI notes
+;                     MUS_NOTE0 .. MUS_NOTE0 + MUS_NNOTES - 1
+;   music_addr + MUS_TAB_LEN  the sequence, 4-byte records: frames, a note a voice (0 =
+;                     a rest, else the MIDI note);  frames = 0 -> loop
 ;
 ;   music_tick   one vsync's step of the tune
 ;   mus_byte      the next byte of the sequence
@@ -15,7 +16,11 @@
 ;
 ; Segment: MUSCODE (bank 7, the menus' image: the cfgs put it first in it).
 ; ============================================================================
-music_seq  = music_addr + 144
+MUS_NOTE0  = 24                    ; the lowest MIDI note the table holds,
+MUS_NNOTES = 72                    ;  and how many: C1 to B6
+MUS_TAB_LEN = 2*MUS_NNOTES
+NVOICE     = 3                     ; the chip's tone channels: a note each a record
+music_seq  = music_addr + MUS_TAB_LEN
 music_tab  = music_addr            ; the player is in the data's bank: no copy needed
         .segment "MUSCODE"
 
@@ -45,28 +50,27 @@ music_tick:
 :       sta mus_dur
         ; ---- its three notes, X = the voice
         ldx #0
-@v:     txa                        ; ch << 5, for both latches (mus_byte keeps X)
+@v:     txa                        ; ch << SN_CHSHIFT, for both latches (mus_byte keeps X)
+        .repeat SN_CHSHIFT
         asl
-        asl
-        asl
-        asl
-        asl
+        .endrepeat
         sta isr_t1
         jsr mus_byte
         cmp MUSNOTE,x
         beq :+                     ; the same note: nothing to write
         sta MUSNOTE,x
-        ; set the voice (X is not touched: snd_write keeps it).  Notes are 24..95, 0 a
-        ; rest: the table indexed from 2*24, and Z from the doubled note is the rest
+        ; set the voice (X is not touched: snd_write keeps it).  Notes are MUS_NOTE0 up,
+        ; 0 a rest: the table indexed from 2*MUS_NOTE0, and Z from the doubled note is
+        ; the rest
         asl
         tay
         beq @rest
         ; ---- a note: its period, the low 4 bits then the rest, then its volume
-        lda music_tab-48,y
+        lda music_tab-2*MUS_NOTE0,y
         pha                        ; (the low byte again, for the second write)
-        and #15
+        and #SN_DATAMASK
         ora isr_t1
-        ora #$80                   ; the tone latch: %1 cc 0 pppp
+        ora #SN_LATCH              ; the tone latch: %1 cc 0 pppp
         jsr snd_write
         pla                        ; (snd_write's own pha/pla balance)
         lsr
@@ -74,7 +78,7 @@ music_tick:
         lsr
         lsr
         sta isr_t2
-        lda music_tab-47,y
+        lda music_tab-2*MUS_NOTE0+1,y
         asl
         asl
         asl
@@ -82,13 +86,13 @@ music_tick:
         ora isr_t2                 ; the period's upper bits
         jsr snd_write
         lda mus_vol,x
-        .byte $2C                  ; (bit abs: over the lda #$0F; V is not used)
-@rest:  lda #$0F                   ; rest: attenuation 15
+        .byte OP_BIT_ABS           ; (bit abs: over the lda #SN_ATT_OFF; V is not used)
+@rest:  lda #SN_ATT_OFF            ; rest: attenuation 15
         ora isr_t1
-        ora #$90                   ; the volume latch: %1 cc 1 aaaa
+        ora #SN_LATCH|SN_VOL       ; the volume latch: %1 cc 1 aaaa
         jsr snd_write
 :       inx
-        cpx #3
+        cpx #NVOICE
         bne @v
 @done:  rts
 
@@ -104,8 +108,10 @@ mus_byte:
 :       tay
         rts
 
-; each voice's attenuation while it plays: the melody (voice 0) the loudest
+; each voice's attenuation while it plays (0 the loudest): the melody (voice 0) over
+; the two accompanying
 mus_vol: .byte 3, 8, 8
+        .assert * - mus_vol = NVOICE, error, "mus_vol: an attenuation a voice"
 
 ; ----------------------------------------------------------------------------
 ; music_start: start the tune from its top

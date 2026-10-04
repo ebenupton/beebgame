@@ -13,37 +13,32 @@
 ;   - tiles are 8x8 game pixels = 4 chars x 2 char rows (64 bytes), in sideways RAM
 ;
 ; Sections:
-;   hardware        the CRTC, the video ULA, ROMSEL, ACCCON, the system VIA, IRQ1V
+;   hardware        the chips and the MOS (hw.inc), ROMSEL's copy, the palette
 ;   banks           what is in banks 4-7
 ;   screen shape    rings, mirrors, the bar and the composed row, machine by machine
-;   sprites         the slot count and the sprite record (SPRREC) layout
-;   misc            DIRTYMAX, the key bits
-;   frame shape     BARROWS, QROWS, QVSYNC: the 312-line frame
+;   sprites         the slot count, the sprite record (SPRREC) layout, the flags
+;   misc            DIRTYMAX, the key bits, the dirty-buffer mark, the sound effects
+;   frame shape     BARROWS, QROWS, QVSYNC: the 312-line frame; the section table
 ; ============================================================================
         .include "assets.inc"
         .include "pads.inc"
 
 ; ---------------------------------------------------------------- hardware
-CRTC_IDX  = $FE00                  ; 6845: register number
-CRTC_DAT  = $FE01                  ; 6845: register data
-ULA_PAL   = $FE21                  ; video ULA palette
-ROMSEL    = $FE30                  ; the paged (sideways) bank
-ACCCON    = $FE34                  ; Master: bit D picks the RAM the CRTC displays
-VIA_ORB   = $FE40                  ; the system VIA
-VIA_DDRA  = $FE43
-VIA_T1CL  = $FE44                  ; T1: the rupture chain's step timer
-VIA_T1CH  = $FE45
-VIA_T1LL  = $FE46
-VIA_T1LH  = $FE47
-VIA_ACR   = $FE4B
-VIA_IFR   = $FE4D
-VIA_IER   = $FE4E
-VIA_ORANH = $FE4F                  ; port A without handshake
-UVIA_IER  = $FE6E                  ; the user VIA's
-
-IRQ1V     = $0204                  ; the ROM's interrupt entry jumps through it
+; (the chips' registers and bits and the MOS's addresses are hw.inc's: defs.inc
+; includes it first, for the loaders' sake)
 ROMSEL_CPY= $FD                    ; ROMSEL's copy: the interrupt restores it (zero page's
-                                  ;  last but two; $FC is the ROM's interrupt entry's A)
+                                  ;  last but two; $FC is the ROM's interrupt entry's A:
+                                  ;  hw.inc MOS_IRQA)
+; the MODE 1 palette (set_palette): logical 0..3 = black, cyan, magenta, yellow.  A
+; logical colour's four palette indices are PALIDX_x | (0..3 in the don't-care bits 2
+; and 0); PALPHYS holds the physical colour of each logical one, a nibble a colour
+LCOL_CYAN    = 1
+LCOL_MAGENTA = 2
+LCOL_YELLOW  = 3
+PALIDX_CYAN    = (LCOL_CYAN & 2) / 2 * LCOL_IDX_B1 | (LCOL_CYAN & 1) * LCOL_IDX_B0
+PALIDX_MAGENTA = (LCOL_MAGENTA & 2) / 2 * LCOL_IDX_B1 | (LCOL_MAGENTA & 1) * LCOL_IDX_B0
+PALIDX_YELLOW  = (LCOL_YELLOW & 2) / 2 * LCOL_IDX_B1 | (LCOL_YELLOW & 1) * LCOL_IDX_B0
+PALPHYS = PCOL_BLACK | (PCOL_CYAN << (4*LCOL_CYAN)) | (PCOL_MAGENTA << (4*LCOL_MAGENTA)) | (PCOL_YELLOW << (4*LCOL_YELLOW))
 
 ; ---------------------------------------------------------------- banks
 ; The same numbers on both machines (the sockets are patched at boot):
@@ -59,6 +54,8 @@ BANK_TIL1 = 5                      ; the second sprite bank
 BANK_TILES= 6                      ; every level's tile data fits one bank
 BANK_LVL  = 7
 BANK_MAP  = 5                      ; the map, and the gather that reads it in place
+MAXRINGROWS = 32                   ; the Master's ring: bank 7's row tables are sized for
+                                    ;  it on both machines, so the data lies alike
 
 ; ============================================================================
 ; Screen shape
@@ -161,13 +158,15 @@ BARADDR   = $2B00
 ; R6 says, so Q's line 0 shows under the picture -- from here, a row of zeros just below
 ; the bar (boot's), in main RAM: Q's step puts D back to 0 before that scanline.
 QBLANK    = BARADDR - ROWBYTES
-.assert LV_OBJS + 6*149 <= QBLANK, error, "QBLANK: the level's objects run into it"
+.assert LV_OBJS + OBJ_BYTES*OBJ_MAX <= QBLANK, error, "QBLANK: the level's objects run into it"
 CRTCBASE  = RINGBASE / 8           ; the CRTC counts characters, so the ring starts here
 CRTCB_A   = CRTCBASE               ; each buffer's ring base, as the CRTC counts: one
 CRTCB_B   = CRTCBASE               ;  ring, main and shadow (ACCCON D picks)
   .endif
 WINPX     = ROWCHARS*2             ; window width in game pixels
-VISLINES  = VISROWS*8
+VISLINES  = VISROWS*CHARLINES
+GATHERN   = ROWCHARS/TILECHARS + 1 ; the tiles a row's gather can hold: a window's, and
+                                    ;  the one more a run starting mid-tile takes
 
 ; ---------------------------------------------------------------- sprites
 ; MAXSPR, the sprite slots: the build's (-D MAXSPR=n, build.sh) over the game's
@@ -215,12 +214,33 @@ REC_CY    = 7
 REC_W     = 8
 REC_H     = 9                      ; height | clipped << 7
   .endif
+REC_CLIP  = $80                    ; REC_H bit 7: cut at a window edge
+REC_HMASK = $1F                    ; (TIGHTBSS) REC_H bits 0-4: the height,
+REC_CXSHIFT = 5                    ;  bits 5-6 the column's high bits
+; match_sprites' verdict on a record (KEEP): neither, a box star where one was, the
+; same sprite in the same place
+KEEP_BOX  = 1
+KEEP_SAME = 2
+; the sprite flags (the game's sprgeom.inc sprg_fl, by shape; draw_sprite)
+SPF_MIRROR  = 1                    ; drawn mirrored
+SPF_FULLRES = 2                    ; every scanline stored (a box), not one row in two
+SPF_COPY    = 8                    ; the copy blitter: screen bytes, opaque
+; the row loop's blitters: each has SPRTAB_N entries in sprrow_tab (sprloops.s), and
+; sp_disp (the prologue's) is the sprite's blitter's first
+SPRTAB_N   = 9                     ; a cell's 8 first lines, and the partial loop
+SPRDISP_FN = 0                     ; the 4-bit blitter
+SPRDISP_FM = 2*SPRTAB_N            ; mirrored
+SPRDISP_FC = 4*SPRTAB_N            ; the copy blitter
 
 ; ---------------------------------------------------------------- misc
 ; DIRTYMAX: the dirty tiles a buffer can queue.  A switch marks 2 x its height at
 ; once, 18 for the tallest (level 7's main map); past this the buffer is redrawn
 ; whole (mark_dirty).
 DIRTYMAX = 20
+; BUF_CXH's mark for a buffer to be redrawn whole: a window x it can never hold
+BUF_INVALID = $80
+; a flip waits this many vsyncs after the last (render_frame asks, the vsync takes)
+FLIPWAIT = 2
 
 ; key bits (keys)
 K_LEFT  = 1
@@ -229,11 +249,19 @@ K_UP    = 4
 K_DOWN  = 8
 K_FIRE  = 16
 
+; a sound effect (sfx_tab, the game's): steps of three bytes for the SN76489 and the
+; frames to hold them, then SFX_END -- which, written to the chip as the last step's
+; first byte, is the noise channel off
+SFXSTEP_LEN = 4
+SFX_END     = $FF
+        .assert SFX_END = SN_LATCH | SN_VOL | (SN_NOISE << SN_CHSHIFT) | SN_ATT_OFF, error, "SFX_END doubles as the noise channel's silence"
+
 ; ---------------------------------------------------------------- frame shape
 ; A 312-line frame of 39 char rows: the bar, the playfield, then QROWS blank rows (Q)
 ; with the vsync in them.
+FRAMEROWS = 312/CHARLINES          ; a PAL frame's char rows
 BARROWS = 2                        ; the status bar
-QROWS  = 39 - VISROWS - BARROWS    ; blank rows after the display: 312 lines in all
+QROWS  = FRAMEROWS - VISROWS - BARROWS   ; blank rows after the display: 312 lines in all
   .if BHW
 ; Model B: 16 Q rows.  The picture starts 64 lines after the vsync, 4 lines below
 ; where a MODE 1 screen sits.
@@ -244,3 +272,24 @@ QVSYNC = 8                         ; vsync at Q row 8 of 16
 ; standard frame (R7 = 35): the picture sits exactly where it does.
 QVSYNC = 3                         ; vsync at Q row 3 of 7
   .endif
+R7_NEVER = 30                      ; a section's R7 its rows never reach: no vsync in it
+                                    ;  (every section's but Q's, whose is QVSYNC)
+IDLE_LINES = 40                    ; the T1 period Q's entry carries (and start-up's first):
+                                    ;  the chain rests on Q, re-running its step should
+                                    ;  that fall due before the vsync restarts T1
+
+; ---------------------------------------------------------------- the section table
+; SECTAB (vars.s): each buffer's chain, NSECT entries of SECENT bytes (kernel.s
+; build_sections lays them out)
+SECENT   = 8                       ; an entry's bytes:
+SE_R12   = 0                       ;  the NEXT section's start address (high byte first)
+SE_R13   = 1
+SE_R4    = 2                       ;  this section's shape
+SE_R9    = 3
+SE_R6    = 4
+SE_R7    = 5
+SE_T1L   = 6                       ;  the NEXT section's duration, as a T1 latch value
+SE_T1H   = 7
+NSECT    = 6                       ; T, A, P1, M, P2, Q at most (the Model B's split run)
+SECBYTES = NSECT*SECENT            ; a buffer's chain: buffer 1's starts here
+SECT_NONE = $FF                    ; BUF_QS/BUF_KS: no entry

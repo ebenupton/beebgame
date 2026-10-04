@@ -83,9 +83,9 @@ mirror_copy:
         dec w16b+1                 ; L < $80
 :       lda #0
         sta w16
-        lda #$80
+        lda #<RING_A               ; (the base's low byte, asserted above: $80)
         sta w16b
-@c:     .repeat 8
+@c:     .repeat CHARBYTES
         lda (w16),y
         sta (w16b),y
         iny

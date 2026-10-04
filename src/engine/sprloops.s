@@ -312,7 +312,7 @@ spr_retp:                          ; next column: source pointer + rows
         bcs spr_pinc               ; carry out of line: the common case falls through
 spr_next:                          ; C = 0: spnext, its clc known
         lda sp
-        adc #8
+        adc #CHARBYTES
 spr_ssta:
         sta sp
         bcs spr_scold
@@ -336,8 +336,8 @@ spr_retm:                          ; next column, mirrored: source pointer - row
         sbc sp_lines
         sta ptr
         bcc spr_mdec
-        lda sp                     ; C = 1: + 7 is + 8
-        adc #7
+        lda sp                     ; C = 1: + 7 is + CHARBYTES
+        adc #CHARBYTES-1
         bra spr_ssta
 
 ; ---- the row's end: the next row's source (+ sp_rinc) and screen (+ ROWBYTES)
@@ -379,15 +379,15 @@ ds_rowloop:
         bne :+
         ldx sp_ra0
 :       stx tmp                    ; the first line
-        ldy #7
+        ldy #CHARLINES-1
         cmp sp_r1
         bne :+
         ldy sp_ra1
 :       sty tmp2                   ; the last line
         txa
-        cpy #7
+        cpy #CHARLINES-1
         bcs :+                     ; to line 7: the unrolled entry for line tmp
-        lda #8                     ; else the partial loop
+        lda #SPRTAB_N-1            ; else the partial loop, the blitter's last entry
 :       asl                        ; C = 0 (A <= 8)
         adc sp_disp
         tax
@@ -415,15 +415,17 @@ spr_scold2:
         NIBPART spr_fm, 1, spr_retm
         NIBCOPY spr_fc, spr_retp
 
-; ---- the entries a row takes, by sp_disp + 2 x (its first line, or 8 for the partial
-; loop): the prologue's sp_disp is 0 (spr_fn), 18 (spr_fm, mirrored: flag bit 0) or 36
-; (spr_fc, a box: flag bit 3).  A 4-bit cell's first line is even, so its odd entries
-; are never taken (they repeat the even ones).
+; ---- the entries a row takes, by sp_disp + 2 x (its first line, or SPRTAB_N-1 for the
+; partial loop): the prologue's sp_disp is SPRDISP_FN (spr_fn), SPRDISP_FM (spr_fm,
+; mirrored: SPF_MIRROR) or SPRDISP_FC (spr_fc, a box: SPF_COPY) -- defs.s.  A 4-bit
+; cell's first line is even, so its odd entries are never taken (they repeat the even
+; ones).
 sprrow_tab:
         .word spr_fn_0, spr_fn_0, spr_fn_1, spr_fn_1, spr_fn_2, spr_fn_2, spr_fn_3, spr_fn_3, spr_fn_pt
         .word spr_fm_0, spr_fm_0, spr_fm_1, spr_fm_1, spr_fm_2, spr_fm_2, spr_fm_3, spr_fm_3, spr_fm_pt
         .word spr_fc_0, spr_fc_1, spr_fc_2, spr_fc_3, spr_fc_4, spr_fc_5, spr_fc_6, spr_fc_7, spr_fc_pt
-        .assert >sprrow_tab = >(sprrow_tab+53), warning, "sprrow_tab straddles a page (+1 cycle a row)"
+        .assert * - sprrow_tab = 3*2*SPRTAB_N && SPRDISP_FM = 2*SPRTAB_N && SPRDISP_FC = 4*SPRTAB_N, error, "sprrow_tab: SPRTAB_N entries a blitter, in sp_disp's order"
+        .assert >sprrow_tab = >(sprrow_tab+3*2*SPRTAB_N-1), warning, "sprrow_tab straddles a page (+1 cycle a row)"
 .endmacro
 ; ============================================================================
 ; The two copies: bank 4 (SPR4CODE) and bank 5 (SPR5CODE)

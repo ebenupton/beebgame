@@ -45,7 +45,7 @@
 ; would paint that background over whatever was standing there.  Pass 1 (dpass = 1)
 ; draws only the boxes (ids >= BOXID0), pass 0 only the rest.
 ; A box star the logic says nothing can disturb (a "still" alias, id >= BOXID0+BOXN)
-; is skipped when it is the same frame already in the same place (KEEP = 2) and its
+; is skipped when it is the same frame already in the same place (KEEP_SAME) and its
 ; record was not cut off at a window edge: nothing has been repainted under it, and
 ; all of it is on screen, so its screen pixels are still right.
 ; ============================================================================
@@ -73,7 +73,7 @@ draw_sprites:
         cpy #BOXID0+BOXN
         bcc @write                 ; not a still alias: draw it
         lda KEEP,x
-        cmp #2
+        cmp #KEEP_SAME
         bne @write                 ; not the same frame in the same place
         ldy rq
         lda REC_H,y
@@ -107,7 +107,7 @@ draw_sprites:
         ; writes no rectangle, and must not look drawn and intact to the next keep test.
         lda #0
         sta REC_W,y                ; nothing drawn
-        lda #$80
+        lda #REC_CLIP
         sta REC_H,y                ; clipped
         lda SPR_ID,x
         sta REC_ID,y
@@ -141,7 +141,7 @@ draw_sprites:
         cpy #BOXID0+BOXN
         bcc @write                 ; not a still alias: draw it
         lda KEEP,x
-        cmp #2
+        cmp #KEEP_SAME
         bne @write                 ; not the same frame in the same place
         ldy #REC_H
         lda (rp),y
@@ -177,7 +177,7 @@ draw_sprites:
         ; Clipped until the prologue says otherwise: a sprite wholly off the window
         ; writes no rectangle, and must not look drawn and intact to the next keep test.
         ldy #REC_H
-        lda #$80
+        lda #REC_CLIP
         sta (rp),y                 ; clipped
         dey                        ; REC_W
         asl                        ; A = 0
@@ -246,14 +246,12 @@ erase_old:
         beq @next                  ; width 0: nothing was drawn
         sta rc_w
         lda REC_H,y
-        and #$1F                   ; bits 0-4: the height
+        and #REC_HMASK             ; bits 0-4: the height
         sta rc_h
         lda REC_H,y                ; bits 5-6: the column's high bits
+        .repeat REC_CXSHIFT
         lsr
-        lsr
-        lsr
-        lsr
-        lsr
+        .endrepeat
         and #3
         sta rc_x+1
         lda REC_CX,y
@@ -277,7 +275,7 @@ erase_old:
         sta rc_w
         iny                        ; REC_H
         lda (rp),y
-        and #$7F                   ; the height, without the clipped bit
+        and #<~REC_CLIP            ; the height, without the clipped bit
         sta rc_h
         ldy #REC_CX
         lda (rp),y
@@ -317,9 +315,9 @@ erase_old:
 ; match_sprites: the persistent sprite records -- which new sprites are already drawn?
 ;   In:   the sprite list (SPR_*, nspr); the buffer's records (RECCNT[cur_buf] of
 ;         them, at recb / recp); BUF_CXH[cur_buf]
-;   Out:  KEEP[i] for every i < nspr: 2 = sprite i is record i (same id, same place:
-;         its screen pixels are already right), 1 = a box star where a box star was
-;         (a different frame of the same thing, same place), 0 = neither;
+;   Out:  KEEP[i] for every i < nspr: KEEP_SAME = sprite i is record i (same id, same
+;         place: its screen pixels are already right), KEEP_BOX = a box star where a
+;         box star was (a different frame of the same thing, same place), 0 = neither;
 ;         A, X, Y clobbered
 ; Once the window has moved since the buffer last drew (clip_mask, select_backbuf's), a
 ; record is kept only if it was not cut at the window's edge -- the strip that brought
@@ -330,8 +328,8 @@ erase_old:
 ; kept in.  (TIGHTBSS has only the first test.)
 ; Two box-star frames at the same place overwrite each other exactly -- every game
 ; pixel opaque, and each box covers the art of the frame before it -- so a frame
-; change there needs no erase either: hence KEEP = 1.
-; An invalid buffer (BUF_CXL high byte $80: a level start, or a dirty list that
+; change there needs no erase either: hence KEEP_BOX.
+; An invalid buffer (BUF_CXH = BUF_INVALID: a level start, or a dirty list that
 ; overflowed) is about to be redrawn whole, so nothing in it is kept and there is
 ; nothing to erase: its records go (RECCNT = 0).
 ; ============================================================================
@@ -343,7 +341,8 @@ match_sprites:
         lda BUF_CXH,x
         bpl @valid
   .if BHW
-        asl                        ; A = $80, an invalid buffer's (exactly): 0
+        asl                        ; A = BUF_INVALID, an invalid buffer's (exactly): 0
+        .assert BUF_INVALID = $80, error, "match_sprites: BUF_INVALID shifted out is 0"
         sta RECCNT,x
   .else
         stz RECCNT,x
@@ -372,9 +371,9 @@ match_sprites:
         lda REC_ID,y
         cmp #BOXID0
         bcc @next
-        lda #1                     ; 1 = a different frame of the same thing
+        lda #KEEP_BOX              ; a different frame of the same thing
         bne @pos
-@same:  lda #2                     ; 2 = identical, so its screen pixels are already right
+@same:  lda #KEEP_SAME             ; identical, so its screen pixels are already right
         ; ---- and the same place
 @pos:   sta tmp3
         lda SPR_XL,x
@@ -418,9 +417,9 @@ match_sprites:
         ldaz0 rp                   ; Y = 0 from the cmpz above
         cmp #BOXID0
         bcc @zero
-        lda #1                     ; 1 = a different frame of the same thing
+        lda #KEEP_BOX              ; a different frame of the same thing
         bne @pos
-@same:  lda #2                     ; 2 = identical, so its screen pixels are already right
+@same:  lda #KEEP_SAME             ; identical, so its screen pixels are already right
         ; ---- kept if the same place too: record bytes 1-4
 @pos:   sta KEEP,x                 ; (undone at @zero if the place differs)
         ldy1                       ; Y = 0 on both ways in (cmpz, ldaz)
@@ -652,13 +651,13 @@ copy_partial:
         ; ---- next char, both with the ring fold on the page crossing: the composed
         ; row can straddle the ring end like any other row (the page steps out of line)
         lda sp                     ; spnext @sfold without its clc: C = 0 at every
-        adc #8                     ; arrival (the copy is entered by a taken bcc and
+        adc #CHARBYTES             ; arrival (the copy is entered by a taken bcc and
         sta sp                     ; lda/sta/ldy/dey keep C)
         bcs @sfold
 @sback: dex
         beq @done
         lda ptr                    ; C = 0: spnext's bcs not taken, or spcold's clc
-        adc #8
+        adc #CHARBYTES
         sta ptr
 @back:  bcc @g4                    ; patched (@ftab): C = 1 falls into the page step
         SAMEPAGE *, @g4
@@ -681,8 +680,8 @@ copy_partial:
 ; The directory is split.  The level's part, in bank 7 (banks.s, ldprog.s): DIRL and
 ; DIRH, the image's address by id, 0 if not in this level, bit 7 of the high byte
 ; clear for bank 5.  The game's part: the geometry by shape (sprg_ix by id; sprg_w,
-; sprg_rx, sprg_ry, sprg_ln and, with SPRGFL, sprg_fl by shape).  Flags: bit 0
-; mirrored, bit 1 every scanline stored (a box), bit 3 the copy blitter.
+; sprg_rx, sprg_ry, sprg_ln and, with SPRGFL, sprg_fl by shape).  Flags (defs.s):
+; SPF_MIRROR, SPF_FULLRES (every scanline stored: a box), SPF_COPY (the copy blitter).
 ; The steps: fetch the geometry; clip horizontally (sp_c0..sp_c1, first image column
 ; sp_c) and vertically (lines lstart..lend, char rows sp_r0..sp_r1); write the
 ; record; (Model B) note the mirror's columns; pick the blitter; work out the screen,
@@ -735,7 +734,8 @@ draw_sprite:
     .endif
         sta sp_flags
         lsr a
-        lsr a                      ; C = flags bit 1 (every scanline stored), kept past the lda/sta
+        lsr a                      ; C = flags bit 1 (SPF_FULLRES, every scanline stored), kept past the lda/sta
+        .assert SPF_FULLRES = 2, error, "draw_sprite: two shifts put SPF_FULLRES in C"
         lda sprg_w,y
         sta sp_w
         lda sprg_ln,y
@@ -854,7 +854,8 @@ draw_sprite:
         adc #0
         tax                        ; X = lb1 high (X dead until the tax below)
 
-        ; ---- clip: lstart = max(lb0, 0) in tmp ; lend = min(lb1, BUFROWS*8-1) in X
+        ; ---- clip: lstart = max(lb0, 0) in tmp ; lend = min(lb1, the window's last
+        ; line) in X
         lda sp_lb0+1
         bpl @pos
         txa                        ; lb0 < 0: cut at the top, if lb1 >= 0
@@ -863,24 +864,24 @@ draw_sprite:
         bne @st                    ; always: sp_clip is 1..2 now; A = lb1 high = 0
 @pos:   bne @out0                  ; lb0 >= 256 -> below
         lda sp_lb0
-        cmp #BUFROWS*8
+        cmp #BUFROWS*CHARLINES
         bcs @out0                  ; below the window
 @st:    sta tmp                    ; lstart
         txa
         bne @clampend
         tya
-        cmp #BUFROWS*8
+        cmp #BUFROWS*CHARLINES
         bcc :+
 @clampend:
         inc sp_clip                ; and at the bottom
-        lda #BUFROWS*8-1
+        lda #BUFROWS*CHARLINES-1
         ; lend in X (tmp2 is not read again before the row loop sets it)
 :       tax
         cmp tmp
         bcc @out0                  ; lend < lstart: nothing left
 
         ; ---- the char rows sp_r0..sp_r1, and the lines within them sp_ra0, sp_ra1
-        and #7
+        and #CHARLINES-1
         sta sp_ra1
         txa
         lsr
@@ -888,7 +889,7 @@ draw_sprite:
         lsr
         sta sp_r1
         lda tmp
-        and #7
+        and #CHARLINES-1
         sta sp_ra0
         lda tmp
         lsr
@@ -941,7 +942,7 @@ draw_sprite:
         ora tmp3
         ldx sp_clip
         beq :+
-        ora #$80                   ; clipped
+        ora #REC_CLIP              ; clipped
 :       sta REC_H,y
   .else
         ; the 10-byte record at rp
@@ -973,7 +974,7 @@ draw_sprite:
         adc #0                     ; and set by this one (sp_r1 >= sp_r0): + 1
         ldx sp_clip
         beq :+
-        ora #$80                   ; clipped
+        ora #REC_CLIP              ; clipped
 :       sta (rp),y
   .endif
 
@@ -997,7 +998,7 @@ draw_sprite:
         ; ---- column base pointer & step.  Mirrored: image column = W-1-c (the
         ; column loop then steps backwards)
         lda sp_flags
-        bitimm 1
+        bitimm SPF_MIRROR
         beq @nomirror
         clc
         lda sp_w
@@ -1006,15 +1007,17 @@ draw_sprite:
         lda sp_flags               ; only the mirror arm clobbers A
 @nomirror:
         ; ---- select the blitter once per sprite: sp_disp = its first entry in the
-        ; row loop's sprrow_tab (sprloops.s) -- 36 the copy blitter (flags bit 3), 18
-        ; the mirrored 4-bit (bit 0), 0 the 4-bit.  Each row patches its column jump.
-        ldx #36
-        bitimm 8                   ; bit 3: the copy blitter
+        ; row loop's sprrow_tab (sprloops.s) -- SPRDISP_FC the copy blitter (SPF_COPY),
+        ; SPRDISP_FM the mirrored 4-bit (SPF_MIRROR), SPRDISP_FN the 4-bit.  Each row
+        ; patches its column jump.
+        ldx #SPRDISP_FC
+        bitimm SPF_COPY            ; bit 3: the copy blitter
         bne :++
-        ldx #0
-        lsr                        ; A is still sp_flags (bit #imm keeps A): bit 0
-        bcc :+
-        ldx #18
+        ldx #SPRDISP_FN
+        lsr                        ; A is still sp_flags (bit #imm keeps A): bit 0,
+        .assert SPF_MIRROR = 1, error, "draw_sprite: one shift puts SPF_MIRROR in C"
+        bcc :+                     ;  SPF_MIRROR
+        ldx #SPRDISP_FM
 :
 :       stx sp_disp
 
@@ -1032,25 +1035,25 @@ draw_sprite:
         sta sp_rb
 
         ; ---- source row offset w16 = r0*8 - lb0 (>> 1 for half res), and the step
-        ; per row sp_rinc = 8 (4)
+        ; per row sp_rinc = a char row's bytes, 8 (4)
         ; tmp is still lstart, and sp_r0 = lstart >> 3, so r0*8 is lstart & $F8:
         ; no reload and no shifts
         lda tmp
-        and #$F8
+        and #<-CHARLINES
         sec
         sbc sp_lb0
         sta w16
         lda #0
         sbc sp_lb0+1
         sta w16+1
-        ldx #8
+        ldx #CHARLINES
         lda sp_flags
-        and #2
+        and #SPF_FULLRES
         bne :+                     ; every scanline stored: 8
         lda w16+1
         lsr                        ; w16+1 is 0 or $FF: its bit 0 is the sign, and
         ror w16                    ;  >> 1 leaves it as it is
-        ldx #4
+        ldx #CHARLINES/2
 :       stx sp_rinc
 
         ; ---- source row pointer sp_rp = sp_ptr + w16 + sp_c * lines (the column
@@ -1096,8 +1099,8 @@ draw_sprite:
 ;   Out:  A, X, Y, tmp, tmp2 clobbered
 ; Each buffer keeps its own list (DIRTYCNT, and DIRTYX/DIRTYY with TIGHTBSS, else
 ; DIRTYLIST's x,y pairs: buffer 0's DIRTYMAX, then buffer 1's).  A full list marks
-; that buffer to be redrawn whole instead (BUF_CXH = $80: an unreachable window x;
-; match_sprites drops its records, scroll_validate redraws it).  The game's call.
+; that buffer to be redrawn whole instead (BUF_CXH = BUF_INVALID: an unreachable window
+; x; match_sprites drops its records, scroll_validate redraws it).  The game's call.
 ; ============================================================================
         .segment "ENGCODE"          ; bank 7, with the logic that calls it
 mark_dirty:
@@ -1132,7 +1135,7 @@ mark_dirty:
         bpl @b
         rts
         ; ---- the list is full: that buffer is redrawn whole instead
-@over:  lda #$80
+@over:  lda #BUF_INVALID
         sta BUF_CXH,x              ; an unreachable window x
         bne @next                  ; (always)
 
@@ -1140,8 +1143,8 @@ mark_dirty:
 ; draw_dirty: redraw the back buffer's queued dirty tiles, and empty its list
 ;   In:   cur_buf; DIRTYCNT[cur_buf] and the buffer's list (mark_dirty)
 ;   Out:  DIRTYCNT[cur_buf] = 0;  A, X, Y clobbered
-; A tile (tx, ty) is the rect of 4 chars by 2 char rows at (tx*4, ty*2), redrawn by
-; bank 6's draw_rect_clip through call_bank.
+; A tile (tx, ty) is the rect of TILECHARS chars by TILEROWS char rows at (tx*4,
+; ty*2), redrawn by bank 6's draw_rect_clip through call_bank.
 ; ============================================================================
         .segment "ENGCODE"          ; bank 7 (draw_rect_clip through call_bank)
 draw_dirty:
@@ -1188,9 +1191,10 @@ draw_dirty:
         asl
         sta rc_y
         ; ---- 4 x 2 chars, and draw
-        lda #4
+        lda #TILECHARS
         sta rc_w
-        lsr                        ; 4 >> 1 = 2
+        lsr                        ; TILECHARS >> 1 = TILEROWS
+        .assert TILECHARS/2 = TILEROWS, error, "draw_dirty: a tile's rows are half its chars"
         sta rc_h
         bankimm lda, BANK_TILES, BANK_LVL   ; bank 6's BANKENTRY is draw_rect_clip
         jsr call_bank
@@ -1242,7 +1246,7 @@ wait_flip:                         ; (inline, its one caller) spin until any pen
         ror
         sta wcx
         lda wy
-        and #3
+        and #CHARLINES/2-1         ; (a char row is 4 game pixel rows)
         asl
         sta wfine
         ; wcy = wy >> 2, a full 16-bit shift: the tall maps go past wy = 512, where
@@ -1278,13 +1282,13 @@ wait_flip:                         ; (inline, its one caller) spin until any pen
         stz nspr                   ; A dead: build_sections starts ldx/lda
         jsr build_sections
 
-        ; ---- hand over to the ISR: next_sect = the buffer's chain, 0 or 48
+        ; ---- hand over to the ISR: next_sect = the buffer's chain, 0 or SECBYTES
         lda cur_buf
   .if .not BHW
         sta next_buf
   .endif
         beq :+
-        lda #48
+        lda #SECBYTES
 :       sta next_sect
         lda #1
         sta flip_req

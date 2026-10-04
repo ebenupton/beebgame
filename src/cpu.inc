@@ -142,8 +142,9 @@ ALLLEVELS = 0                      ; a test build: every level on the chooser, e
 ;                        image (0 = the low-RAM image, as BANKREF)
 ;   wrselx b             after a switch to the bank in A AND X
 ;   wrback b [, tag]     a window's end: the write bank back to 7's (A lost)
+WR_INX = $FE                       ; a record's kind for "the bank in X" (else the bank, 4..7)
 .macro WRREC kind, b, name         ; (the record: the image's bank, the store's address,
-  .if ::BHW                        ;  the kind: 4..7 a constant bank, $FE "in X")
+  .if ::BHW                        ;  the kind: 4..7 a constant bank, WR_INX "in X")
         .ident(.concat("@wr_", name)):
         .pushseg
         .segment "WRFIX"
@@ -171,12 +172,12 @@ ALLLEVELS = 0                      ; a test build: every level on the chooser, e
 .macro wrback b, tag               ; A = bank 7's (Solidisk's store writes A), then a
   .if ::BHW                        ; store the boot loader makes the board's -- but not
     .if .blank(tag)                ; a second sta ROMSEL, which would page bank 7 in under
-        bankimm lda, ::BANK_LVL, b, 99   ; whatever runs here: sta $FF30, a store into
-        sta $FF30                  ; the MOS's ROM, nothing on a plain machine
+        bankimm lda, ::BANK_LVL, b, 99   ; whatever runs here: sta WRSEL_WATFORD, a store
+        sta ::WRSEL_WATFORD        ; into the MOS's ROM, nothing on a plain machine
         WRREC ::BANK_LVL, b, "s_7_99"
     .else
         bankimm lda, ::BANK_LVL, b, tag
-        sta $FF30
+        sta ::WRSEL_WATFORD
         WRREC ::BANK_LVL, b, .sprintf("s_7_%d", tag)
     .endif
   .endif
@@ -184,7 +185,7 @@ ALLLEVELS = 0                      ; a test build: every level on the chooser, e
 .macro wrselx b
   .if ::BHW
         sta ROMSEL
-        WRREC $FE, b, "x"
+        WRREC WR_INX, b, "x"
   .endif
 .endmacro
 .macro SAMEPAGE from, to           ; after a hot branch: it and its target in one page
