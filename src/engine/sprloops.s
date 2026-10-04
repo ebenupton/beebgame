@@ -262,14 +262,8 @@ pnext:  lda sp_lim                  ; the next pair, until past tmp2 (C = 0: pl'
 .macro NIBCOPY name, ret
         .local pl
 .ident(.concat(.string(name), "_0")):
-  .if ::BHW
-        ldy #0                      ; (staz would reload the same 0 into Y)
-        lda (ptr),y
-        sta (sp),y
-  .else
-        lda (ptr)                   ; line 0 non-indexed
-        sta (sp)
-  .endif
+        ldaz ptr                    ; line 0 non-indexed (the Model B: Y = 0 from it)
+        staz0 sp
   .repeat 7, j
 .ident(.sprintf("%s_%d", .string(name), j+1)):
         ldy #j+1
@@ -344,11 +338,7 @@ sprretM:                            ; next column, mirrored: source pointer - ro
         bcc sprmdec
         lda sp                      ; C = 1: + 7 is + 8
         adc #7
-  .if ::BHW
-        jmp sprssta
-  .else
         bra sprssta
-  .endif
 
 ; ---- the row's end: the next row's source (+ sp_rinc) and screen (+ ROWBYTES)
 ds_rowdone:

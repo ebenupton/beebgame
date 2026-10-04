@@ -28,7 +28,7 @@
 ; Zero page is laid out alike on both machines (tools/layoutcheck.py fails the build
 ; otherwise): what only one machine uses is reserved on the other too.
         .zeropage
-jv:       .res 2                  ; (Model B) jmpx's vector: jmp (abs,x) has no 6502 form (cpu.inc)
+jv:       .res 2                  ; (Model B) a jmp (abs,x) dispatch's vector: the 6502 has no such form (the game's process_object)
 crtcbm:   .res 2                  ; (Model B) the buffer being built: its mirror redirect
                                   ;  (base - RINGCHARS; its CRTC base, crtcb, is zero page's)
 QSECT:    .res 1                  ; Q's step: the Model B's blacks the palette for its first
@@ -252,22 +252,15 @@ SPR_YH:    .res MAXSPR
 
 ; ---------------------------------------------------------------- the rupture chain
 ; The chain's tables sit with the interrupt that reads them.
+; With the interrupt handler that reads them (cpu.inc PLACEH): the Model B's KRNHW,
+; bank 7, with isr_body (after the shared); the Master's TABLES, main RAM, with its
+; handler.  build_sections writes them from bank 7; the interrupt only reads them.
+        PLACEH "TABLES", "KRNHW"
+BUF_SEC0:  .res 4                   ; each buffer's section 0 (the bar): CRTC address
+BUF_SEC0T1: .res 4                  ; and its T1 count
+SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sections)
+BUF_QS:    .res 3                   ; each buffer's Q entry (-> QSECT), by 2 x the buffer
     .if BHW
-; Model B: KRNHW, bank 7, with isr_body (after the shared; on the Master these are
-; TABLES').  build_sections writes them from bank 7; the interrupt only reads them.
-        .segment "KRNHW"
-BUF_SEC0:  .res 4                   ; each buffer's section 0 (the bar): CRTC address
-BUF_SEC0T1: .res 4                  ; and its T1 count
-SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sections)
-BUF_QS:    .res 3                   ; each buffer's Q entry (-> QSECT), by 2 x the buffer
 BUF_KS:    .res 3                   ; and its two-line P2's (-> KSECT); $FF for none
-    .else
-; Master: TABLES, main RAM.  The interrupt handler and its chain are in main RAM, and
-; so is what they keep.
-        .segment "TABLES"
-BUF_SEC0:  .res 4                   ; each buffer's section 0 (the bar): CRTC address
-BUF_SEC0T1: .res 4                  ; and its T1 count
-SECTAB:    .res 2*48                ; each buffer's chain (kernel.s build_sections)
-BUF_QS:    .res 3                   ; each buffer's Q entry (-> QSECT), by 2 x the buffer
-    .endif
+    .endif                          ;  (the Model B's palette kill: kernel.s)
 

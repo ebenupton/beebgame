@@ -13,8 +13,8 @@
 ;   ringmod   A = a map char row -> its ring slot (bank 6: the table, or and #31)
 ;   ringmod7  the same, by subtraction on the Model B (bank 7 has no table)
 ;   ringtest  a high byte just moved forward: branch out if it ran off the ring's end
-;   ringfold  ringtest's out-of-line fold
-;   ringup    ringtest and ringfold in one, in line
+;             (the caller folds it there, in line: tiles.s @rfold)
+;   ringup    ringtest and its fold in one, in line
 ;   pagestep  a pointer's high byte one page on after its low byte carried, folded
 ;   spnext    sp on one char (8 bytes), folding at the ring end
 ;   spcold    spnext's page step, out of line
@@ -78,11 +78,12 @@ n2:     tax
 ; ringtest cold: has a high byte just moved forward run off the ring's end?
 ;   In:   A = the high byte (the Master: N from the adc / inc that made it)
 ;   Out:  fell through: A kept, still in the ring (the common case);  Model B C = 0
-;         branched to cold: it has run off -- fold it there with ringfold
+;         branched to cold: it has run off -- the caller folds it there (ringup's
+;         fold, written out at tiles.s @rfold)
 ;   Anonymous labels: none.
 ; The ring's end is a page boundary, so the test is on the high byte alone.  On the
-; Model B the cmp leaves the carry set on the path to cold, so ringfold needs no sec
-; of its own whatever the caller was holding.
+; Model B the cmp leaves the carry set on the path to cold, so the fold there needs no
+; sec of its own whatever the caller was holding.
 ; ----------------------------------------------------------------------------
 .macro ringtest cold
   .if ::BHW                         ; Model B: the buffer's ring end
@@ -90,28 +91,6 @@ n2:     tax
         bcs cold
   .else                             ; Master
         bmi cold                    ; RINGEND = $8000: N from A
-  .endif
-.endmacro
-
-; ----------------------------------------------------------------------------
-; ringfold p: ringup's fold, for ringtest's cold path
-;   In:   A = the high byte past the ring's end;  p = the pointer it belongs to
-;         (Model B: C = 1, from ringtest's compare)
-;   Out:  A = the high byte back in the ring (the caller stores it);  C = 1
-;         Model B: p's low byte folded with it;  Master: p untouched
-;   Anonymous labels: none.
-; ----------------------------------------------------------------------------
-.macro ringfold p
-  .if ::BHW                         ; Model B: 16-bit fold, low byte first
-        sbc #>RINGBYTES             ; C = 1 from ringtest's compare
-        pha
-        lda p
-        sbc #<RINGBYTES
-        sta p
-        pla
-        sbc #0                      ; the low byte's borrow
-  .else                             ; Master: the high byte alone
-        sbc #(>RINGBYTES)-1         ; C = 0: the caller's adc #>ROWBYTES set N, so no carry
   .endif
 .endmacro
 

@@ -1,23 +1,29 @@
 ; ============================================================================
 ; The Master is a 65C02; the Model B is a 6502.  Every 65C02 spelling the engine
-; and the logic use goes through a macro here, so one source assembles for both.
-; The 6502 expansions have side effects the 65C02 forms do not, and every site has
-; been audited for them -- the contracts:
+; and the logic use goes through a macro here, so one source assembles for both.  On
+; the Master each macro is its one instruction; on the Model B an expansion that has
+; side effects the 65C02 form has not, and every site is audited for them.  The set
+; (each macro's own header, at the end of this file, gives the two expansions and the
+; flags):
 ;
-;   stz m        A is DEAD at the site (the 6502 form is lda #0 / sta).  A site
-;                where A must survive spells stza.  Both leave N,Z set from the
-;                zero on the 6502; no site branches on the flags across either.
-;   stza m       A survives (pha / lda #0 / sta / pla).
-;   inca, deca   A +/- 1 with the CARRY PRESERVED (through mtmp), because the
-;                sprite prologue relies on that where the 65C02 inc a does.
-;   ldaz/staz/andz/cmpz  (zp) with no index: Y is DESTROYED (ldy #0).  The one
-;                site with Y live spells ldazy, which keeps it.
+;   stz m        A is DEAD at the site (the 6502 form is lda #0 / sta).  Both leave
+;                N,Z set from the zero on the 6502; no site branches on the flags
+;                across either.
+;   zero m, ...  stz of each of up to eight addresses, one lda #0 on the 6502.
+;   sta0 m, ...  the same where A is ALREADY 0 (the 6502 stores it, no lda #0).
+;   stzx m       A is live and X dead (ldx #0 / stx).
+;   stz01 m      m is a 0/1 flag that is 1 here (dec m).
+;   inca, deca   A +/- 1; the CARRY is DESTROYED on the 6502 (clc / adc #1, sec / sbc #1).
+;   incax        A + 1 with X dead; the carry survives on both (tax / inx / txa).
+;   ldaz, cmpz   lda / cmp (zp) with no index: Y is DESTROYED (ldy #0).
+;   ldaz0, staz0 lda / sta (zp) where Y is ALREADY 0 (the ,y form).
+;   ldazx zp     lda (zp) where Y is live and X dead (ldx #0 / lda (zp,x)).
+;   ldy1         Y = 1 where Y is 0 (iny).
 ;   bitimm v     bit #imm: Z from A & v, A and X preserved, through mtmp.
-;   jmpx t       jmp (t,x) through the zero page vector jv.
-;   phx/plx/phy/ply, bra: the obvious expansions (plx/ply set N,Z as the 65C02 do).
+;   bra t        the 6502's jmp (the Master's own instruction: no macro there).
 ;
-; mtmp is zero page scratch the expansions own; nothing that runs in the interrupt
-; may use inca/deca/bitimm/ldazy (the interrupt paths are audited free of them).
+; mtmp is zero page scratch bitimm owns; nothing that runs in the interrupt uses
+; bitimm (its two sites are the sprite prologue's, frame.s).
 ; ============================================================================
 ; One structure, two machines: code in the sideways banks with the data it reads,
 ; the level gathered into the banks at load.  BHW is the Model B's HARDWARE: a 6502,
@@ -202,127 +208,206 @@ ALLLEVELS = 0                       ; a test build: every level on the chooser, 
         op PBANK + (n - 4)
 .endmacro
 
+; ---------------------------------------------------------------- the spellings
+; Each macro: what it is for, the Master's expansion, the Model B's, and the flags.
+; "kept" means the expansion leaves the flag as it found it.  Inside .if .not BHW
+; (Master-only code) the instruction is written natively; the macros are for shared
+; code.  The Master's definitions are one instruction each, so the comments below sit
+; with the Model B's.
   .if .not ::BHW
         .setcpu "65C02"
-.macro jmpx tab
-        jmp (tab,x)
-.endmacro
-.macro ldaz zp
-        lda (zp)
-.endmacro
-.macro ldazy zp
-        lda (zp)
-.endmacro
-.macro staz zp
-        sta (zp)
-.endmacro
-.macro andz zp
-        and (zp)
-.endmacro
-.macro cmpz zp
-        cmp (zp)
-.endmacro
-.macro stza arg, ix                 ; on a 65C02 stz never touches A
+  .else
+        .setcpu "6502"
+  .endif
+
+; stz m [,x]: m = 0, A DEAD at the site.
+;   Master   stz m  / stz m,x        N, Z, C kept
+;   Model B  lda #0 / sta m[,x]      N = 0, Z = 1; C kept; A = 0
+  .if ::BHW
+.macro stz arg, ix
+        lda #0
 .if .paramcount = 2
-        stz arg,ix
+        sta arg,ix
 .else
-        stz arg
+        sta arg
 .endif
 .endmacro
+  .endif
+
+; sta0 m, ...: up to eight addresses = 0 where A is ALREADY 0 (the site's own lda #0
+; or a stz's expansion precedes it with nothing touching A between).  Not indexed.
+;   Master   stz each                N, Z, C kept
+;   Model B  sta each                flags kept
+; zero m, ...: the same with A DEAD: the Model B loads the zero once.
+;   Master   stz each                N, Z, C kept
+;   Model B  lda #0 / sta each       N = 0, Z = 1; C kept; A = 0
+  .if ::BHW
+.macro sta0 a1, a2, a3, a4, a5, a6, a7, a8
+        sta a1
+  .ifnblank a2
+        sta0 a2, a3, a4, a5, a6, a7, a8
+  .endif
+.endmacro
+.macro zero a1, a2, a3, a4, a5, a6, a7, a8
+        lda #0
+        sta0 a1, a2, a3, a4, a5, a6, a7, a8
+.endmacro
+  .else
+.macro sta0 a1, a2, a3, a4, a5, a6, a7, a8
+        stz a1
+  .ifnblank a2
+        sta0 a2, a3, a4, a5, a6, a7, a8
+  .endif
+.endmacro
+.macro zero a1, a2, a3, a4, a5, a6, a7, a8
+        sta0 a1, a2, a3, a4, a5, a6, a7, a8
+.endmacro
+  .endif
+
+; stzx m: m = 0 with A live and X DEAD.
+;   Master   stz m                   N, Z, C kept
+;   Model B  ldx #0 / stx m          N = 0, Z = 1; C kept; X = 0
+  .if ::BHW
+.macro stzx m
+        ldx #0
+        stx m
+.endmacro
+  .else
+.macro stzx m
+        stz m
+.endmacro
+  .endif
+
+; stz01 m: a 0/1 flag that is 1 here -> 0.  A site that branches on Z after it must
+; hold Z = 1 on the way in (the Master's stz keeps the flags; the Model B's dec sets
+; them from the 0).
+;   Master   stz m                   N, Z, C kept
+;   Model B  dec m                   N = 0, Z = 1; C kept
+  .if ::BHW
+.macro stz01 m
+        dec m
+.endmacro
+  .else
+.macro stz01 m
+        stz m
+.endmacro
+  .endif
+
+; inca, deca: A + 1, A - 1.  The CARRY IS DESTROYED on the Model B: only for a site
+; where the next use of C is a write (every site follows with lsr, or sets C itself).
+;   Master   inc a / dec a           N, Z from A; C, V kept
+;   Model B  clc / adc #1            N, Z, V from A; C = 1 only if A was $FF
+;            sec / sbc #1            N, Z, V from A; C = 0 only if A was 0
+; incax: A + 1 with X DEAD; the carry survives on both.
+;   Master   inc a                   N, Z from A; C, V kept
+;   Model B  tax / inx / txa         N, Z from A; C, V kept; X = A
+  .if ::BHW
+.macro inca
+        clc
+        adc #1
+.endmacro
+.macro deca
+        sec
+        sbc #1
+.endmacro
+.macro incax
+        tax
+        inx
+        txa
+.endmacro
+  .else
 .macro inca
         inc a
 .endmacro
 .macro deca
         dec a
 .endmacro
-.macro bitimm v
-        bit #v
+.macro incax
+        inc a
 .endmacro
+  .endif
 
-  .else                             ; ---------------------------------- 6502
-        .setcpu "6502"
-.macro stz arg, ix                  ; A dead at the site (audited)
-        lda #0
-.if .paramcount = 2
-        sta arg,ix
-.else
-        sta arg
-.endif
-.endmacro
-.macro stza arg, ix                 ; A live across the store
-        pha
-        lda #0
-.if .paramcount = 2
-        sta arg,ix
-.else
-        sta arg
-.endif
-        pla
-.endmacro
-.macro inca                         ; the carry survives, as inc a's does
-        sta mtmp
-        inc mtmp
-        lda mtmp
-.endmacro
-.macro deca
-        sta mtmp
-        dec mtmp
-        lda mtmp
-.endmacro
-.macro phx
-        txa
-        pha
-.endmacro
-.macro plx
-        pla
-        tax
-.endmacro
-.macro phy
-        tya
-        pha
-.endmacro
-.macro ply
-        pla
-        tay
-.endmacro
-.macro jmpx tab                     ; jmp (abs,x): through a zero page vector
-        pha
-        lda tab,x
-        sta jv
-        lda tab+1,x
-        sta jv+1
-        pla
-        jmp (jv)
-.endmacro
-.macro ldaz zp                      ; (zp) with no index: Y is free at the site
+; ldaz zp, cmpz zp: lda / cmp (zp) with no index.  Y is DESTROYED on the Model B (and
+; is 0 after: ldaz0, staz0 and ldy1 build on that).
+;   Master   lda (zp) / cmp (zp)     N, Z (cmp: C too) from the result; Y kept
+;   Model B  ldy #0 / lda (zp),y     the same flags (ldy's are overwritten); Y = 0
+;            ldy #0 / cmp (zp),y
+; ldaz0 zp, staz0 zp: lda / sta (zp) where Y is ALREADY 0.
+;   Master   lda (zp) / sta (zp)     lda: N, Z from A;  sta: flags kept
+;   Model B  lda (zp),y / sta (zp),y the same
+; ldazx zp: lda (zp) where Y is live and X DEAD.
+;   Master   lda (zp)                N, Z from A
+;   Model B  ldx #0 / lda (zp,x)     N, Z from A; X = 0
+; ldy1: Y = 1 where Y is 0.
+;   Master   ldy #1                  N = 0, Z = 0
+;   Model B  iny                     N = 0, Z = 0
+  .if ::BHW
+.macro ldaz zp
         ldy #0
         lda (zp),y
-.endmacro
-.macro ldazy zp                     ; and the form for the site where it is not
-        sty mtmp
-        ldy #0
-        lda (zp),y
-        ldy mtmp
-        ora #0                      ; N,Z from A, as the load left them
-.endmacro
-.macro staz zp
-        ldy #0
-        sta (zp),y
-.endmacro
-.macro andz zp
-        ldy #0
-        and (zp),y
 .endmacro
 .macro cmpz zp
         ldy #0
         cmp (zp),y
 .endmacro
-.macro bitimm v                     ; Z = (A & v) = 0, A kept
+.macro ldaz0 zp
+        lda (zp),y
+.endmacro
+.macro staz0 zp
+        sta (zp),y
+.endmacro
+.macro ldazx zp
+        ldx #0
+        lda (zp,x)
+.endmacro
+.macro ldy1
+        iny
+.endmacro
+  .else
+.macro ldaz zp
+        lda (zp)
+.endmacro
+.macro cmpz zp
+        cmp (zp)
+.endmacro
+.macro ldaz0 zp
+        lda (zp)
+.endmacro
+.macro staz0 zp
+        sta (zp)
+.endmacro
+.macro ldazx zp
+        lda (zp)
+.endmacro
+.macro ldy1
+        ldy #1
+.endmacro
+  .endif
+
+; bitimm v: bit #v -- Z = (A & v) = 0, A and X kept.  Through mtmp on the Model B, so
+; not for the interrupt (its sites are the sprite prologue's, frame.s).
+;   Master   bit #v                  Z from A & v; N, V kept (the immediate form sets
+;                                    Z only); A kept
+;   Model B  sta mtmp / and #v / php / lda mtmp / plp
+;                                    Z from A & v, N from it too; C, V kept; A kept
+  .if ::BHW
+.macro bitimm v
         sta mtmp
         and #v
         php
         lda mtmp
         plp
 .endmacro
+  .else
+.macro bitimm v
+        bit #v
+.endmacro
   .endif
 
+; bra t: an unconditional branch.  The Master's instruction (2 bytes, 3 cycles); the
+; Model B has none, so its jmp (3 bytes, 3 cycles).  No flags on either.
+  .if ::BHW
+.macro bra t
+        jmp t
+.endmacro
+  .endif

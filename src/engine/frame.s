@@ -415,11 +415,7 @@ match_sprites:
         beq @same
         cmp #BOXID0                 ; different ids: are both box stars?
         bcc @zero
-  .if BHW
-        lda (rp),y                  ; Y = 0 from the cmpz above
-  .else
-        lda (rp)
-  .endif
+        ldaz0 rp                    ; Y = 0 from the cmpz above
         cmp #BOXID0
         bcc @zero
         lda #1                      ; 1 = a different frame of the same thing
@@ -427,11 +423,7 @@ match_sprites:
 @same:  lda #2                      ; 2 = identical, so its screen pixels are already right
         ; ---- kept if the same place too: record bytes 1-4
 @pos:   sta KEEP,x                  ; (undone at @zero if the place differs)
-  .if BHW
-        iny                         ; Y = 0 on both ways in (cmpz, ldaz)
-  .else
-        ldy #1
-  .endif
+        ldy1                        ; Y = 0 on both ways in (cmpz, ldaz)
         lda SPR_XL,x
         cmp (rp),y
         bne @zero
@@ -700,12 +692,8 @@ copy_partial:
         .segment "ENGCODE"          ; bank 7, with the records
         PAD ::PADB_DS, ::PADM_DS
 drawsprite:
-  .if BHW
-        ldx #0                      ; X is dead on entry
-        stx spclip                  ; set at every window edge the sprite is cut against
-  .else
-        stz spclip                  ; set at every window edge the sprite is cut against
-  .endif
+        stzx spclip                 ; set at every window edge the sprite is cut against
+                                    ;  (A is live, X dead on entry)
 
         ; ==== the address from the level's DIR_LO/HI, the geometry from the game's
         ; SPRG_* tables by shape
@@ -973,21 +961,11 @@ drawsprite:
         adc sp_r0
         sta (rp),y
         iny
-  .if BHW
         lda sp_c1                   ; columns-1 = c1 - c0: the row loop's sp_ncol, set here
         sec
         sbc sp_c0
         sta sp_ncol
-        tax                         ; width = c1 + 1 - c0 (X dead: ldx spclip below)
-        inx
-        txa
-  .else
-        lda sp_c1
-        sec
-        sbc sp_c0
-        sta sp_ncol                 ; columns-1: the row loop's, set here
-        inc a
-  .endif
+        incax                       ; width = c1 + 1 - c0 (X dead: ldx spclip below)
         sta (rp),y
         iny                         ; REC_H
         lda sp_r1
@@ -1253,11 +1231,7 @@ wait_flip:                          ; (inline, its one caller) spin until any pe
         lda BARDIRTY
         beq :+
         jsr hook_hud                ; (the game's: README.md)
-  .if BHW
-        dec BARDIRTY                ; only ever set to 1: 1 -> 0
-  .else
-        stz BARDIRTY
-  .endif
+        stz01 BARDIRTY              ; only ever set to 1: 1 -> 0
 :
         ; ---- derive the char window: wcx = wx >> 1, wfine = (wy & 3) * 2,
         ; wcy = wy >> 2

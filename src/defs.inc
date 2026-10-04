@@ -58,7 +58,7 @@ LV_PAGE0  = $0400                   ; tile id -> the gather's pair: 256 lo, 256 
 NSPR:     .res 1                    ; the sprite list's length (the game's addsprite)
 BARDIRTY: .res 1                    ; the bar's digits to redraw (the game sets it)
 SFXREQ:   .res 1                    ; a sound effect asked for (the game; sound_tick)
-mtmp:     .res 1                    ; cpu.inc's scratch (inca/deca/bitimm/ldazy)
+mtmp:     .res 1                    ; cpu.inc's scratch (bitimm's, on the Model B)
 ringbhi:  .res 1                    ; the buffer being drawn: ring base high byte,
 ringehi:  .res 1                    ;   ring end high byte (ringup's fold test),
 ringe3:   .res 1                    ;   >RINGEND-3 (mirror.s)

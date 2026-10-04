@@ -29,8 +29,8 @@ Three facts about the machines shape everything you write:
 
 1. **Two CPUs.**  The Model B has a 6502, the Master a 65C02.  Your code is assembled
    for both: write 6502, or use the 65C02 idioms `cpu.inc` spells for both (`stz`,
-   `stza`, `phx`/`plx`, `phy`/`ply`, `inca`/`deca`, `ldaz`, `bitimm`, `jmpx`...;
-   the contracts are at the end of `DESIGN.md`).  `BHW` is 1 when assembling for the
+   `zero`, `inca`/`deca`, `ldaz`, `bitimm`, `bra`...; the contracts are at the end
+   of `DESIGN.md`).  `BHW` is 1 when assembling for the
    Model B, 0 for the Master; use `.if BHW` where the hardware really differs, which
    in game code is almost never.
 2. **Two window sizes.**  The playfield is 160 game pixels wide on both, but 84 game

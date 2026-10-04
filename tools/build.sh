@@ -56,10 +56,11 @@ if [ "$MASTERONLY" = 1 ]; then TARGETS=master; else TARGETS="modelb master"; fi
 settarget() {                       # $1: modelb or master
     TARGET=$1
     if [ "$TARGET" = master ]; then
-        BD=build/master; CPU=65C02; DEFS="-D BHW=0 $MIRDEF"; CFG=$BG/cfg/master.cfg; BARADDR='$2B00'
+        BD=build/master; CPU=65C02; DEFS="-D BHW=0 $MIRDEF"
     else
-        BD=build/modelb; CPU=6502; DEFS="$MIRDEF"; CFG=$BG/cfg/modelb.cfg; BARADDR='$0300'
+        BD=build/modelb; CPU=6502; DEFS="$MIRDEF"
     fi
+    CFG=$BG/cfg/banks.cfg           # (one map: the Master's own areas are empty on the Model B)
     export BD TARGET
 }
 [ -n "$SKIP_ASSETS" ] || [ -z "$GAME_MUSIC" ] || sh -c "$GAME_MUSIC"
@@ -163,11 +164,14 @@ dids = '|'.join(re.findall(r'^sym\tid=(\d+),name="(?:drawrect|RINGHIOP)",', dbg,
 s0f = re.search(r'^sym\tid=\d+,name="@s0f",[^\n]*parent=(?:%s),[^\n]*val=0x([0-9A-F]+)' % dids, dbg, re.M)
 addr['SOLIDF'] = int(s0f.group(1), 16) + 1
 want.append('SOLIDF')
-# the game's hooks (README.md): equates, so in the debug info and not labels.txt --
-# the load-time program goes on to them after an image load (ldprog.s ld_entry)
-for h in ('hook_title', 'hook_image', 'hook_over'):
+# the game's hooks (README.md) and the bar's address (engine/defs.s BARADDR, the
+# machine's): equates, so in the debug info and not labels.txt -- the load-time
+# program goes on to the hooks after an image load (ldprog.s ld_entry) and reads
+# the bar's template to BARADDR
+for h in ('hook_title', 'hook_image', 'hook_over', 'BARADDR'):
     addr[h] = int(re.search(r'^sym\tid=\d+,name="%s",[^\n]*val=0x([0-9A-F]+)' % h, dbg, re.M).group(1), 16)
-    want.append(h)
+    if h not in want:
+        want.append(h)
 # bank 7's images (ldprog.s image_load): the game's, the linker's b7.bin (its code,
 # from GAMEDATA; its variables are not in the file), and the menus', MENU
 # (one file on the disc, IMG7: the menus' image to a whole sector, then the game's,
@@ -220,7 +224,6 @@ EOF
         # hardware conditionals in defs.inc resolve as they do in the game (ldconst.s)
         ca65 --cpu $CPU $DEFS -I $BD -I $BG/src -o /dev/null $BG/src/ldconst.s > $BD/ldconst.out
         grep ' = ' $BD/ldconst.out >> $BD/defs_ld.inc
-        echo "BARADDR = $BARADDR" >> $BD/defs_ld.inc
         ca65 --cpu 6502 $DEFS -I $BD -I $BG/src --bin-include-dir $BD -o $BD/ldprog.o $BG/src/ldprog.s -l $BD/ldprog.lst
         ld65 -C $BG/cfg/ldprog.cfg -o $BD/LDPROG $BD/ldprog.o
         # BANKS: the fixed pieces with their table, then the bank-number patch list (every

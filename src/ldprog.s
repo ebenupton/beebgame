@@ -743,11 +743,7 @@ tcopy:                              ; tile A of the staged file, its row C (or a
         adc #>STAGE
         sta src+1
         ldx PB_TILES
-  .if BHW
-        jmp bcopy
-  .else
-        jmp scopy
-  .endif
+        jmp sccopy                  ; (out of the stage: bcopy, or the Master's scopy)
 nfiles: .res 1                      ; (lv_load's: the set's file count,
 hdst:   .res 2                      ;  the next half's slot,
 sv_halfhi:  .res 1                  ;  the tile shape on its way to banks 5 and 6)
@@ -1287,11 +1283,8 @@ image_load:
         lda imgnhi,x
         sta cnt+1
         ldx PB_LVL
-  .if BHW
-        jsr bcopy                   ; (bank 7 paged after, and its write bank)
-  .else
-        jsr scopy
-  .endif
+        jsr sccopy                  ; (bank 7 paged after, and its write bank; the
+                                    ;  Master's scopy: out of shadow RAM)
         ldx item
         lda bflo,x                  ; ---- the bank numbers: each byte, 4..7, becomes
         sta lp                      ; that bank's socket

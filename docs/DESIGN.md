@@ -12,8 +12,8 @@ MNU*, ZPGAME); everything else is the engine's.
 ## One structure, two machines
 
 A game's sources and the engine's in `src/` (the game's root includes them) are assembled twice by `tools/build.sh`:
-`BHW=1` for the Model B's hardware (6502, `cfg/modelb.cfg`, output in `build/modelb/`)
-and `BHW=0` for the Master's (65C02, `cfg/master.cfg`, `build/master/`).  `BHW` is only
+`BHW=1` for the Model B's hardware (6502, output in `build/modelb/`) and `BHW=0` for
+the Master's (65C02, `build/master/`), both linked with `cfg/banks.cfg`.  `BHW` is only
 the hardware.  The structure is the same on both: the code lives in four 16K sideways
 RAM banks, each beside the data its inner loop reads, and the game's own loader gathers
 every level from the disc into those banks.
@@ -946,7 +946,7 @@ to its tools.  With none set a game builds for both machines.  What each changes
   pixels across and tile rows down, the overlay's offset in SPRX).  imgtab stops at
   BAKEITEM0.  Cleo bakes every trampoline's rest state and its costliest stars: 309
   items over the 16 levels, 0.2-0.34 s of the Model B's CPU a load, nothing on the disc.
-- **GAMEHAZEL.**  master.cfg's HAZ area ($C000-$DFFF) takes HAZCODE, HAZDATA and
+- **GAMEHAZEL.**  banks.cfg's HAZ area ($C000-$DFFF) takes HAZCODE, HAZDATA and
   HAZBSS into `hazel.bin`, a BANKS piece with bank byte 1, which the loader copies
   with ACCCON Y set and leaves set for good.  `ldprog.s`'s `mainram` keeps Y, and
   SPRX is staged from the disc every load (no keep/unkeep).  With Y set throughout,
@@ -990,16 +990,16 @@ twice into bank 6 (`selbb`, `validate`), and `drawrect` once a tile row through
 The engine (and a game, if it likes) is written once, with 65C02 idioms spelt as macros
 (`cpu.inc`) that expand for the 6502.  Their contracts:
 
-- `stz`: A is dead at the site (the 6502 form is `lda #0 / sta`); where A must
-  survive, `stza`.
-- `inca`/`deca`: the carry is preserved (through `mtmp`), because the sprite prologue
-  relies on it.
-- `ldaz`/`staz`/`andz`/`cmpz`, (zp) with no index: Y is destroyed; the site with Y
-  live spells `ldazy`.
-- `bitimm`: Z from A & v, A and X kept, through `mtmp`.
-- `jmpx`: `jmp (abs,x)` through the zero-page vector `jv`.
-- Nothing the interrupt runs may use `inca`, `deca`, `bitimm` or `ldazy` (they share
-  `mtmp`).
+- `stz`: A is dead at the site (the 6502 form is `lda #0 / sta`).  `zero m, ...`
+  clears up to eight addresses with one `lda #0`; `sta0 m, ...` the same where A is
+  already 0; `stzx` where A is live and X dead (`ldx #0 / stx`); `stz01` for a 0/1
+  flag that is 1 (`dec`).
+- `inca`/`deca`: the carry is destroyed on the 6502 (`clc / adc #1`, `sec / sbc #1`);
+  `incax` keeps it, with X dead (`tax / inx / txa`).
+- `ldaz`/`cmpz`, (zp) with no index: Y is destroyed (`ldy #0`); `ldaz0`/`staz0`
+  where Y is already 0, `ldazx` where Y is live and X dead, `ldy1` for Y = 1 from 0.
+- `bitimm`: Z from A & v, A and X kept, through `mtmp` -- not for the interrupt.
+- `bra`: the 6502's `jmp`.
 
 **Anonymous labels.**  The sources use ca65's `:`/`:+`/`:-` labels heavily, and several
 bare `:` lines are kept, unreferenced, only to hold the count: deleting a line that

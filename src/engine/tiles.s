@@ -413,17 +413,9 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
 ; CHARCPY c: char c's 8 lines, (tp)+8c -> (sp)+8c.  A, Y clobbered; C kept.
 .macro CHARCPY c
 .if c = 0
-  .if ::BHW
-        ; line 0 (staz would reload the same 0 into Y)
-        ldy #0
-        lda (tp),y
-        sta (sp),y
-        iny
-  .else
-        lda (tp)                    ; line 0 non-indexed
-        sta (sp)
-        ldy #1
-  .endif
+        ldaz tp                     ; line 0 non-indexed (the Model B: Y = 0 from it)
+        staz0 sp
+        ldy1
 .else
         ldy #8*c
         lda (tp),y
@@ -484,7 +476,7 @@ RINGHIOP := * + 1                   ; the buffer's table: select_backbuf patches
         rts
 @rfold:
   .if BHW
-        sbc #>RINGBYTES             ; ringfold rc_sp, in line: C = 1 from ringtest's compare
+        sbc #>RINGBYTES             ; the 16-bit fold (ringup's), in line: C = 1 from ringtest's compare
         pha
         lda rc_sp
         sbc #<RINGBYTES             ; the low byte folds too: sp's with rc_sp's
