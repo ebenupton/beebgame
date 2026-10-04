@@ -1,1011 +1,1054 @@
-# beebgame: the design
+# beebgame -- design
 
-beebgame is one engine for two machines: a BBC Model B with 64K of sideways RAM and a
-BBC Master 128, one disc for both.  This document is the detail behind the README.
-Addresses are from a build's linker maps (`build/modelb/map.txt`,
-`build/master/map.txt`) and the sources they come from; where the two machines
-differ, both are given.  The figures are one game's build (the reference game's, Cleo):
-where a figure depends on the game -- its code's size, its sprites, its levels -- it
-is marked as the game's.  The game's code and tables are the game's segments (GAME*,
-MNU*, ZPGAME); everything else is the engine's.
+What the engine is and why it is shaped as it is.  Written against beebgame `867cc88` and
+Cleo `ce2d7e2`, from the sources, the linker map (`cfg/banks.cfg`) and one build of Cleo
+(`build/{modelb,master}/labels.txt`, `assets.inc`, `files.inc`, `defs_ld.inc`, the build's
+printed lines).  Every address or size quoted "as built today" is Cleo's and comes from that
+build; the symbol that names it is the thing to read, the number is for orientation.
 
-## One structure, two machines
+Terminology.  A *screen pixel* is a MODE 1 pixel; a *game pixel* is 2 x 2 of them (a byte of
+MODE 1 holds four screen pixels, so two game pixels across).  A *scanline* is one of the 312
+lines of a PAL frame; a *character* (char) is 8 bytes, one a scanline; a *character row* is 8
+scanlines.  A *tile* is 8 x 8 game pixels: 4 chars across, 2 char rows down, 64 bytes.  The
+*ring* is a buffer of RINGROWS char rows the window slides round; a *slot* is one of its rows.
+The display is a *rupture*: a *chain* of CRTC *sections* that together make one frame.  Bank 7
+below its *kernel* holds one of two *images*, the game's or the menus'.  Sprites are *resident*
+(the SPRC file, loaded once) or *staged* (SPRX, placed per level); a *box* is an opaque
+copied sprite; a *baked* box is one the loader makes from the level's own tiles.
 
-A game's sources and the engine's in `src/` (the game's root includes them) are assembled twice by `tools/build.sh`:
-`BHW=1` for the Model B's hardware (6502, output in `build/modelb/`) and `BHW=0` for
-the Master's (65C02, `build/master/`), both linked with `cfg/banks.cfg`.  `BHW` is only
-the hardware.  The structure is the same on both: the code lives in four 16K sideways
-RAM banks, each beside the data its inner loop reads, and the game's own loader gathers
-every level from the disc into those banks.
+Contents
 
-| Bank | Code | Data |
-|---|---|---|
-| 4 | the sprite row loop and its blitters | most sprite images; the expansion tables and SWAPTAB |
-| 5 | the sprite row loop and its blitters; the tile row's gather | the rest of the sprites; the level's map; the expansion tables and SWAPTAB |
-| 6 | the tile blitter and the ring work that calls it | the level's tiles |
-| 7 | at the top the kernel, resident: the display chain's builders, the palette, the disc driver, the image swap (on the Model B the interrupt's work too); below it the game's image -- the game's code, the engine's sprite prologue and records -- or the menus' image | the level's tables, the sprite directory and records, the game's variables; or the menus' code and data |
+ 1. One structure, two machines
+ 2. Main RAM
+ 3. The banks
+ 4. The crossings and the write bank
+ 5. The display
+ 6. The frame
+ 7. The tiles
+ 8. The sprites
+ 9. The disc and the loader
+10. Sound
+11. The build
+12. Testing, the 6502 spellings and the ca65 traps
 
-What `BHW` changes is the hardware underneath:
 
-- **The Model B**: a 6502; 32K of main RAM that is almost all display, holding two
-  software rings of 23 character rows, each with a mirror row; the rupture chain's
-  interrupt work in bank 7 behind a stub in low RAM; an 8271 or an Acorn 1770 disc
-  controller; Watford and Solidisk write-select boards; the tile gather computed.
-- **The Master**: a 65C02; one hardware-wrapped ring of 32 rows at $3000, in main RAM
-  for buffer 0 and shadow RAM for buffer 1; the status bar at $2B00; its interrupt
-  handler and chain step in main RAM ($0600); its own 1770; the tile gather through a
-  per-level table in main RAM (LV_PAGE0).
+## 1. One structure, two machines
 
-Nothing else differs.  The rule: the two builds may differ only where the CPU does
-(a 65C02 instruction for a 6502 sequence, the same algorithm and data), where the
-hardware does (the display memory, shadow RAM and ACCCON, the disc controllers, the
-write-select boards), and in three placements on the Master -- its interrupt handler
-and state in main RAM, its tile gather's table in main RAM, and its HAZEL/ANDY copy
-of SPRX.  Where a 6502 spelling costs the Master no cycle it is used on both.  One of
-everything else: one fill path, one `build_sections`, one `crtc_init`, one interrupt
-body (`engine/kernel.s`; the Model B's stub pages it in, the Master's handler is it).
+The engine is one set of sources assembled twice.  `BHW=1` is the BBC Model B's hardware:
+a 6502, 32K of main RAM of which all but 768 bytes is display, two software rings with
+mirror rows, an 8271 or Acorn 1770 disc controller, and the write-select sideways RAM boards
+(Watford, Solidisk).  `BHW=0` is the Master 128's: a 65C02, a hardware-wrapped ring in main
+and shadow RAM, its interrupt handler in main RAM, its own 1770.  `cpu.inc` defaults `BHW`
+to 1; `tools/build.sh settarget` passes `--cpu 65C02 -D BHW=0` for the Master and writes the
+two builds to `build/modelb` and `build/master`.  Both machines want four 16K banks of
+sideways RAM (the Master has them); the boot loader finds them in whatever sockets they are
+(section 4).
 
-The data lies alike too.  `tools/build.sh` links the Model B first and then the Master with
-every shared segment pinned at the Model B's address (`tools/pincfg.py`): the
-Master's shorter code leaves gaps, and every table and variable -- zero page, low RAM,
-each bank -- is at the same address on both.  What one machine alone has goes in
-segments after the shared ones (ZPHW, LOWHW, KRNHW: the Model B's `jmp (abs,x)`
-vector, its gather's shape, its mirror bookkeeping, its handler's state).
-`tools/layoutcheck.py` compares the two builds' debug info and fails the build on any
-difference; only code labels (a CMOS instruction is shorter) and the start-up pieces
-may differ.
+One linker map serves both: `cfg/banks.cfg`.  The Master's own areas (`MRAM`, `MRAMB`,
+`HAZ`) and segments (`MRAMCODE`, `MRAMBSS`, `HAZ*`) are empty in the Model B's link, and an
+empty area with a file writes an empty file the build does not read.  The two separately
+assembled programs have their own maps: `cfg/ldprog.cfg` (the load-time program at
+`LDPROG`) and `cfg/loader.cfg` (the boot loader at `$1900`).
 
-Page crossings are placed, not left to chance.  In banks 4-6 the Model B's code is
-ordered so that its hot branches stay in their page (the sprite loops' rarer paths and
-dispatch table sit after the blitters); the Master spends its shorter code's room on
-pads (`src/pads.inc`, the `PAD` macro) before the blitters, found with
-`tools/pagecheck.py`, which lists every branch that crosses a page.  In bank 7 the
-engine's code ends at the kernel on the Model B, so a pad places what is before it;
-the Master's runs on from the Model B's start, so a pad places what is after it.  The
-bank 7 pads (PADB_xx and PADM_xx, at each of ENGCODE's routines that loop hot) were
-chosen over a profile of every bank 7 branch taken and indexed read (Cleo's
-`test/cycprof.mjs` with PHASEDUMP set, then `test/padopt.py`), for all the pads together: all of bank 7's
-code moves with the kernel's start, so they are chosen again when that moves.  GAMEBSS and ENGBSS are page aligned, so the crossings of
-their tables' indexed reads do not move with anything in front of them.  `SAMEPAGE`
-asserts the hot loops' branches at link time.
+### The convergence rule
 
-The level files, the sprites, the tile set and the bar template are on the disc once
-and read by both.  Each machine has its own bank images (BANKSB, BANKSM), load-time
-program (LDPROGB, LDPROGM) and bank 7 images (IMG7B, IMG7M).  Because
-the level files carry the sprites' placed addresses, the level layout is the Model B's
-on both machines: `engine/sprloops.s` and `engine/gather.s` assert that each sprite bank's code ends exactly at
-`B4_CODE_END`/`B5_CODE_END` on the Model B and at most there on the Master, whose
-shorter code leaves a gap.  `build.sh` checks that the two builds' shared files are
-byte-identical.
+The two builds differ only in (`src/engine.s` header, `cpu.inc`):
 
-## Main RAM
+- the CPU's spellings (section 12): shared code uses `cpu.inc`'s macros, Master-only code
+  under `.if .not BHW` is written in native 65C02;
+- the hardware: the ring (section 5), the CRTC phasing constants, ACCCON, the disc
+  controller's addresses, the boards;
+- three placements the Master is allowed, because it has main RAM to spare:
+  1. the interrupt handler and its state in main RAM -- `cpu.inc PLACEH mseg, bseg` puts
+     the interrupt's own work in `MRAMCODE` (area `MRAM`, $0600) and its tables in
+     `MRAMBSS` (area `MRAMB`, $0C00) on the Master, and in `KRNCODE`/`KRNHW` (bank 7) on the
+     Model B (`kernel.s`, `vars.s`);
+  2. the tile gather as a table, `LV_PAGE0` ($0400, `defs.inc`, Master only), where the
+     Model B computes the same pairs arithmetically (`gather.s`, section 7);
+  3. the staged sprites kept across loads in HAZEL and ANDY (`ldprog.s SPRXKEEP`,
+     section 9);
+- and the bigger view: `engine/defs.s` `VISROWS` is 30 char rows on the Master and 21 on the
+  Model B, `RINGROWS` 32 and 23.
 
-### Zero page (both machines)
+Everything else -- every table, every variable, every level file -- lies at the same address
+on both.  Two tools enforce it in the build:
 
-| Range | Use |
-|---|---|
-| $00-$72 | the engine's (ZEROPAGE): defs.inc's (nspr, bar_dirty, sfx_req, mtmp -- cpu.inc's scratch --, the ring and mirror state, the sprite prologue's hand-over, cur_r7, sec_idx), then engine/vars.s's (`map_ptr`, map_row's result, among them); LDPROG's 17 bytes (LDZP) are the sprite prologue's scratch, dead during a load |
-| $73-$79 | the Model B's own, the engine's (ZPHW: `jv`, the gather's shape); a gap on the Master |
-| $7A-$EF | the game's (ZPGAME; Cleo's to $E7) |
-| $F0-$FF | the MOS's zero page, but $F4 and $FC: the engine's hottest scalars |
+- `tools/pincfg.py` rewrites the Master's linker config so that every segment the Model B
+  also has starts where the Model B's did (read from the Model B's `game.dbg`), stripping
+  any `align`; the Master's shorter 65C02 code then leaves a gap rather than moving what
+  follows it.  The segments it leaves free are `BOOT`, `BOOTHDR`, `BANKFIX`, `WRFIX`,
+  `MRAMCODE`, `MRAMBSS`, `D8271N`, `D1770N` (its `FREE` set).  `build.sh` links the Master
+  with the pinned config unless `MASTERONLY`.
+- `tools/layoutcheck.py` compares the two `game.dbg`s at the end of the build: every segment
+  both have must start at one address (start-up segments excepted), every data label in a
+  non-code segment must sit at one address, and zero page has no exception at all.  Exit 1
+  on any difference.  Its `CODE`, `STARTUP` and `OWN` sets say which labels may differ.
 
-Once the game has the machine only two of the MOS's zero-page bytes are still touched:
-$F4, the MOS's copy of ROMSEL, which the interrupt restores from, and $FC, where the
-MOS's interrupt entry keeps A (every handler returns with `lda $FC / rti`).  The rest,
-in segments ZPF0 ($F0-$F3), ZPF5 ($F5-$FB) and ZPFD ($FD-$FF), holds scalars that were
-absolute and are among the most accessed: map_stride, map_shr, mus_tick, row_bit, dpass,
-sp_clip, mus_on and crtcb ($F8-$FB free).  `boot` zeroes them.  On the Model B the arithmetic gather's shape
-(half0, halfhi5, half_sub) and `jv`, the vector the 6502's `jmp (abs,x)` goes
-through, are in its own segment, ZPHW.
+The level files are shared because of this: `build.sh` compares `SPRX SPRC BAR L0..L15` and
+`assets.inc` between the two builds and fails if they differ.
 
-### Low RAM (both machines)
+### Page crossings placed on purpose
 
-| Range | Model B | Master | Use |
-|---|---|---|---|
-| $0100-$013F | | | the stack, 64 bytes |
-| LOWBSS | $0140-$01F8 | $0140-$01F0 | what more than one bank reads: the sprite list (SPRLIST), the buffers' state (BUF_CXL, DIRTYCNT), PBANK/pboard, disp_sect/next_sect, GATHERH, the mirror's notes (Model B), sprc_ok, sprx_ok; and the game's few bytes |
-| $0204-$0205 | | | IRQ1V, which the game points at its handler |
-| LOWCODE | $0206-$02E4 | $0206-$02A4 | the crossings, the map helpers, page_logic; the Model B's interrupt stub |
-| LOWBSS2 | $02E5-$02F9 | $02A5-$02B9 | GATHERL |
+A taken 6502 branch costs a cycle more when its target is in another page, and so does an
+indexed read that crosses one.  The engine takes two measures:
 
-LOWCODE is linked to run here and loaded behind the start-up code; `boot` copies it
-down byte by byte (it is asserted under 256 bytes).
+- `SAMEPAGE from, to` (`cpu.inc`) is a link-time assert that a hot branch and its target
+  share a page; the ring macros and `tiles.s` use it.
+- `PAD b, m` (`cpu.inc`) emits `b` bytes of padding on the Model B and `m` on the Master.
+  The values live in `src/pads.inc` (`PADB_FM`/`PADM_FM` before the mirrored sprite cells,
+  `PAD*_MS/_SP/_EO/_DS/_CP` before bank 7's hot routines, `PAD*_T6` before `draw_rect`,
+  `PADB_BB` before `render_frame`).  Bank 7's pads move with the kernel's start (the driver
+  slot sets it: section 3), and `pads.inc` says they are re-found with Cleo's
+  `test/cycprof.mjs` (PHASEDUMP) and `test/padopt.py`, and the order of `ENGCODE`'s blocks
+  in `engine/frame.s` with `test/blockopt.py`.  `frame.s`'s header: "THE ORDER OF THE
+  BLOCKS IS THE LAYOUT'S".
 
-### The Model B
+`tools/pagecheck.py <build dir>` lists every branch in a build's code segments that crosses
+a page when taken, with its source line, from `game.dbg` and the segment images.
 
-| Range | Use |
-|---|---|
-| $0300-$07FF | the status bar, 2 rows |
-| $0800-$0A7F | mirror A: a copy of ring A's last slot row |
-| $0A80-$43FF | ring A: 23 slots of 640 bytes |
-| $4400-$467F | mirror B |
-| $4680-$7FFF | ring B |
 
-Everything from $0300 up is display; nothing else lives in main RAM during play.  23 x
-640 is not a whole number of pages, so a pointer's fold at the ring end is 16 bits
-wide, but both ring ends are page aligned (asserted: RINGEND_B = $8000, RINGEND_A a
-page boundary), so `ringup`'s test is a byte compare against the buffer's `ringehi`,
-and both bases are at xx80 (asserted), so the low byte folds by a constant.
+## 2. Main RAM
 
-A row of the tile blitter (`draw_rect`) can straddle the ring end but a run -- the
-chars of one tile, at most four -- never does: a ring row is 80 chars and the ring a
-whole number of rows (on either machine), so the end falls on a map column that is a
-multiple of 80, a tile boundary.  A run can only end exactly at the end, which carries
-into a new page: `@advc`, on that carry, folds the pointer back to the base.  So the
-runs have no wrap test and no char-at-a-time path.
+### Zero page
 
-During a load the display is black and is the loader's: the NMI routine at $0D00
-(NMIPAGE), the load-time program at $0E00 (LDPROG, at most $0E00 bytes), a shared file
-staged at $1C00-$5BFF (STAGE, 16K), the level's own file at $5C00-$7BFF (STAGE_LVL, 8K;
-`tools/levelfile.py` asserts every level file fits), and the level's objects at $7C00
-(LV_OBJS: 6 bytes each, which the game reads before its first render).  The file
-is staged below the objects because they are copied out while it is still being read.
+Zero page is laid out alike on both machines (`vars.s`; `layoutcheck.py` fails the build
+otherwise): what one machine alone uses is reserved on the other.  The map (`banks.cfg`
+MEMORY `ZP`, `ZPEND`):
 
-### The Master
+| range   | segment    | contents |
+|---------|------------|----------|
+| $00-    | `ZEROPAGE` | the engine's: `defs.inc`'s first thirteen, then `vars.s`'s |
+| ..-$FB  | `ZPGAME`   | the game's (`__ZPGAME_RUN__`, `__ZPGAME_SIZE__`: $8B, 113 bytes today) |
+| $FC     | --         | the MOS ROM's interrupt entry keeps A here (`hw.inc MOS_IRQA`) |
+| $FD-$FF | `ZPTOP`    | `romsel_cpy` (= `ROMSEL_CPY`, asserted) then `crtcb` (2) |
 
-| Range | Use |
-|---|---|
-| $0400-$05FF | LV_PAGE0: the level's tile gather table, 256 low bytes and 256 high |
-| $0600-$08CA | CODE: the interrupt handler and chain step, the keyboard, the sound effects |
-| $0C00-$0C6D | MRAMBSS: the handler's state (BUF_SEC0, BUF_SEC0T1, SECTAB, BUF_QS, OLDIRQ); `boot` zeroes it |
-| $1C00- | LV_OBJS, the level's objects (below the display; LDPROG ends by $1BFF) |
-| $2880-$2AFF | QBLANK: 640 zeros (`boot`'s), Q's start -- the line a 6845 shows under the picture |
-| $2B00-$2FFF | the status bar, 2 rows, main RAM, single-buffered |
-| $3000-$7FFF | the ring: buffer 0 in main RAM, buffer 1 in shadow RAM at the same addresses |
+There is no MOS zero page in use and no machine-dependent block.  `defs.inc` defines the
+first thirteen bytes, used before `engine.s` is included so every access assembles as zero
+page: `nspr bar_dirty sfx_req mtmp ringbhi ringehi ringe3 mrow wcxm sp_disp sp_g cur_r7
+sec_idx`.  `vars.s` lays the rest of the engine's part out by owner: each machine's own
+(`jv`, `crtcbm`, `qsect`, `ksect`, `palon`), scratch (`ptr tp sp tmp tmp2`, the flip's
+`disp_sect next_sect load_req sfx_dur`, `tmp3 tmp4 cnt w16 w16b`), the window (`wx wy wcx
+wcy [wcyh] wfine cur_buf recp rp`), `draw_rect`'s arguments and per-rect invariants (`rc_*`,
+`row_off`), the interrupt's `irq_x irq_y`, the sprite prologue's (`spx spy`, then from
+`LDZP` seventeen bytes the loader borrows: `sp_ptr` .. `sp_cnt`, asserted), `spi [sp_dfl]
+lcnt lidx`, the ring (`ring_s barq`), the level's geometry (`maplw mapw maph maxwx
+maxwy`), the sprite clip's `row_lim`, `vsyncs flip_req flipvs keys map_ptr sfx_ptr mus_ptr`, the Model B's gather shape
+(`half0 halfhi5 half_sub`) and the hot scalars (`map_stride map_shr mus_tick disp_d dsect
+next_buf row_bit dpass sp_clip mus_on`).
 
-The ring is the whole region the hardware wraps: an address that runs past $8000 comes
-back to $3000, so a displayed row may straddle the end and needs no mirror.  That is
-why RINGROWS is 32: it is the size of the wrap, not a choice.  The bar is below $3000
-and there is only one of it; with shadow selected for display (ACCCON D = 1) the CRTC
-does not see main RAM there, so the bar's section is scanned with D = 0 and the
-playfield's with D = the buffer shown.
+`init.s boot` zeroes $00-$EF and $F0-$FF (and low RAM up to `IRQ1V`) before anything runs.
 
-After its first read SPRX (at most 12K) is kept in HAZEL ($C000-$DFFF, 8K) and ANDY
-($8000-$8FFF, 4K), and later loads rebuild the stage from there instead of the disc
--- unless the game has HAZEL for its code (GAMEHAZEL, *The build options*), when SPRX
-is read from the disc at every load as on the Model B.
-During a load the shared files are staged in shadow RAM at $3000 (ACCCON X set around
-every read and every copy out) and the level's file in main RAM at $3000; the load
-ends by clearing both screens, because a ring row the window has not reached yet must
-not show what was staged there.  Every load starts by putting the CPU on main RAM
-(ACCCON X and Y clear; with GAMEHAZEL, X alone): the game leaves X on the buffer it
-drew last.
+### Low RAM
 
-### Start-up (both machines)
+| range       | what | where defined |
+|-------------|------|---------------|
+| $0100-$013F | the stack, 64 bytes (`STACKTOP = $3F`) | `defs.inc`; `init.s`, `ldprog.s` set it |
+| $0140-$0203 | `LOWBSS`, then `LOWHW` (one machine's own, last) | `banks.cfg` `LOWBS` |
+| $0204       | `IRQ1V` | `hw.inc` |
+| $0206-$02FF | `LOWCODE` (run address), then `LOWBSS2` | `banks.cfg` `LOWRAM` |
 
-The BOOT piece is loaded at $7000, display RAM that nothing has drawn in yet, with the
-low-RAM image behind it.  Its header is the boot loader's findings at fixed addresses
-on both machines: `dsk_type` $7000 (the controller), `dsk_drv` $7001, `DSK_BANKS`
-$7002-$7005 (the socket of each of banks 4-7), `dsk_board` $7006; `boot` is at $7007
-(all asserted in `init.s` and checked equal across the builds by `build.sh`).  `boot`
-sets a 64-byte stack, zeroes zero page and low RAM (the MOS's zero page but $F4 and
-$FC), copies the low code down, pages bank 7, copies the banks and the board to PBANK
-and pboard and the controller and drive to the disc driver, blanks the palette, sets
-up the CRTC and both buffers' chains, zeroes bank 6's variables, takes over the
-interrupt and starts the game.  The screen overwrites it once play starts.
+`LOWBSS` holds what every bank must see and what the interrupt writes: `BUF_CY BUF_CXL
+BUF_CXH` (each buffer's window), `PBANK` (4: the physical socket of banks 4..7) and `pboard`
+(`vars.s`); `GATHERH` (21), `clip_mask`, `krlo krhi2 kclo kchi2`, `sprc_ok sprx_ok`, and the
+tune's `mus_dur MUSNOTE isr_t1 isr_t2` (`low.s`); on the Model B `LOWHW` adds the mirror's
+`MIRDTY MIRLO MIRHI MIRWCX MIRMR`.  `LOWBSS2` is `GATHERL` (21), above the code.  The sprite
+list and the dirty lists are not here: they are bank 7's `ENGBSS` (section 6).
 
-## The banks
+`LOWCODE` (`low.s`, `engine/lowram.s`) is assembled into the BOOT piece at `$7000` and copied
+down by `boot`, a byte at a time (asserted under 256 bytes).
 
-The code for banks 4, 5 and 6 starts at $8000 and the data runs from the code's end
-upward, so the data can be any size.  Each of these banks is entered at BANKENTRY =
-$8000.
+### The Model B's main RAM
 
-### Bank 4: sprites
+Everything from $0300 to $8000 is display (`engine/defs.s`, screen shape):
 
-| Range | Model B | Master |
-|---|---|---|
-| the row loop (SPR4CODE: `ds_entry`, the 4-bit blitter and its mirrored twin, the copy blitter) | $8000-$83CA | $8000-$83A7 |
-| the resident sprites' bank-4 part (SPRC_BASE, SPRC_LEN: the game's) | from B4_CODE_END | same |
-| the level's staged sprites | to $BBFF | same |
-| L0TAB, L1TAB, NMASK (the expansion tables: `nibtab.bin`, the game's) | $BC00-$BEFF | same |
-| SWAPTAB (the reversal of a byte's four screen pixels) | $BF00-$BFFF | same |
+| address     | what | symbol |
+|-------------|------|--------|
+| $0300-$07FF | the status bar, 2 rows, one for both buffers | `BARADDR` |
+| $0800-$0A7F | mirror A, 1 row | `MIRR_A` (= `CLEAR0`) |
+| $0A80-$43FF | ring A, 23 rows: buffer 0 | `RING_A` (= `RING0`) |
+| $4400-$467F | mirror B | `RING_B - ROWBYTES` |
+| $4680-$7FFF | ring B, 23 rows: buffer 1 | `RING_B` |
 
-### Bank 5: sprites and the map
+The asserts there: both ring ends are page aligned (so the fold test is a high-byte compare,
+`ringup`), both bases are at xx80 (so the low byte folds by $80), and `MIRR_A` follows the
+bar.  `QBLANK` on the Model B is `BARADDR + 45*8`: the bar's own bytes (section 5).
 
-| Range | Model B | Master |
-|---|---|---|
-| the row loop (SPR5CODE: the same as bank 4's) | $8000-$83CA | $8000-$83A7 |
-| MAP5CODE: `gather5` | $83E5-$844B | $83E5-$83F9 |
-| the resident sprites' bank-5 part (SPRC5_BASE, SPRC5_LEN: the game's) | from B5_CODE_END | same |
-| the level's staged sprites | to $9BFF | same |
-| the map (MAP5 = LV_MAP), a fixed 8K | $9C00-$BBFF | same |
-| L0TAB, L1TAB, NMASK | $BC00-$BEFF | same |
-| SWAPTAB | $BF00-$BFFF | same |
+While a level loads, the display is the loader's scratch, black: the driver's NMI stub runs
+at `NMIPAGE = $0D00` and the load-time program at `LDPROG = $0E00` (both machines), `STAGE
+= $1C00` holds a shared file (16K at most), `STAGE_LVL = $5C00` the level's own file (8K at
+most without its last two sectors), and the level's objects go to `LV_OBJS = $7C00`
+(`defs.inc`).
 
-Both sprite banks end with the same four pages (banks.s `NIB_TABLES`, segments SPR4TAB
-and SPR5TAB in the cfgs' B4T and B5T), so the prologue in bank 7 can name them for
-either, and either bank can draw any image, mirrored or not.  The cfgs give each
-bank's code (B4X, B5X) $600.
+### The Master's main RAM
 
-The menus keep to bank 7, so the resident sprites stay from the first level on
-(`sprc_ok`).
+| address     | what | symbol |
+|-------------|------|--------|
+| $0400-$05FF | the level's tile table: 256 low bytes, 256 high | `LV_PAGE0` (`defs.inc`) |
+| $0600-$0BFF | the interrupt handler, keys, sound | `MRAM` / `MRAMCODE` |
+| $0C00-$0CFF | its state: the chain tables | `MRAMB` / `MRAMBSS` |
+| $0D00       | the disc driver's NMI stub, during a load | `NMIPAGE` |
+| $0E00-$1BFF | the load-time program | `LDPROG` |
+| $1C00-      | the level's objects, `OBJ_BYTES` x `OBJ_MAX` | `LV_OBJS` |
+| $2880-$2AFF | Q's black line: 640 zeros | `QBLANK = BARADDR - ROWBYTES` |
+| $2B00-$2FFF | the bar, main RAM only, single buffered | `BARADDR` |
+| $3000-$7FFF | the ring, 32 rows: main RAM = buffer 0, shadow = buffer 1 | `RINGBASE` |
 
-### Bank 6: tiles
+`defs.s` asserts `LV_OBJS + OBJ_BYTES*OBJ_MAX <= QBLANK`.  The loader's `STAGE` and
+`STAGE_LVL` are both $3000: a shared file is staged in shadow RAM (ACCCON X set while it is
+read or copied), the level's own file in main RAM.  `NMIPAGE` and `LDPROG` are the same on
+both machines (asserted against the cfg's `NMI8271`/`NMI1770`/`LDP` areas).
 
-| Range | Model B | Master |
-|---|---|---|
-| TIL6ENT: `bank6_entry`, `draw_rect_clip` | $8000-$806F | same (padded) |
-| TILCODE: `draw_rect` and its row loop, its fills (the solid's one-byte cascade too), its ring row tables, `select_backbuf`, `scroll_validate` and the ring modulus table (Model B) | $8070-$8691 | $8070-$8559, padded |
-| TILBSS: BUF_CY, FLATTAB | $8692-$869F | same |
-| the level's tiles, 64 bytes a slot from TILES = $8600: id k in slot k + TOFF (2), so id 1 is at $86C0, the first 64 bytes clear of the code | $86C0-$BFFF | same |
+### The staged sprites on the Master
 
-### Bank 7: the kernel and two images
+With `SPRXKEEP` (`BHW = 0` and not `GAMEHAZEL`) the Master reads the SPRX file once and keeps
+it in HAZEL ($C000, 8K, ACCCON Y) and ANDY ($8000 with ROMSEL bit 7, 4K); every later load
+refills the stage from them with no disc read (`ldprog.s unkeep`, `kpart`).  `SPRX_PAGES <=
+HAZEL_PAGES + ANDY_PAGES` is asserted (12K).  `low.s sprx_ok` says the copy exists.
 
-Bank 7 is a resident kernel at its top and, below it, one of two images, each read
-from the disc over the other (`disc.s` `go_game`, `go_menu`; start-up reads the menus'
-with `go_title`).  The two share their addresses, so nothing in either may be called
-while the other is in: what both need is the kernel's.
+### Start-up
 
-| Range | Model B | Master |
-|---|---|---|
-| **the game's image** (GAME): the game's first, the engine's up against the kernel | | |
-| ENGLVL: LV_ATTR0, LV_ALTCLS (256 each), LV_HDR (32), loaded | $8000-$821F | same |
-| GAMEBSS, page aligned: the game's variables | from $8300 (the game's size) | same |
-| ENGBSS, page aligned: the engine's variables | after GAMEBSS | same |
-| free | | |
-| GAMEDATA, GAMECODE: the game's tables and code (the file GAME starts here) | (the game's size) | |
-| ENGCODE: the engine's bank 7 code, ending at the kernel | $B12A-$B806 | $B12A-$B704 |
-| **or the menus' image** (MENU) | | |
-| MUSCODE: the engine's music player | $8000-$809C | $8000-$8098 |
-| MNUCODE, MNUDATA, MNUBSS: the game's menus | from $809D | same |
-| **the kernel**, resident | | |
-| KRNDATA: the row multiples (kept inside a page) | $B807-$B846 | same |
-| KRNCODE | $B847-$BE55 | $B847-$BB51 |
-| KRNBSS: the disc driver's and the swap's variables | $BE56-$BE62 | same |
-| the driver slot: the 8271's driver or the 1770's, as the boot loader found | $BE63-$BEFF | same |
-| KRNHW (the Model B): SECTAB, BUF_SEC0, BUF_SEC0T1, load_req, page aligned | $BF00-$BF6B | -- |
+The boot loader (`loader.s`, under the MOS) ends by writing what it found into a header at
+`$7000` and jumping to `boot` at `$7007`: `dsk_type` (0 = 8271, 1 = 1770), `dsk_drv`,
+`DSK_BANKS` (4), `dsk_board` -- segment `BOOTHDR`, first in area `BOOTRAM` (`init.s`,
+asserted; `build.sh` checks the five addresses are equal across the machines so one loader
+serves both).  `boot` then, in order (`init.s`): interrupts off, the stack, zero page and
+low RAM zeroed, the low-RAM image copied down, bank 7 paged (and made the write bank),
+`PBANK`/`pboard` and the driver's `drv_type`/`drv_unit` copied from the header,
+`blank_palette`, (Master) `MRAMBSS` zeroed and `QBLANK`'s 640 zeros written, `crtc_init`,
+both buffers' chains built for a blank window at the origin, `TILBSS` zeroed through a write
+window into bank 6, `take_over` (the interrupt), `page_logic`, `disc_init` (a 1770 is reset
+and its head found), `jmp go_title`.  The BOOT piece is display RAM once play starts.
 
-The game's image is laid out for the engine to come apart from the game: the game's
-variables, then the engine's; the game's code and data, then the engine's code,
-which ends at the kernel -- `build.sh` sets the file's start from the Model B's
-segment sizes (`od65`, before any link), so the engine's code sits where its own
-size puts it, whatever the game's is (the Master's, pinned to the Model B's start,
-runs on from there and falls short).  ENGCODE is `render_frame`
-and `render_core`, the sprite prologue (`draw_sprite`), `draw_sprites`,
-`match_sprites`, `erase_old`, `copy_partial`, `mark_dirty`,
-`draw_dirty`, `lv_reset`, and on the Model B `mirror_copy` -- in whatever order keeps
-their hot loops in a page (below: the pads).  ENGBSS is DIR_TABLE (the level's
-part of the sprite directory: 2 bytes for each of the game's BOXID0 + BOXN sprite ids), the sprite records (SPRREC, RECCNT, KEEP) and the dirty
-lists.  KRNCODE is `build_sections`, `menu_sections`, `calc_ring`, `ring_addr7`,
-`load_begin`, the palette, `music_stop`, `read_sectors` and the loads' way in (`ld_go`), and
-on the Model B the interrupt's work (`isr_body`, `scan_keys`, `sound_tick`: the
-Master's handler has them in main RAM).  A game may place its own resident code and
-data in KRNCODE with `PLACEH "MRAMCODE", "KRNCODE"` (its sound effects must be there:
-the interrupt plays them).
 
-The small tables are assembled, not built at start-up, each in the bank of the code
-that indexes it: the row multiples (`mul_rowlo/hi`) in bank 7's kernel for the
-prologue, the records, the chain and the menus; the ring modulus (`ringmod_tab`, RINGROWS x 5 entries, which
-`ringmod` reaches with two subtractions) in bank 6 for `draw_rect` on the Model B, where
-the Master's ring needs only `and #31`.  Bank 7 has its own `ring_addr7` (the modulus by
-subtraction, the base from `ringbhi`) so a sprite's screen address never crosses a bank.
+## 3. The banks
 
-## The crossings
+Bank numbers are the code's: `BANK_SPR = 4`, `BANK_TIL1 = 5` (= `BANK_MAP`), `BANK_TILES =
+6`, `BANK_LVL = 7` (`engine/defs.s`).  The loader patches the physical sockets in
+(section 4).  Each bank holds code beside the data its inner loop reads:
 
-A bank cannot page another in over itself, so every crossing is a fixed thunk in low
-RAM (`low.s`).  There is no table and no dispatch in any bank.
+```
+        bank 4                 bank 5                 bank 6                 bank 7
+$C000 +---------------+     +---------------+     +---------------+     +---------------+
+      | L0TAB L1TAB   |     | L0TAB L1TAB   |     |               |     | KRNHW, GAMEHI | B7H $BF00
+$BC00 | NMASK SWAPTAB |     | NMASK SWAPTAB |     |               |     | driver slot   |
+      |               |     |               |     |               |     | kernel (B7K)  |
+      |   sprites     |     |  the map 8K   |     |   the level's |     |---------------|
+      |   (SPRC, then |     |---------------| MAP5|   tiles, from |     | game image B7 |
+      |    SPRX's)    |     |   sprites     |     |   TILES       |     |  ENGCODE      |
+      |               |     |               |     |               |     |  GAMECODE     |
+      |               |     |---------------| B5_ |---------------|     |  GAMEDATA     |
+      |---------------| B4_ | gather5, HLOW | CODE| FLATTAB TILBSS|     |---------------|
+      | row loop +    | CODE| row loop +    | _END| draw_rect ... |     | ENGBSS        |
+      | blitters      | _END| blitters      |     | TILCODE       |     | GAMEOBJ ...   |
+$8000 | ds_entry      |     | ds_entry      |     | bank6_entry   |     | ENGLVL GAMELVL|
+      +---------------+     +---------------+     +---------------+     +---------------+
+                                                                        (or, in the menus,
+                                                                         B7M from $8000)
+```
 
-- `call_bank` (A = the bank): pages it, calls BANKENTRY, pages bank 7 back through
-  `page_logic`.  Once a sprite (the row loop in bank 4 or 5) and once a tile rectangle
-  (`draw_rect_clip` in bank 6, from `erase_old` and `draw_dirty`).
-- `selbb` and `validate`: bank 7's two other calls a frame into bank 6,
-  `select_backbuf` (which patches `draw_rect`'s row-table operand on the Model B) and
-  `scroll_validate` (which draws the newly exposed strips with `draw_rect`).
-- `map_strip`: from bank 6's `draw_rect`, once a tile row: pages bank 5, runs `gather5`
-  over the map in place, pages bank 6 back through `page6`.
-- `map_row`, `map_byte`, `map_put`: the game's reads and writes of the map in bank 5.
+### Banks 4 and 5
 
-Every switch writes ROMSEL_CPY ($F4) before ROMSEL, so an interrupt landing between the
-two restores the bank being entered.  A switch that a store into sideways RAM may
-follow also sets the write bank (below); `page_logic` does, so everything that returns to
-bank 7 has it right.
+The sprite row loop and its three blitters are assembled once into each (`sprloops.s`
+`NIB_LOOPS`, segments `SPR4CODE` and `SPR5CODE`), each copy starting its bank at
+`BANKENTRY = $8000` with `ds_entry` (asserted).  Bank 5 also holds the gather (`MAP5CODE`,
+`gather5`) and on the Model B its `HLOW` table (`MAP5BSS`).  The code must end exactly at
+the game's `B4_CODE_END`/`B5_CODE_END` on the Model B and at most there on the Master
+(`sprloops.s`, `gather.s` asserts): the packer lays the sprites out from those addresses,
+and `build.sh` sizes the cfg's `B4X`/`B5X` areas to them so an overflow fails the link.
+The top 1K of each (`B4T`/`B5T` at `B4_DATA_END`) is the expansion tables `L0TAB`, `L1TAB`,
+`NMASK` (`nibtab.bin`, `NIBTAB_LEN` = 768) and `SWAPTAB` (the dot reversal), the same in
+both so bank 7's prologue can name them for either (`defs.inc`, `banks.s NIB_TABLES`).  The
+map is `LV_MAP = MAP5` (`assets.inc`: $9C00), a fixed 8K below the tables.
 
-The tile gather runs in bank 5 beside the map because reading the map from bank 6
-would take a bank switch per read; `gather5` reads a tile row's ids once into
-GATHERL/GATHERH in low RAM, and the row loop draws both char rows of the tile row from
-them without touching the map again.  The game's own sprite directory is in bank 7
-beside the prologue, which reads it in place: in bank 5 it cost about 1,250 cycles a
-frame.
+### Bank 6
 
-## Bank numbers, sockets and write-select boards
+`TIL6ENT` is its own segment so that `bank6_entry` is the bank's first byte -- `BANKENTRY`,
+where `call_bank` enters -- and falls into `draw_rect_clip` (`tiles.s`, asserted).  Then
+`TILCODE` (`draw_rect`, `scroll_validate`, `select_backbuf`, the row tables) and `TILBSS`
+(`FLATTAB`, `2*(NFLAT+2)` bytes).  The level's tiles start at `TILES` (`assets.inc`, $8600):
+id k is in slot k + `TOFF`, so the first stored tile (id 1; id 0 is a fill) is `TOFF+1`
+slots up, and `init.s` asserts `TILBSS` ends below that slot.  `build.sh` sizes `B6X` to
+`TILES + (TOFF+1)*64`.
 
-The code is assembled for banks 4-7, but the four banks are whichever sockets the boot
-loader finds RAM in (it runs the same probe on both machines).  Every byte of code that
-holds a bank number is recorded at assembly (`cpu.inc`: `bankimm`, `setbank`, `BANKREF`) into the BANKFIX
-segment, which `build.sh` appends to BANKS and checks against the pieces (each entry
-must land on a byte whose low nibble is 4-7).  The boot loader rewrites each byte's low
-nibble to the socket found and keeps the high nibble.  So the hot paths pay nothing.
-Bank 7's game image comes off the disc after boot and is patched as it comes in: its
-entries of both lists are taken out of BANKS's and assembled into LDPROG (`img7fix.inc`),
-and `image_load` does what the boot loader does with them.  The two images share their
-addresses, so an entry cannot say which it is in: the menus' image carries none (`build.sh`
-checks the site labels), and reads a socket from PBANK like the rest of what comes off
-the disc -- LDPROG -- does (four bytes, indexed by bank - 4; the `ldpbank` macro).
+### Bank 7
 
-Solidisk and Watford boards read through ROMSEL like any machine but choose the bank a
-store reaches with a register of their own: Solidisk, user VIA port B bits 0-3
-($FE62 = $0F, then $FE60 = the bank); Watford, a store to $FF30 + the bank.  Every
-switch that a store into sideways RAM may follow carries a companion store, assembled
-as a second `sta ROMSEL` (harmless: A holds the bank) and recorded in the WRFIX segment
-(`cpu.inc` `wrsel` for a constant bank, `wrselx` where the bank is in X as well).
-`build.sh` appends the list after BANKFIX and asserts that every entry sits on
-`sta $FE30`.  The boot loader rewrites each by board -- Watford `sta $FF3n` or
-`sta $FF30,x`, Solidisk `sta $FE60` -- and leaves them alone on a plain machine.  The
-write bank is bank 7's always, but in a *window*: a store into another bank sits between
-a `wrsel` to it and a `wrback` that puts 7's back (cpu.inc) -- the sprite banks'
-`ds_entry` (the dispatch patch), `draw_rect` (its dispatch patches), `map_put`, `selbb`
-and start-up.  Every other switch only reads and leaves the write bank be, and the
-interrupt stores into no bank (what it keeps is in low RAM), so it neither needs a
-write bank nor sets one.  `wrback`'s store is assembled as `sta $FF30`, a store into
-the MOS's ROM on a plain machine (a second `sta ROMSEL` there would page bank 7 in
-under the code), and build.sh accepts it beside `sta $FE30`.  LDPROG reads pboard and
-does it by hand.  On the Master the macros are empty.
+The top is the kernel, resident whichever image is below it; below it one of two images,
+swapped by a disc load.  From the top down (`banks.cfg`, `build.sh`, `vars.s`):
 
-**Why bank 6's entry is a segment of its own (TIL6ENT) and banks 4's and 5's are
-not.**  Every bank `call_bank` enters must have its entry at $8000.  In banks 4 and 5
-the code is one macro (`NIB_LOOPS`),
-assembled into SPR4CODE and SPR5CODE with `ds_entry` its first line, so the entry is
-at $8000 because nothing comes before it.
-Bank 6's code, TILCODE, is `engine/tiles.s` -- the tile blitter,
-`scroll_validate`, `select_backbuf` -- in source order, and `draw_rect_clip`, where
-`call_bank` must land, is not first in it; so `bank6_entry` (falling into
-`draw_rect_clip`) is a segment of its own, placed first in the bank.  Bank 6 is also
-the one entered other ways -- `selbb` and `validate` from low RAM call routines inside
-it (`selbb` in a write window), and `map_strip` returns into it -- which is why its entry
-is a label of its own and not the start of a routine that is called from inside the
-bank too.
+| segment / area | what |
+|----------------|------|
+| `KRNHW` (area `B7H`, $BF00) | the Model B's chain tables (empty on the Master: `PLACEH`) |
+| `GAMEHI` | the game's resident bytes, after `KRNHW`: they survive the image swaps |
+| `DRV8271` / `DRV1770` | the driver slot: one of two drivers, copied in at boot (section 9) |
+| `KRNDATA`, `KRNCODE`, `KRNBSS` (area `B7K`) | the kernel |
+| `GAMEDATA`, `GAMECODE`, `ENGCODE` (area `B7`, file `GAME`) | the game's image, ending at the kernel |
+| `ENGBSS` (area `B7B`, page aligned) | the engine's variables |
+| `GAMEOBJ`, `GAMEROWH`, `GAMEBSS` (area `B7B`, from $8300) | the game's variables |
+| `GAMELVL` (area `B7D`) | the game's page-bound tables, filled at a level's start |
+| `ENGLVL` ($8000) | the level's tables the loader fills |
+| `MUSCODE`, `MNUCODE`, `MNUDATA`, `MNUBSS` (area `B7M`, file `MENU`) | the menus' image, from $8000 |
 
-The boot loader (`loader.s`) finds the RAM with the test Stuart McConnachie's sideways
-RAM Elite loader used: page each of the 16 banks through $F4 and ROMSEL, flip bit 0 of
-the ROM type byte at $8006, see whether it stuck, put it back.  A floating bus fails
-it, and so does write-protected RAM.  The test runs three ways -- through ROMSEL alone,
-the Watford way, the Solidisk way -- and the way that finds the most banks is the board
-(a board's write latch rests on some bank, so the plain test finds that one bank on a
-board machine too; plain wins a tie).  Each RAM bank is then classed: empty; holding a
-ROM image the MOS is not running (no entry in its table at $02A1); holding a ROM the MOS
-recognised.  Two socket numbers that reach the same RAM are found by a signature written
-to each and read back (comparing the banks' bytes would call four blank banks one).
-The four lowest sockets of the best class win; a bank holding a live ROM is fair game
-as a last resort because nothing calls the MOS once the pieces are down and interrupts
-stay off until the game's own handler is in.  With fewer than four the loader says
-what it found, and how it wrote, and returns to the MOS.  A machine with RAM of two
-kinds gets the kind with more; two boards at once are not handled.
+In detail: `KRNHW` is `BUF_SEC0` (4), `BUF_SEC0T1` (4), `SECTAB` (2 x `SECBYTES`), `BUF_QS`
+(3), `BUF_KS` (3) -- on the Master these are `MRAMBSS`'s.  `GAMEHI` holds Cleo's `score` and
+`hi_score`.  The kernel is `mul_rowlo/hi` (`KRNDATA`), the chain's builders, the palette, the
+disc reads, `music_stop`, and on the Model B the interrupt body, keys and sound.  The game's
+image is its data and code, then the engine's `frame.s` half.  `ENGBSS` is the dirty lists,
+the records, `KEEP`, `SPRLIST` and `DIR_TABLE`.  The game's variables are small ones page
+aligned at $8300 (`GAMEBSS`), a half-page-aligned table (`GAMEROWH`) and page-aligned arrays
+(`GAMEOBJ`).  `GAMELVL` sits in the 224 bytes between `ENGLVL`'s end and $8300
+(`__GAMELVL_SIZE__`: Cleo uses 216 today).  `ENGLVL` is `LV_ATTR0` (256), `LV_ALTCLS` (256)
+and `LV_HDR` (`HDR_LEN`, with the game's header tail after it).  The menus' image is the
+tune's player first (`MUSCODE`), then the game's menus.
 
-## The display
+`build.sh` fixes the sizes before each link, because ld65 fills an area from its start and
+these must end at fixed places.  From `od65 --dump-segsize` of the Model B's object: the
+slot is as big as the larger driver (`DRVN`) and ends at `B7H`; the kernel ends at the slot,
+moved down a little if `KRNDATA` would straddle a page; the game image ends at the kernel
+(`B7` start = kernel start - the three segments' sizes); the menus' image runs from $8000
+to the kernel.  The Master's are pinned to the Model B's.  As built today: `__KRNDATA_RUN__`
+$B733, `__DRV8271_START__` $BE64 (size $9C), `__B7_START__` $944F, `__ENGBSS_RUN__` $9000
+(size $428).  The free room in the game's image is `__B7_START__ - (__ENGBSS_RUN__ +
+__ENGBSS_SIZE__)` -- 39 bytes today; in the menus' image `__KRNDATA_RUN__ - (__MNUBSS_RUN__
++ __MNUBSS_SIZE__)` -- 2,249.  The game image's variables (`GAMEBSS` to the end of `ENGBSS`)
+are zeroed as the image comes in, to their exact end (`defs_ld.inc` `GAME_BSS`,
+`GAME_BSS_PAGES`, `GAME_BSS_REM`; `ldprog.s image_load`).
 
-Two units, always named (`docs/GUIDE.md`, *The concepts*): a **screen
-pixel** is MODE 1's, 320 to a line, two bits, four to a byte; a **game pixel** is the
-game's square pixel, 2 screen pixels wide and 2 scanlines tall.  MODE 1, 80 characters
-(160 game pixels) wide.  The palette is logical 0-3 = black, cyan, magenta, yellow;
-the colours come from a dither per game pixel, which the game's asset pipeline chooses:
-a game pixel is four screen pixels, so it can show any combination of four of the
-colours.  The engine needs only that the dither be the same for every game pixel of a
-colour, whatever its position: then a tile or sprite reversed left to right with each
-byte's two game pixels swapped is exact, which is how it mirrors them.
+Why game-first in the image: the engine's `ENGCODE` ends against the kernel on the Model B,
+so its hot blocks sit at known distances from the kernel's start and the pads can be found
+once for both machines (`pads.inc`); the game's code and data go below it.
 
-Horizontal scrolling is by whole characters (two game pixels) through the CRTC start
-address.  Vertical scrolling is by a game pixel, two scanlines (`wfine` = 0, 2, 4 or 6
-lines into the character row), through a *rupture*: the frame is several CRTC frames, each
-section reprogrammed from a chain of VIA T1 interrupts and the whole re-phased at every
-vsync.  The window is `wx`, `wy` in game pixels (map coordinates); `wcx` = wx/2 and `wcy` = wy/4 in
-characters and character rows; the ring offset of the window's top-left character is
-`ring_s` and its slot `barq` (`calc_ring`).  `wcy` is a byte, and so is every character
-row the renderer passes around (`rc_y`, the records' rows, BUF_CY): a map is at most
-256 character rows, 128 tiles, tall.  With TALLMAP (the Master only) the rows stay
-bytes -- the ring's modulus needs only their low five bits, and the rest of their uses
-are offsets from the window -- and `render_frame` keeps `wcy`'s high bits in `wcyh`,
-from which `draw_rect` rebuilds the full row it reads the map at: 256 tiles.
+The two images are one disc file a machine, `IMG7`: the menus' image padded to a sector,
+then the game's (`build.sh`; `ldprog.s MENU_SECS`).
 
-Both buffers are rings of characters, 80 to a row, and the playfield is drawn in map
-space: map character (cx, cy) lives at ring character ((cy mod RINGROWS) x 80 + cx) mod
-RINGCHARS (`draw_rect`).  So a scroll only draws the newly exposed strips
-(`scroll_validate`), a displayed row may start anywhere in a slot and straddle the
-ring's end, the bar has a fixed home outside the ring, and only the playfield's
-sections walk the ring.
+
+## 4. The crossings and the write bank
+
+A bank cannot page another over itself, so every crossing is in low RAM (`low.s`,
+`engine/lowram.s`), with no table and no dispatch in any bank:
+
+| routine | what |
+|---------|------|
+| `call_bank` | A = a bank: page it, `jsr BANKENTRY`, page bank 7 back.  Once a sprite (banks 4/5) and once a rect (bank 6) |
+| `selbb` | page bank 6, open a write window, `select_backbuf`, close it, bank 7 back |
+| `validate` | page bank 6, `scroll_validate`, bank 7 back (no window: it stores into no bank itself) |
+| `map_strip` | page bank 5, `gather5`, page bank 6 back (`page6`): once a tile row |
+| `map_row`, `map_col`, `map_byte`, `map_put` | the logic's map access: page bank 5, read (or write, in a window), bank 7 back |
+| `page_logic` | bank 7 back, every register and the carry kept: the way home from every crossing |
+
+`ROMSEL_CPY` is written before `ROMSEL` every time, so an interrupt between the two puts
+back the bank being entered: the handler restores from the copy.
+
+### The write bank
+
+Watford and Solidisk boards choose the bank a *store* reaches with a register of their own
+(`hw.inc`: Watford a store to `WRSEL_WATFORD + bank`, $FF30; Solidisk the user VIA's port B
+bits 0-3, `WRSEL_SOLIDISK` $FE60 after `UVIA_DDRB = SOLIDISK_BITS`) and read through ROMSEL
+like everyone else.  The rule (`cpu.inc`): the write bank is bank 7's, always, except in a
+*window* -- a store into another bank between a `wrsel` to it and a `wrback` that puts 7's
+back.  The windows are the sprite row loop (`ds_entry` to `ds_done`), `draw_rect` (to
+`@done`), `map_put`, `selbb` and `boot`.  Nothing else moves it: a switch that only reads
+leaves it be, and the interrupt stores into no bank (what it keeps is in zero page, low RAM
+or `MRAMBSS`), so an interrupt inside a window finds the window's bank and leaves it.
+
+The macros: `wrsel n, b` after a switch to the constant bank `n` from code in bank `b`'s
+image; `wrselx b` where the bank is in A and X; `wrback b` at a window's end.  Each is
+assembled as a second `sta ROMSEL` (harmless: A holds the bank) -- `wrback`'s as `sta
+WRSEL_WATFORD`, a store into the MOS ROM on a plain machine, so that it does not page bank 7
+in under whatever runs there -- and recorded in the `WRFIX` segment (`WRREC`: bank, address,
+kind 4..7 or `WR_INX`).  On the Master the macros are empty.  The boot loader rewrites each
+site by board (`loader.s @wfix`): Watford `sta $FF3n` or `sta $FF30,x` (`OP_STA_ABSX`),
+Solidisk `sta $FE60`.  `build.sh` asserts every entry sits on a `sta $FE30` (or `sta $FF30`)
+and has a legal kind.  As built today the Model B has 13 write-bank stores, the Master 0
+(the build's `BANKS:` line).
+
+### Bank numbers and sockets
+
+Every byte of code that holds a bank number is recorded: `bankimm op, n, b` emits `op #n`
+and a `BANKREF` into the `BANKFIX` segment (bank `b`'s image, the address); `setbank n, b`
+is `bankimm lda` plus the two stores.  The site is marked with a cheap label `@bf_<name>`
+because any other kind of symbol would end the enclosing routine's `@` scope, so two sites
+in one routine need different tags (a clash is a duplicate-symbol error, not a silent
+miss).  `build.sh` appends `bankfix.bin` and `wrfix.bin` to BANKS after the pieces, checking
+each entry lands on a byte whose low nibble is 4..7.  Bank 7's images come off the disc
+later, so their entries go to `img7fix.inc` instead and `ldprog.s image_load` applies them
+after each read; the menus' image may carry none (`build.sh` asserts on the `@bf_`/`@wr_`
+site labels: use `ldpbank`).  Code the loader cannot patch -- the load-time program, the
+menus' image -- reads the physical bank from `PBANK` (`ldpbank op, n` = `op PBANK + (n-4)`).
+
+### The boot loader's RAM probe
+
+`loader.s find_ram`: for each of the 16 sockets, page it (through `$F4` and `ROMSEL`), flip
+bit 0 of the ROM type byte at `$8006`, see whether it stuck, put it back.  The test is run
+three ways -- writing through ROMSEL alone, the Watford way, the Solidisk way -- and the board
+is the way that finds the most banks, plain winning a tie.  Each writable socket is then
+classed: 0 RAM with no ROM image, 1 RAM with an image the MOS is not running (no entry in
+its table at `MOS_ROMTAB` $02A1), 2 RAM holding a ROM the MOS recognised, taken only when
+nothing else is left.  Two socket numbers reaching one RAM are found by a signature written
+to each (`SIG_TAG | socket` at the copyright offset) and read back, and the extras dropped.
+The four banks are the lowest-numbered of the best class; fewer than four prints a message
+naming the game, how writes were tried and what was found (`no_ram`), and returns to the
+MOS.  Machine: OSBYTE 0 (X >= `MOS_MASTER` = 3 is a Master, which picks `BANKSM`).  Drive:
+OSGBPB 6.  Controller: the DFS ROM's version string (a title starting "DFS" with version
+'2' is a 1770; else 8271), or W / I held at boot.  BANKS is loaded whole with OSFILE to
+`BANKSBUF` $2000 (asserted to end below `BOOTRAM`) and the pieces copied out with
+interrupts off from there on.
+
+
+## 5. The display
+
+### Units and the window
+
+The window is `WINPX = 160` game pixels wide (80 chars) and `VISLINES = VISROWS*8` scanlines
+tall (168 = 84 game pixels on the Model B, 240 = 120 on the Master).  Horizontal scroll is
+by character (2 game pixels), vertical by two scanlines (one game pixel) through the
+rupture.  `render_frame` derives from the game's `wx, wy` (map game pixels): `wcx = wx >> 1`,
+`wcy = wy >> 2` (a full 16-bit shift: tall maps pass wy = 512), `wfine = (wy & 3) * 2`
+(`frame.s`).  `calc_ring` (`kernel.s`) then gives the window's place in its ring: `ring_s =
+((wcy mod RINGROWS) * 80 + wcx) mod RINGCHARS`, `barq = ring_s / 80` (the slot), and on the
+Model B `wcxm = ring_s mod 80` and `mrow`, the map row shown by the window row in the last
+slot.  Each buffer holds `BUFROWS = VISROWS + 1` rows: the visible ones and the bottom
+partial's.
+
+### The ring
+
+```
+   slot 0  +------------------------------+  <- RING0 / RINGBASE
+           |                              |
+           :                              :
+   slot q  |###### window row 0 ##########|  <- ring_s = q*80 + wcxm (char granular)
+           |##############################|
+           :   BUFROWS rows held          :
+           |##############################|
+           |###### bottom partial's row ##|
+           |                              |
+  last     |......... Model B: straddles  |  <- the row that wraps: read from the
+  slot     +------------------------------+     mirror below the base (Model B)
+           |  composed row (Master): the  |     or folded by the CRTC (Master)
+           :  ring row above the window   :
+```
+
+Each buffer is a ring of `RINGROWS` 80-char rows and the window slides round it: a row
+that would fall off the end comes back at the start.  On the Master the ring is the whole
+20K the CRTC wraps ($3000-$7FFF), so the hardware fold is the ring wrap; `RINGROWS` is 32
+because that is the size of the region the hardware wraps, not a choice (`defs.s`).  On the
+Model B the ring is 23 rows of main RAM and the fold is software: the *mirror*, a copy of
+the ring's last slot row immediately below the ring base, so that the one displayed row
+that straddles the end can be read by the CRTC as a single run (`mirror.s`).  Only the
+chars that row takes from the mirror, `wcxm..79`, need to be right.  Its writers note the
+range they wrote -- `draw_rect`'s head in line, the sprite prologue and `copy_partial`
+through `mir_dirty` (`MIRDIRTY_BODY`, `macros.s`) -- into `MIRDTY MIRLO MIRHI` per buffer,
+and `mirror_copy` (the frame's last step) copies that range.  It redoes the whole row when
+`mrow` changed (the window crossed a slot boundary) or on a move left past the last copy's
+`wcxm` (`MIRMR`, `MIRWCX`): chars left of the old `wcxm` were the row above's then and were
+never noted.
+
+### The composed row
+
+With `wfine` non-zero the top of the window is the bottom `8 - wfine` lines of ring row
+`wcy`, so the chain shows an extra one-row section (A) whose source is a row *composed* each
+frame: `copy_partial` (`frame.s`) copies lines `wfine..7` of row `wcy` to lines
+`0..7-wfine` of the ring row above the window, all 80 columns, every frame the fine scroll
+is on.  That row is the one ring row the window does not hold: ring chars `[ring_s - 80,
+ring_s)`, window aligned rather than slot aligned, so its copy may fold at the ring's end
+mid-run.  This is why `VISROWS` is 30 on the Master: 31 held plus the composed row fill the
+32-row ring exactly (`defs.s`).
 
 ### The sections
 
-| Section | Model B | Master |
-|---|---|---|
-| T, the bar | 2 rows at $0300 | 2 rows at $2B00, D = 0 |
-| A, the composed row (when `wfine` > 0) | 8 - f lines | 8 - f lines |
-| P, the playfield | P1 to the ring's end, then M from the mirror | one section: the CRTC folds it |
-| P2, the bottom partial (when `wfine` > 0) | f lines | f lines |
-| Q, blanking | 16 rows, vsync at row 8 | 7 rows, vsync at row 3 |
-| visible rows | 21 (84 game px) | 30 (120 game px) |
+The frame is a rupture: several CRTC frames ("sections") in one 312-line field,
+reprogrammed from a chain of VIA T1 interrupts and re-phased at every vsync (`kernel.s`).
+Top to bottom:
 
-All sections total 39 rows, 312 lines.  The bar is scanned (QROWS - QVSYNC) x 8 lines
-after the vsync starts: 32 on the Master, where the Master MOS's own MODE 1 frame puts
-the picture; 64 on the Model B, 4 lines below where a MODE 1 screen sits.
+```
+   +-----------------------------+
+   | T   the bar       2 rows    |  BARROWS, fixed home (BARADDR)
+   +-----------------------------+
+   | A   composed row  8-f lines |  only when wfine = f > 0
+   +-----------------------------+
+   | P   playfield     VISROWS   |  from the window's slot; Model B: split into
+   |     rows                    |  P1 (to the ring end) and M (from the mirror)
+   +-----------------------------+
+   | P2  bottom        f lines   |  only when f > 0
+   +-----------------------------+
+   | Q   blanking      QROWS     |  display off; the vsync on row QVSYNC; starts
+   |     rows                    |  at QBLANK
+   +-----------------------------+
+```
 
-The **composed row** A shows lines f..7 of the window's top row at the top of the
-picture.  It is the ring row just above the window, ring characters [ring_s - 80,
-ring_s): a row at a constant offset from its source, so a horizontal scroll leaves it
-valid.  `copy_partial` recomposes all 80 columns every frame that `wfine` is not 0
-(tracking the columns drawn since the last copy SAVED under 0.3% of a frame; the
-unrolled copy is about 1% of a frame faster than a loop).  On the Master the ring holds
-the 31 rows of the window and its bottom partial plus this one, which is why VISROWS is
-30.  On the Model B the 23 slots are the 21 visible rows, the composed row and the
-bottom straddle.
+`FRAMEROWS = 39` char rows; `QROWS = 39 - VISROWS - BARROWS`: 16 on the Model B (vsync at
+row `QVSYNC = 8`), 7 on the Master (`QVSYNC = 3`).  The bar is scanned `(QROWS - QVSYNC) * 8`
+lines after the vsync -- 64 on the Model B, 32 on the Master -- which is the time the game
+has to draw it (section 6).
 
-The **mirror** (Model B): a displayed row that starts within the ring's last 80
-characters straddles the ring end.  The CRTC cannot fold a 23-row ring, so a copy of
-the ring's last slot row sits immediately below the ring base, where the address
-`c - RINGCHARS` names the straddling row, and every row after it follows on
-contiguously: the chain reads P1 up to the ring's end and M from the mirror
-(`build_sections`, `mirror.s`).  Only the characters that row takes from the mirror --
-`wcxm`..79, where `wcxm` is ring_s mod 80 -- need to be right, and when the window is
-slot aligned no row straddles at all.  The blitters note the columns they write to the
-row the mirror follows (`mir_dirty`, and `draw_rect`'s own copy in line, the sprite prologue
-and `copy_partial`), and `mirror_copy`, the last step of `render_core`, copies only
-those.  It redoes the whole row when a move left uncovers characters the last copy
-never reached, or when the map row in the last slot (`mrow`) has changed since it: a
-move right across a slot boundary wraps `wcxm` through 0, and the characters now from
-`wcxm` on were written while they were the row above's, left of the old `wcxm`, so no
-blitter noted them.  (Missing that second case showed stale mirror characters in the
-straddling row, a strip of the tile that was there before.)
+`build_sections` (`kernel.s`) fills the buffer's chain, `NSECT = 6` entries of `SECENT = 8`
+bytes in `SECTAB` (buffer 1's at `SECBYTES = 48`):
 
-**Q's first scanline.**  A 6845 always displays the first scanline of a frame whatever
-R6 says, so Q's row 0 line 0 is one more line under the picture.  As the ring row
-after the playfield it would be the next map line, a repeat of P2's first line under
-a fine scroll, or junk at the map's bottom; so Q always starts at QBLANK (defs.s), a
-line that is always the same.  The Master's is 640 zeros below the bar, in main RAM,
-which Q's step reads with D = 0 (below).  The Model B has no spare 640 bytes, so its
-QBLANK is the bar's own first line from its 45th character, and the palette blanks
-that scanline: Q's step (qsect) fires QLEAD early, as the line before Q goes into its
-horizontal blanking, and writes yellow, magenta and cyan black in the order they can
-first show on the line (the 45 puts the lives icon and the early cyan out of it: yellow
-and magenta first show at its 9th character, in the score's digits, cyan at its 39th),
-the last writes landing with the beam already on it.  Behind a two-line P2 Q's
-interrupt waits on P2's step, too late for the palette and for Q's R9/R4/R6, so that
-step (ksect) does the kill and writes Q's shape itself.  The vsync puts the colours
-back unless the palette is blanked (`palon`).  Measured (crtctime.mjs, register 21):
-the first write at characters 80-92, yellow done before the line, magenta by its 6th
-character, cyan by its 30th.
+| offset | field | meaning |
+|--------|-------|---------|
+| +0, +1 | `SE_R12`, `SE_R13` | the *next* section's start address (high byte first) |
+| +2     | `SE_R4` | this section's rows - 1 |
+| +3     | `SE_R9` | its scanlines a row - 1 |
+| +4     | `SE_R6` | rows displayed (more than it has: display on; 0: off) |
+| +5     | `SE_R7` | the vsync row: `R7_NEVER` (30) everywhere but Q, whose is `QVSYNC` |
+| +6, +7 | `SE_T1L`, `SE_T1H` | the *next* section's duration as a T1 latch value: lines x `LINE` (64) - `T1_RELOAD` (2) |
 
-### The chain
+The shape is section i's and the address and duration are section i+1's because R12/R13
+latch at the next restart and the T1 latch takes effect one interrupt later.  Section 0
+(T) takes its address and length from `BUF_SEC0`/`BUF_SEC0T1`, which the vsync programs
+from the buffer about to be shown.  The chain stops at Q: the step's walk `sec_idx` on only
+while R7 is `R7_NEVER`, so a late vsync cannot run it off the table.
 
-`build_sections` fills SECTAB (8 bytes an entry: R12, R13, R4, R9, R6, R7, T1 low, T1
-high; 48 bytes a buffer) from `ring_s` and `wfine`.  An entry holds section i's shape
-and section i+1's address and duration, because R12/R13 latch at the next restart and
-a T1 latch takes effect one interrupt later.  Section 0, the bar, takes its address and
-length from BUF_SEC0/BUF_SEC0T1 of the buffer about to be shown.
+Q's start is a black line whatever the fine scroll, because a 6845 shows a frame's first
+scanline whatever R6 says: as the next map row it would be junk or a repeat of P2's first
+line.  The Master's `QBLANK` is 640 zeros below the bar in main RAM, written by `boot`; Q's
+step puts ACCCON D back to 0 before it (under $3000, D = 1 would read HAZEL/ANDY).  The
+Model B has no spare black line, so Q starts at the bar's 45th char (`QBLANK = BARADDR +
+45*8`) and Q's step blacks the palette for it -- 12 writes (`killpal`), yellow and magenta
+then cyan, in the order `defs.s` says the colours first appear on that line -- and the vsync
+puts the colours back unless `palon` is clear (`blank_palette` clears it, `set_palette`
+sets it).  Behind a two-line P2 (f = 2) there is no time for Q's own step, so P2's step does
+the kill at its end (`@kend`, `KENDWAIT`) and writes Q's shape itself; `build_sections`
+records which entry is responsible in `BUF_QS` (-> `qsect`) and, on the Model B, `BUF_KS`
+(-> `ksect`), `SECT_NONE` for neither.
 
-Each T1 interrupt is a CRTC restart.  R12/R13 were armed during the section before.
-R9 and R4 together decide where the new section ends: the CRTC latches end-of-frame at
-the start of the scanline where row = R4 and line = R9, so for a two-line section both
-must be in place before scanline 1, 128 cycles after the restart; R6 is compared from
-scanline 1 on, so Q's R6 = 0 has the same deadline.  The chain is phased (VS2T) so the
-step's first CRTC write lands just after the restart.  Every cycle before that write is
-lead the phasing allows for, so none is spent waiting where it can be avoided: the
-Model B's stub pages bank 7 in inline and jumps to the body and back (`STUBLAT`);
-on the Master only the step after the bar's -- the one that switches ACCCON D to the
-displayed buffer, which must happen before its boundary -- writes D and holds about
-26 cycles, and the others fire later instead (BARLATE for the bar's, STEPLATE for the
-rest: VS2T, the bar's length and entry 0's duration carry them).  Then it writes R9, R4, R6, R7
-in that order (with R4 third it landed at about 140 cycles for a two-line P2, the
-section never ended, and both borders lit on every scroll frame).  R12/R13 go last,
-after the T1 reload and the index bookkeeping, so they land on scanline 1: written
-straight after R7 they fell across the end of scanline 0, and some 6845s -- the VL6845
-among them (Tom Seddon's r4-3 test) -- end a partial (R4 = 0 on row 0) at once and
-reload the start address as that scanline ends.  A Master with such a chip lost the
-R12 write and showed the playfield 256 characters adrift, a 16-character tear down
-every row whenever the fine scroll was not 0.
+The menus use the same chain with section 0 moved off the bar: `menu_sections` points it at
+two black ring rows below the window (`MENUBAR`; `VISROWS + BARROWS <= RINGROWS` asserted),
+so the bar is neither shown nor touched while the menus run.
 
-The chain stops at Q, the only section whose R7 is the vsync row, so a late vsync
-cannot walk it off the end of SECTAB.  The vsync interrupt (CA1, at the end of the
-2-line pulse) restarts T1 first, for a constant latency, then re-phases: R9 = 7 and
-R4 = cur_r7 + QROWS - 1 - QVSYNC, so this frame ends a fixed number of rows after the
-vsync whatever the row counter did (a counter that has run past its vertical total
-otherwise never recovers).  It pre-arms the bar's R6 there, in Q, where a new R6
-cannot show.  A pending flip is taken only at a vsync at least two after the last
-one; the vsync then programs section 0 from the buffer about to be shown, scans the
-keyboard and runs the sound.
+### The step
 
-`crtc_init` writes R8 = 0 on both machines: the MOS's MODE 1 leaves interlace sync on,
-which puts every other field's vsync half a scanline later (on BeebEm's Model B it
-showed as a band across the picture).
+The interrupt (`isr_body` on the Model B, `irq_handler` on the Master; `kernel.s`) tests
+`VIA_IFR` for T1.  A step reprograms the next section from `SECTAB[sec_idx]`.  Deadlines
+(`kernel.s`'s notes, measured with Cleo's `test/crtctime.mjs`): R9 and R4 together decide
+where the section ends, latched at the start of the scanline where row = R4 and line = R9,
+so for a 2-line section both must be in place before scanline 1 -- 128 cycles after the
+restart -- and R6 is compared from scanline 1 on.  So the order is **R9, R4, R6, R7**, then
+the T1 latch and `sec_idx`, then **R12/R13 last** so they land on scanline 1.  Written
+straight after R7 they fell across the end of scanline 0, and on a partial (R4 = 0 written
+on its last row) some 6845s -- the VL6845, Tom Seddon's "r4-3" -- end the frame at once and
+reload the start address as that scanline ends: a Master with such a chip lost the R12
+write and showed a 16-char tear whenever the fine scroll was not 0.
 
-VS2T (`engine/kernel.s`) is the vsync-to-bar time less the pulse, less the lead that
-puts each step ahead of its restart (-35 -36), less the step's own entry costs:
-STUBLAT -- on the Model B 18 - 22 - 4 ticks, its stub paging bank 7 in (page_logic
-inlined, a jmp each way, no write bank); on the Master -BARLATE -- and -8 for the
-load_req test.  +2 ticks on both: the vsync loads it as an immediate.
+The chain is phased so a step fires about 50 cycles before its restart (`VS2T`).  On the
+Master the step after the bar's (`dsect`) switches ACCCON D to the displayed buffer's and
+then holds (`DHOLD` = 5 loops of dey) so its first CRTC write follows the restart; D is the
+memory map, sampled by every fetch, so it must be in place before the boundary, and the
+bar's T1 fires `BARLEAD` early for it.  Every other Master step fires later instead, by
+`STEPLATE` (the bar's by `BARLATE`), and spends nothing waiting.  Q's step fires `QLEAD`
+early; behind a 2-line P2 that P2's step fires `P2EARLY` early.  The constants (`kernel.s`):
+Model B `BARLEAD = BARLATE = STEPLATE = P2EARLY = 0`, `QLEAD = 40`, `KENDWAIT = 4`; Master
+`BARLATE = 13`, `STEPLATE = 20`, `BARLEAD = 23`, `QLEAD = 6`, `P2EARLY = 12`, `DHOLD = 5`.
+`STUBLAT` is the Model B's stub cost (`18 - 22 - 4 + 2`) or the Master's `-BARLATE`, and
+`VS2T = (QROWS-QVSYNC)*CHARLINES*LINE - 2*LINE - 35 - 36 - STUBLAT - 8 + 2` is the T1 count
+from the vsync to the bar's step; the comment at `VS2T` accounts for each term.
 
-**The Master's ACCCON D.**  D is the memory map the CRTC fetches from, sampled on every
-fetch, so it must change before a section's boundary, not after.  The bar's T1 fires
-BARLEAD = 23 us earlier than every other step's lead, so D can be switched in the
-horizontal blanking of the bar's last line; the section after the bar runs BARLEAD
-longer to end where it should.  The handler sets D from `disp_d` for every section but
-the bar (which starts with D = 0, cleared at the vsync); the flip moves `disp_d` to the
-new buffer with the section chain.  Q's step (qsect, the vsync's copy of the buffer's
-BUF_QS) puts D back to 0 before Q's first scanline, so QBLANK is main RAM for both
-buffers: it fires QLEAD early (the section before Q runs STEPLATE + QLEAD shorter), and
-its D write is the handler's first act -- behind a two-line P2's own step there is no
-time for more -- keyed on sec_idx = qsect (the chain rests on Q till the vsync).  A
-bottom partial's step fires P2EARLY early too, so it is done in time.  crtctime.mjs
-logs every ACCCON write: D lands at characters 98-114 of the line before its boundary.  `select_backbuf`'s read-modify-write of ACCCON's X
-bit runs with interrupts off, since the handler writes D.
+### The vsync
+
+The other interrupt source is CA1.  The vsync handler, in order: restart T1 with `VS2T`
+first (constant latency), clear CA1, handle `load_req` (below), T1's interrupt on, **re-phase**
+-- R9 = 7, the bar's R6 pre-armed now in Q where a new R6 cannot show, R4 = `cur_r7 + QROWS -
+1 - QVSYNC` so that T starts exactly `QROWS - QVSYNC` rows after the vsync even if the row
+counter had run past its total -- then `inc vsyncs`, the **flip** if `flip_req` is set and
+`FLIPWAIT` (2) vsyncs have passed since the last (`flipvs`): `disp_sect = next_sect`,
+(Master) `disp_d = next_buf`, `flip_req = 0`; then section 0 from the displayed buffer's
+`BUF_SEC0`/`BUF_SEC0T1`, `sec_idx` set to its entry, (Master) `dsect` and `qsect` set and D
+cleared for the bar, (Model B) `qsect`/`ksect` set and the palette restored if `palon`;
+then `scan_keys` and the sound (section 10).  The `FLIPWAIT` of two means a flip at most
+every other vsync, 25 Hz.
+
+### Double buffering
+
+Model B: two rings, `RING_A` and `RING_B`; `select_backbuf` (bank 6) sets `ringbhi`,
+`ringehi`, `ringe3` for the blitters' folds and patches `draw_rect`'s ring high-byte table
+operand (`RINGHIOP`) to the buffer's.  Master: one address range in main and shadow RAM;
+`select_backbuf` sets ACCCON X (the CPU's view, `tsb`/`trb` so it cannot straddle the
+interrupt's D writes) and the chain's D switch picks the displayed one.  `crtcb` is the
+buffer's CRTC base; on the Model B `crtcbm` is the same less the ring, the mirror redirect
+`@addr` uses for a straddling row.
 
 ### Load mode
 
-A disc load stops the chain (interrupts are off while the disc is read).  Stopped
-mid-chain the CRTC would repeat whatever section it was in with no vsync, and monitors
-and capture cards take seconds to regain sync.  So `load_begin` asks the chain to stop
-at a frame boundary (load_req: 0 running, 1 stop asked, 2 stopped, 3 resume asked): the
-next bar step programs a standard 39-row frame instead (R4 = LDR4 = 38, R7 = LDR7 = the
-row the chain's vsync is on) and turns T1's interrupt off, so the sync never moves.
-The switch is made in the interrupt handler's bar step, so it happens at the frame
-boundary however long the handler's other work runs (a version that waited for a
-vsync and polled for the bar's T1 switched one section late when the vsync's work ran
-past that T1, and made a short frame).  While stopped the vsync still counts, scans
-the keys and plays the sound.  LDPROG's `ld_resume` sets 3 at the load's end; the next vsync turns T1's interrupt
-on again and its re-phase, with cur_r7 = LDR7, is exactly the standard frame's total,
-so the bar step at that frame's end takes the display back as if it had never stopped.
-The palette is black throughout.
+A disc load runs with interrupts off.  Stopped mid-chain the CRTC would repeat a few lines
+for ever and monitors lose sync, so `load_begin` asks the chain to stop at a frame
+boundary: `load_req = LDR_STOP` (1); the next *bar step* (`@ldsw`, the frame boundary
+however long the vsync's work ran) programs a standard 39-row frame -- `LDR4 = 38`, the
+vsync on `LDR7 = BARROWS + VISROWS + QVSYNC` (31 on the Model B, 35 on the Master: the MOS's
+own row) -- turns T1's interrupt off and sets `LDR_STOPPED` (2).  While stopped the vsync
+only counts and keeps keys and sound alive.  The load's end sets `LDR_RESUME` (3) and clears
+stale T1/CA1 flags (`ldprog.s ld_resume`); the next vsync re-arms T1 and re-phases from
+`cur_r7 = LDR7`, which with `QROWS - 1 - QVSYNC` is the standard frame's own total, and the
+bar step at that frame's end takes the display back.  `crtc_init` (`boot.s`) starts the
+machine in this same frame, R0..R13 in order so R12/R13 are written last, R8 = 0 (no
+interlace sync: the MOS's MODE 1 leaves it on, which puts every other field's vsync half a
+line later), R10 = cursor off.
 
-### Double buffering and the flip
 
-`cur_buf` is the buffer being drawn.  `render_frame` waits for the previous flip, draws
-the HUD digits if bar_dirty (the bar is single-buffered and drawn where it is shown, so
-this comes first, before the CRTC reaches it), derives the character window, runs
-`render_core`, builds the chain for this buffer and requests the flip.  `render_core`:
-`selbb`, `calc_ring`, `match_sprites`, `erase_old`, `validate`, `draw_dirty`,
-`draw_sprites`, `copy_partial`, and on the Model B `mirror_copy`.
+## 6. The frame
 
-The bar's template (the BAR file, 1,280 bytes) is read into place with the game's
-image and never redrawn by the engine; the game draws what changes, in `hook_hud`,
-while bar_dirty is set.  The bar lives outside the ring because in the ring it moved
-with every vertical scroll and re-copying its 1,280 bytes cost 13,310 cycles a frame.  The menus never show or touch
-it: `menu_sections` points section 0 at two black ring rows below the window instead.
+`render_frame` (`frame.s`) is the game's one call a rendered frame.  In order:
 
-## The tiles
+1. `wait_flip` -- inline, its one caller: spin while `flip_req` is set.  The previous frame's
+   flip must land before this buffer is touched; it does not wait for the flip it will ask
+   for, so the next logic step runs while that is pending.
+2. The bar first: if `bar_dirty`, `jsr hook_hud` (the game's) and clear it.  The bar is
+   single buffered and drawn where it is displayed, inside the `QROWS - QVSYNC` rows between
+   the vsync just returned from and its first scanned line (section 5).  The template comes
+   with the game's image (the BAR file) and nothing erases it.
+3. Derive `wcx`, `wfine`, `wcy` from `wx`, `wy`.
+4. `selbb` -> `select_backbuf` (bank 6): the back buffer's constants, `clip_mask` and the
+   `krlo..kchi2` bounds (below), the record base `recp`/`recb`.
+5. `calc_ring`: `ring_s`, `barq` (Model B: `wcxm`, `mrow`).
+6. `match_sprites`: `KEEP[i]` for every listed sprite (below).
+7. `erase_old`: redraw the tiles under this buffer's old records that are not kept -- each
+   rectangle to bank 6's `draw_rect_clip` through `call_bank`.
+8. `validate` -> `scroll_validate` (bank 6): draw the strips the window has moved onto.
+9. `draw_dirty`: the tiles the game changed, queued by `mark_dirty`.
+10. `draw_sprites`: the list, in two passes (below).
+11. `copy_partial`: the composed row (section 5).
+12. (Model B) `mirror_copy`.
+13. `nspr = 0`; `build_sections` for this buffer.
+14. Hand over: `next_sect` = this buffer's chain (0 or `SECBYTES`), (Master) `next_buf`,
+    `flip_req = 1`; `render_done` (a label the harness measures to); `cur_buf ^= 1`.
 
-A map tile is 8x8 game pixels: 4 characters by 2 character rows, 64 bytes.  A map byte
-is a level tile id:
+There is no `render_core` routine: the list above is inlined in `render_frame`.
 
-| Ids | Kind |
-|---|---|
-| 0 | the level's solid: one colour's fill (the header's +31), one byte down every line |
-| 1 .. half0-1 | full tiles, stored at TILES + 64 x (id + TOFF) |
-| half0 .. half1-1 | half tiles whose top row is a fill |
-| half1 .. half2-1 | half tiles whose bottom row is a fill |
-| half2 .. half0+nhalf-1 | half tiles whose two rows are the same |
-| FLAT0 .. 253 | NFLAT flat tiles: one colour's dither, two bytes alternating down every character |
-| 254, 255 | two more flat tiles: FLATTAB's last pairs, the level's like the rest (Cleo's two solids, cyan and black) |
+### The records and the keep rule
 
-How many flat tiles a level may have is the game's parameter, NFLAT (assets.inc; FLAT0
-= 254 - NFLAT, asserted).  So NFLAT + 3 ids are fills, costing no bank 6 room beyond
-FLATTAB's two bytes each; the more there are, the fewer ids are left for the tiles.
-(Cleo's is 4.)
+Each buffer keeps a record of every sprite it drew: `SPRREC` in `ENGBSS`, `MAXREC = MAXSPR`
+records a buffer, `RECSZ` bytes each (`engine/defs.s`):
 
-These ranges are the Model B's arithmetic gather's.  The Master's gather is only its
-table, LV_PAGE0, so on a Master-only build (MASTERONLY) any id below FLAT0 may be any
-stored slot, in any order: Commando's
-packer stores each image and its mirror once and gives every drawn (image,
-collision) pair an id, the full ids and the mirrored ones interleaved.
+| offset | field | contents |
+|--------|-------|----------|
+| 0 | id | the sprite id |
+| 1-2 | x | map game pixels |
+| 3-4 | y | |
+| 5-6 | `REC_CX` | the rectangle drawn: map char column |
+| 7 | `REC_CY` | char row |
+| 8 | `REC_W` | width in chars (0: nothing drawn) |
+| 9 | `REC_H` | height in char rows, bit 7 (`REC_CLIP`) set when cut at a window edge |
 
-The packer may give tiles that look the same the same id, or not: the game's two
-per-tile tables (LV_ATTR0, LV_ALTCLS) are read by id, so tiles the game treats
-differently need ids of their own.  A flat tile is not stored: its two bytes are in
-FLATTAB (bank 6), the solids last.  A half tile stores its one distinct character row,
-32 bytes, from HALFPAGE + HALFOFF x 32 (the page after the full tiles), with its fill's
-pair in a table after the halves; the row loop's two loads of that pair are patched by
-the loader (HPAIR0, HPAIR1).  The solid's fill byte is the header's +31; the loader
-patches it into the row loop's `lda #` (SOLIDF: a cheap label, which `build.sh` reads
-from `game.dbg`, because any symbol defined there would end the loop's `@` scope).  A
-level's ids and the lists that gather its tiles are laid out for the Model B's bank,
-the smaller: the tiles from the first slot clear of the code to the end of bank 6, on
-both machines.
-The slots count from the page TILES ($8600), so the address stays arithmetic: the
-Model B's gather adds TOFF to an id (the packer's constant, in assets.inc; init.s
-asserts the code ends below slot TOFF+1).
+With `TIGHTBSS` the records are 9 bytes stored as arrays (one byte of each field per
+record, buffer 0's then buffer 1's), the column's two high bits packed into `REC_H` bits
+5-6.  `RECCNT` (2) is each buffer's count; `KEEP` (`MAXREC`) the verdicts; `DIRTYCNT` (2)
+and `DIRTYLIST` (2 x 2 x `DIRTYMAX`) the dirty tiles; `SPRLIST` the draw list as five arrays
+`SPR_ID SPR_XL SPR_XH SPR_YL SPR_YH` of `MAXSPR` (`vars.s`).  `MAXSPR` is the build's
+`-D MAXSPR`, else the game's `MAXSPRDEF` (`assets.inc`), else 28.
 
-`gather5` turns a tile row's ids into (GATHERL, GATHERH) pairs, which `draw_rect`'s row
-loop reads:
+`match_sprites` compares sprite i with record i: `KEEP_SAME` (2) for the same id in the
+same place -- its screen pixels are already right, so no erase and (for a still box) no
+draw -- and `KEEP_BOX` (1) for a box where a box was (two box frames at one place overwrite
+each other exactly, so a frame change needs no erase).  Once the window has moved since the
+buffer last drew (`clip_mask` = `REC_CLIP`, set by `select_backbuf`), a record is kept only
+if it was not cut at the window's edge *and* lies in the rows and columns the old window
+and the new both hold (`krlo..krhi2-2`, `kclo..kchi2-2`, relative to the new window: the
+rest of the buffer is this frame's strips, or ring slots reused while out of view).  An
+invalid buffer (`BUF_CXH = BUF_INVALID`, $80: a level start or an overflowed dirty list) is
+about to be redrawn whole, so it drops its records.
 
-- a full tile: GATHERH = its page (bit 7 set), GATHERL = (id & 3) << 6 (bits 0-5
-  clear), so the full-tile path is the load, one `bmi` and the address -- no kind test;
-- the level's solid (id 0): GATHERH = 0, the row loop's fall-through: the patched byte
-  (SOLIDF) stored down every line;
-- a flat tile or the other solid: GATHERH = $40, GATHERL indexing its pair in FLATTAB;
-- a half tile: GATHERH = its stored row's page less $80 ($06-$3F: bit 7 clear marks
-  it), GATHERL = its offset | bit 2 | which row fills (bit 0 the top, bit 1 the bottom,
-  neither: both rows are the stored one); the row loop tests against `row_bit` (1 for
-  the top character row, 2 for the bottom).
+### Scrolling and dirty tiles
 
-The row loop's load of GATHERH then sorts a run with two branches: `bmi` to the full
-tiles, `bne` to the rarer ways (flats at $40, halves below it: one `cmp`), and on
-through to the solid.  The flats and the halves' fill rows go down the one pair
-cascade (PCHAR).
+`scroll_validate` (`tiles.s`): `dx = wcx - BUF_CXL`, `dy = wcy - BUF_CY`.  |dx| < 80 draws
+the new columns, all `BUFROWS` high; a small dy draws the new rows at full width; anything
+bigger, or an invalid buffer, redraws the whole window.  Without `TALLMAP` rows are bytes,
+and a strip whose first row would be 256 (the bottom of a 64 x 128-tile map) is dropped:
+that row is never shown, and drawn it would land in row 0's slot.  `mark_dirty` (the
+game's call, A = tile x, X = tile y) queues a tile in both buffers' lists; a list past
+`DIRTYMAX` (20) marks that buffer invalid instead.  `draw_dirty` draws the back buffer's
+list as 4 x 2-char rects through `draw_rect_clip`.
 
-On the Model B `gather5` computes the pair from the id with the level's shape (half0,
-halfhi5 -- the halves' page less $80, the loader's --, half_sub, in zero page), since
-main RAM has no room for a table; only a half's low bits are one, HLOW in bank 5 beside
-the gather.  A half's GATHERL is its row's offset (bits 5-7), which char row is the fill
-(bit 3 the top, bit 4 the bottom -- `row_bit` is 8 or 16 -- neither when both rows are
-stored) and the fill's colour (bits 0-2): an index into the level's palette of 8 pairs
-(Cleo's levels use 5 at most), so `@hfill` is an `and #7` and two patched loads.
-On the Master it is two indexed loads from LV_PAGE0 in main RAM, a table the packer
-builds per level; unused ids in it are a black fill ($40, 0), because the rows past a
-map's end are read too.  The Model B's gather tests for id 0 first (`beq`, 2 cycles a
-tile): a solid costs it one store.
+### draw_sprites
 
-`draw_rect` (bank 6) draws a rectangle of map characters into the back buffer: per-rect
-invariants once, the first row's screen address (in line: every routine `draw_rect`
-alone calls is written into it), then per tile row one `map_strip` and
-one or two character rows.  A row may straddle the ring's end but a run -- the
-characters of one tile, at most four -- never does (below), so every run is drawn by
-an unrolled block entered by its length.  The blocks are the same code on both
-machines; only the entry differs.  The Model B patches a branch right before the
-blocks (each group's entries in the branch's page, asserted, so it costs a jmp's 3
-cycles; `draw_rect` is a write window for it); the Master goes through `jmp (abs,x)`.
-X holds the run's dispatch index from runn (`min`, then `tax`: n on the Model B, 2n
-on the Master) to `@advsp`, which steps `sp` by a table of 8n -- every block keeps X.  A fill
-of a pair stores each byte four times a character, every store setting its own Y (70
-cycles a character; alternating loads down a `dey` chain was 88).  The solid is one
-chain of 32 `sta (sp),y` with an `iny` between each after its branch, entered at a
-store with Y = 0 (the Model B's branch offsets a table beside the dispatch's); on
-the Model B ringmod_tab and PADB_T6 before `draw_rect` put its two hot stretches each
-in a page, on the Master PADM_T6 the row loop's `bmi`.  Each character row starts with `sp` already set, by `draw_rect`'s head for
-the first and `@rowdone` for the rest.
+Two passes: `dpass = 1` draws only the boxes (ids >= `BOXID0`), then `dpass = 0` the rest.
+A box is an opaque rectangle with its background baked in, so it has to go down before
+anything that shares its space.  A *still alias* (id >= `BOXID0 + BOXN`: a box the logic says
+nothing can disturb) kept `KEEP_SAME` and not clipped is skipped: nothing has been
+repainted under it.  Each drawn sprite writes its record's id and position, marks it
+clipped with nothing drawn, and calls `draw_sprite`, which fills in the rectangle when any
+of it is in the window.  Its vertical clip stops at `row_lim` lines, which `render_frame`
+sets each frame to `min(BUFROWS, 256 - wcy)` rows: without `TALLMAP` a sprite row past map
+row 255 would wrap to row 0, whose Model B ring slot is a visible row's (a sprite falling
+off a 64 x 128-tile map).  `add_sprite` (A = id, `spx`/`spy` the reference point) is the game's
+call; a full list drops the sprite.  With `DRAWFLAGS`, bit 7 of `SPR_XH` is a mirror flag.
 
-**The tile set.**  Every distinct tile any level uses, in three files, TILES0-2, of at
-most 256 tiles each (16K, STAGE's size).  How the tiles are cut between the files is
-the game's choice: a level's tile list says which of the files it stages and which
-tiles it takes from each, so a tile the levels share can be in one file that all of
-them stage, and a file only some levels use is never staged by the others.
 
-**Dirty tiles.**  A tile the game changes is queued for both buffers (`mark_dirty`,
-DIRTYMAX = 20 each).  Past that the buffer is marked invalid (BUF_CXL high byte $80)
-and redrawn whole: correct, but a whole window's redraw.
+## 7. The tiles
 
-## The sprites
+### Ids and kinds
 
-**Where they sit.**  A row of a sprite walks the column pointer across the image a
-column (`lines` bytes) at a time, and each page it crosses costs the carry path (9
-cycles; the mirrored walk's borrow, 7).  So where each image lies in its bank
-matters, and the packer places them for it (`tools/sprpack.py`): each level's images,
-as separate items, are ordered and padded within their bank's run by a local search that
-minimises the expected carries (over the eight line phases a sprite can have), plus
-the reads that cross a page, weighted by how often the level draws each sprite forward
-and mirrored (the game measures that; its packer passes the weights).  The resident
-sprites are placed the same way, weighted over all the levels, and may pad into the
-room the fullest level leaves.  The placement list tells the loader every item's
-address, so this needs nothing of the loader.  The search is deterministic
-and cached (`build/sprpack.cache`).  An image of a few hundred bytes crosses a page
-once a row whatever the placement: that is the floor.
+Within a level (`gather.s`, `convert.py`'s `pack_tiles` in Cleo lays them out):
 
-The sprite list (SPRLIST in low RAM: one array per field -- id, x and y in game pixels,
-map coordinates) is built by the game each frame, at most MAXSPR (the game's figure,
-from assets.inc).  Each buffer keeps a record per sprite drawn (10 bytes: id, position,
-the screen rectangle, whether it was clipped).  `match_sprites` marks a sprite KEEP 2
-when it is the same id in the same place as the buffer's record, and 1 when it is a box
-where a box was (below: it covers the old one, so neither needs erasing); `erase_old`
-redraws the tiles under every record not kept; `draw_sprites` draws in two passes, the
-boxes first (a box is an opaque rectangle, and drawn later it would paint over what
-stands in front of it), and skips a "still" box that is kept identical and was not
-clipped at a window edge.
+| id | kind |
+|----|------|
+| 0 | the level's solid: a fill of one byte, `SOLIDF`, patched by the loader |
+| 1 .. half0-1 | full tiles, contiguous from `TILES` in bank 6, slot id + `TOFF` |
+| half0 .. | half tiles: one char row stored, the other a fill or the same row again (below) |
+| `FLAT0` .. 253 | flat tiles: a two-byte pair alternating down every char, from `FLATTAB` |
+| 254, 255 | the two solids, `FLATTAB`'s last two pairs (a level's other solid) |
 
-**Boxes.**  Sprite ids from BOXID0 to BOXID0 + BOXN - 1 are boxes: opaque rectangles
-with their background baked into the art, stored as screen bytes and drawn by the
-copy blitter (either bank).
-Two rules come with them.  A box drawn at the same place as the box before it must
-cover it completely (the engine does not erase it: frames of one animation, the same
-size).  And ids from BOXID0 + BOXN are "still" aliases, each drawing as the box BOXN
-below it: a game uses one when it knows nothing will move over the box, so that
-`draw_sprites` may skip it altogether while it is unchanged.
+A half tile's stored row is 32 bytes at the halves' page + k*32 (k from `HALFOFF`); its
+other char row is a fill from the level's palette of 8 pairs (`HPAIR0`/`HPAIR1`) or the
+same row again.  The halves come in three runs, `half0 half1 half2`: top row filled, bottom
+row filled, both stored.  `vars.s` asserts `FLAT0 + NFLAT + 2 = 256`.  `NFLAT` and `FLAT0`
+are the game's (`assets.inc`; Cleo's `NFLAT=n sh build.sh` knob).
 
-**The directory** is in two parts.  The level's, DIR_TABLE in bank 7 (banks.s; the
-level file's section 11, which `ldprog.s` copies whole, `DIRLEN`), is the images'
-addresses by id: `DIRL` then `DIRH`, BOXID0 + BOXN bytes each, the high byte 0
-when the id is not in this level and with bit 7 clear when the image is in bank 5 (an
-image is at $8000-$BFFF, so bit 7 is otherwise always set).  The game's, the same in
-every level, is the geometry (`sprgeom.inc` in the game's GAMEDATA, or HAZEL, where
-the prologue reads it with bank 7 paged): `sprg_ix`, a byte by id, the sprite's shape,
-and by shape `sprg_w` (the width in bytes), `sprg_rx` and `sprg_ry` (the reference
-point, signed game pixels) and `sprg_ln` (the rows stored), and with `SPRGFL` (the
-game's assets.inc) `sprg_fl`, the flags: bit 0 mirrored, bit 1 every scanline stored,
-bit 3 the copy blitter.  Without SPRGFL the flags are DRAWFLAGS's `sp_dfl`, or 0.  The
-directory covers the boxes (BOXID0 + BOXN ids), and the prologue folds a "still"
-alias onto its box first.
+### The gather
 
-`draw_sprite` (bank 7) takes the id in X: the address from DIRL/DIRH (high byte 0:
-return; bit 7 clear: bank 5, the bit put back), the shape from `sprg_ix` into `sp_g`,
-and the flags, W, lines, refx and, at `@vert`, refy by shape; `sp_ext` is the lines,
-doubled unless flag bit 1 is set.  It clips the sprite to the
-window, writes the record, notes the mirror's columns (Model B), computes the source
-and screen pointers and the blitter index, and hands over through `call_bank` to the
-row loop in the bank the image is in.  The row loop (`NIB_LOOPS`, `engine/sprloops.s`)
-is assembled into both sprite banks, since it reads the image bytes; `ds_entry` opens
-a write window into its bank for the whole row loop (as `draw_rect` does), because
-each row patches the column loop's `jmp`.  The lines a row draws in every cell are the
-same all along it -- 0-7, but from `sp_ra0` on the first row and to `sp_ra1` on the
-last -- so the row loop, not the column, chooses the blitter's entry for them
-(`sprrow_tab`, from `sp_disp`, the prologue's: the blitter's first entry): to line 7
-the unrolled cell entered at its first line, otherwise the partial loop.  The
-commonest blitter, `spr_fn`, falls into its column step, and the column countdown ends
-in the patched `jmp` itself.
+Once a tile row, `draw_rect` calls `map_strip` (low RAM), which pages bank 5 in, runs
+`gather5` over the row's ids in place, and pages bank 6 back.  The result is a pair a tile
+in low RAM, `GATHERL`/`GATHERH` (`GATHERN` = 21: a window's 20 tiles and the one more a run
+starting mid-tile takes), read last tile first:
 
-The 4-bit blitter (`NIBCELLS` and `NIBPART`: `spr_fn`, and `spr_fm` mirrored): an image is stored
-column by column, a byte a game-pixel row, the byte's two game pixels 4 bits each (the
-left in the high nibble), indices into one palette the game chooses, nibble 0
-transparent.  Three tables, the game's (`nibtab.bin`), turn a stored byte into screen
-bytes: L0TAB and L1TAB the row's two scanlines, NMASK the AND mask for its transparent
-game pixels ($00 both opaque, $CC or $33 for one).  A byte of 0 draws nothing, one
-whose NMASK is 0 is two plain stores, and any other is (screen AND NMASK) OR the line.
-The mirrored blitter passes every result, the mask's too, through SWAPTAB.  The
-shape's `lines` is the rows stored, with flag bit 1 clear, so the prologue takes
-two scanlines a stored byte (`sp_rinc` 4); a sprite's first line in a character is
-always even (lb0 = 2 x sy + wfine), so a cell's lines go in pairs, a source byte a
-pair.  A sprite's screen position is in whole bytes across (`draw_sprite`'s c0 = sx >>
-1: 2 game pixels, 4 screen pixels) and game pixels down (2 scanlines).  A box (flag
-bit 3) is not 4-bit: it is its screen bytes, every scanline stored (flag bit 1, lines
-= 2h), drawn by the copy blitter (`NIBCOPY`, `spr_fc`: 13 cycles a byte, unrolled to line
-7 from any first line -- each line sets its own Y -- and the Master's line 0
-non-indexed), so a box's backdrop keeps any dither exactly.  Every blitter is in both
-banks.
+| `GATHERH` | `GATHERL` | kind |
+|-----------|-----------|------|
+| 0 | unread | the solid |
+| `GH_FLAT` ($40) | the pair's index in `FLATTAB` | a flat (or the other solid) |
+| bit 7 set (`GH_TILE`) | `(id & 3) << 6` | a full tile: the pair is its address |
+| $06-$3F | the row's offset, fill row and colour (below) | a half: its page less $80 |
 
-**Resident and staged sprites.**  Which sprites are loaded once and which each level
-loads is the game's choice, given to the engine as parameters:
+A half's `GATHERL`: bits 5-7 the stored row's offset in its page (`GL_ROWMASK`), bit 3 or 4
+which char row is the fill (`GL_FILLTOP`, `GL_FILLBOT`; neither: both rows stored), bits
+0-2 the fill's colour in the level's palette (`GL_COLMASK`).  A fill is flagged by bit 7 of
+`GATHERH` clear (the row loop's `bpl`).  The Model B computes the pair from
+the level's shape -- `half0`, `halfhi5`, `half_sub` in zero page and `HLOW` (64 bytes, bank
+5) for the halves' low bits, all the loader's -- by sorting the id into its range; the
+Master reads it from `LV_PAGE0` (256 low bytes then 256 high), which the packer wrote and the
+loader copied to $0400.  The two agree byte for byte: `ldprog.s bake` decodes a tile as the
+Model B's gather does on either machine.
 
-- The **resident** sprites are one file, SPRC, loaded at the first level load and
-  never again (`sprc_ok`): SPRC_LEN bytes to bank 4 at SPRC_BASE (= B4_CODE_END), then
-  SPRC5_LEN bytes to bank 5 at SPRC5_BASE (= B5_CODE_END).  Their places are fixed, so
-  every level's directory can name them without a placement.
-- The **staged** sprites are the other file, SPRX (SPRX_LEN bytes: at most 16K,
-  STAGE's size, and at most 12K for the Master to keep it in HAZEL and ANDY).  At each
-  level load it is staged whole and the level's own subset copied out, image by
-  image, to the addresses its placement list gives; `img_tab.bin` says where in
-  SPRX each item is.
-- The rest of each sprite bank -- from the resident part's end to $BBFF in bank 4, to
-  $9BFF (the map) in bank 5 -- is the level's.  So the split trades load time and disc
-  reads (a resident sprite is never staged again) against the room every level has
-  for its own.
+### draw_rect
 
-The banks add no constraint of their own: both have every blitter and the tables, so
-any image, mirrored or not, and any box may be in either.
+`draw_rect` (bank 6, `tiles.s`) draws `rc_w` chars by `rc_h` char rows of map from `(rc_x,
+rc_y)` into the back buffer; `draw_rect_clip` (the bank's entry) clips the rect to the
+window first.  Per rect, once: the first row's screen address (ring slot from `ringmod`,
+`ringlo`/`ringhi` tables), `rc_tx0`, `rc_nt` (tiles - 1), the first run's limit `rc_sc0`
+and char offset `rc_ro0`, the map row pointer (`map_row`), and on the Model B the write
+window and the mirror's note.  Per tile row: one `map_strip`, then one or two char rows
+(`@drawrow`), the second without re-gathering.  Per char row: runs -- a run is the chars of
+one tile in this row, at most four -- dispatched by kind from `GATHERH` and entered into an
+unrolled block by length.  The solid, the commonest run, is one byte stored down 8n lines
+through a chain of 32 `sta (sp),y / iny` entered at the right store; a full tile is
+`CHARCPY` blocks in descending char order; a fill (flat, half's fill row, the other solid)
+is `PCHAR` blocks.  The Model B enters each group by a patched branch (`runn` leaves X = n
+and C = 0; `@jto/@fto/@mto` hold the offsets; the blocks are asserted to follow the branch
+in one page, so it costs a `jmp`'s 3 cycles), the Master by `jmp (abs,x)` with X = 2n
+(`RUNXS`).  The invariants an editor must keep are listed at the head of `draw_rect`; the
+central one: a run never crosses the ring end, because a ring is a whole number of 80-char
+rows and the end therefore falls on a tile boundary, so the runs have no wrap test and only
+`@advsp`'s page step (`pagestep`) folds.
 
-## The disc
+The loader patches three operands in the row loop: `SOLIDF` (`@s0f`'s `lda #`, a cheap
+label `build.sh` finds in `game.dbg` because any other symbol would end `draw_rect`'s `@`
+scope), and `HPAIR0`/`HPAIR1` (the two indexed loads of the halves' fill palette, defined
+after the row loop with `:=`).
 
-One single-sided 80-track disc (the game's DISC_OUT) with 30 files (the DFS catalogue
-holds 31), in this order:
+### The tile set files
 
-| File | What |
-|---|---|
-| !BOOT | `*RUN LOADER` |
-| LOADER | the boot loader, both machines, at $1900 |
-| BANKSB, BANKSM | each machine's fixed pieces, bank-number patch list and write-bank store list |
-| IMG7M, LDPROGM, LDPROGB, IMG7B | each machine's bank 7 images (the menus' to a whole sector, then the game's: LDPROG reads them as two) and load-time program; a game's start reads LDPROG, IMG7 and BAR in turn, so the Model B's are in that order |
-| BAR | the bar template |
-| SPRX, SPRC | the sprites: the level-placed ones, the resident block |
-| TILES0, TILES1 | two of the tile set's files |
-| L0-L15 | the levels |
-| TILES2 | the tile set's third file |
+Cleo's packer cuts the tile set into three files, `TILES0` (outdoor), `TILES1` (shared),
+`TILES2` (indoor); the loader's `ftab` numbers them 3, 4 and 24 (`tfi`), and a level's tile
+list says which files it uses and which full tiles of each (`levelfile.Level.tiles`,
+section 9).  Sizes as built today: 14,272 / 3,904 / 6,720 bytes (`ls -l build/TILES*`).
 
-Sector numbers are baked into the game and LDPROG from `files.inc`, which `mkdfs.py
-table` writes from the files' sizes; `build.sh` assembles twice so they settle and a
-third time to check they have.
 
-### Boot
+## 8. The sprites
 
-LOADER runs under the MOS.  It asks the MOS its version (OSBYTE 0: 3 and up is a
-Master) and chooses BANKSB or BANKSM, finds the RAM, finds the drive DFS has current
-(OSGBPB 6), and the controller from the DFS ROM's version string (0.x and 1.x are
-Acorn's 8271 DFSs, 2.x the 1770 one; holding W or I at boot says so instead).  It
-selects MODE 1 and blacks out the palette (the ULA and the screen-size latch stay as
-the MOS set them; the game reprograms only the CRTC), loads BANKS whole to $2000 with
-OSFILE (through OSGBPB a byte at a time took the 1770 DFS twenty seconds), turns
-interrupts off, copies the pieces to their banks and main RAM, applies the bank patches
-and the write-bank stores, writes its findings to $7000-$7006 and jumps to `boot` at
-$7007.  `build.sh` asserts BANKS ends below $7000.
+### The 4-bit format
 
-### The game's own disc driver
+A stored column is one byte a game-pixel row: two game pixels, 4 bits each, of one palette
+the game chooses, nibble 0 transparent (`sprloops.s`).  Three 256-byte tables, the game's
+`nibtab.bin`, turn a byte b into screen bytes: `L0TAB[b]` and `L1TAB[b]` the row's two
+scanlines, `NMASK[b]` the AND mask for its transparent pixels ($00 both opaque, $CC or $33
+one).  A byte of 0 draws nothing; otherwise `screen = (screen AND NMASK[b]) OR Ln[b]`.
+Mirrored, every result and the mask go through `SWAPTAB` (the four-dot reversal).  Rows are
+stored one in two scanlines and a sprite's first line in a char is always even (`lb0 = 2*sy +
+wfine`), so a cell's lines go in pairs.  A *box* (flag `SPF_COPY`, bit 3) is its screen
+bytes, every scanline (`SPF_FULLRES`, bit 2), copied straight: a box's backdrop keeps any
+dither exactly.  `SPF_MIRROR` is bit 0.
 
-After boot the MOS is abandoned: `disc.s` (bank 7's kernel) drives the 8271 or the 1770
-directly.  `read_sectors` reads a run of 256-byte sectors (10 a track) into main RAM;
-each track's part of the run is the driver's.  The two drivers are linked for the same
-place, the driver slot at the top of the kernel (the cfgs' DRV8271 and DRV1770
-overlap), and BANKS carries both, flagged by controller in the piece table's bank byte
-(bit 7 the 8271's, bit 6 the 1770's): the boot loader copies in only the one the
-machine has, so the kernel pays for the larger driver, not both.  `build.sh` sizes the
-slot from the two (od65) and sets the kernel's start below it.  A driver in the slot
-is a `jmp` to its track read (`DRV_TRACK`: C = 1 asks for the run again), its NMI
-stub's length and the stub.  Both controllers raise NMI for every byte, so the stub is
-copied to $0D00, where the NMI lands, for each load; it writes through a self-modified
-address and keeps its state in that page ($0DFD-$0DFF), so it works whatever bank is
-paged.  Neither driver may hold a bank patch or a write-bank store (`build.sh` checks:
-a patch in a piece that may not be copied would be lost).
+### The directory
 
-- **8271**: DFS's step rate is kept, but not its motor: after an idle spell (the title)
-  the head has unloaded, and a read on a stopped drive reports "not ready" at once,
-  which the 8271 latches until a read-drive-status.  So each run loads the head
-  (special register $23: select + load head) and reads the drive status first, as DFS
-  does, and retries a run that fails.
-- **1770** (the Acorn board on the Model B at $FE80/$FE84, the Master's at
-  $FE24/$FE28): reset and restored to track 0 once at start-up; a seek when the head
-  is elsewhere, then read-multiple, which the stub ends with a force-interrupt after
-  the run's last sector.
+Split in two.  The level's part, `DIR_TABLE` in `ENGBSS` (`banks.s`): `DIRL` then `DIRH`,
+`BOXID0 + BOXN` bytes each, the image's address by id -- 0 not in this level, bit 7 of the
+high byte clear for bank 5 (every image is at $8000-$BFFF so bit 7 is otherwise always set;
+`levelfile.directory()` writes it and asserts a bank 5 image is never at $80xx).  The
+game's part is the geometry by shape, `sprg_ix` by id then `sprg_w sprg_rx sprg_ry sprg_ln`
+and (with `SPRGFL` in `assets.inc`) `sprg_fl` by shape -- Cleo's `sprgeom.inc`, written by
+its packer, included by its `gamedata.s`.  Ids from `BOXID0` are boxes; from `BOXID0 +
+BOXN` *still aliases* that draw the box `BOXN` below (`draw_sprite`'s first compare).
 
-### A level load
+### draw_sprite
 
-The game calls `load_level_b` (X = the level): the kernel's `ld_go` does
-`music_stop`, `load_begin`, interrupts off, the driver's NMI stub to $0D00, and LDPROG
-read to $0E00 and run (`ld_entry`, X = the level).  Everything after that is
-LDPROG's: the kernel holds only what must run before LDPROG is in place.  LDPROG runs in main RAM, where it can page any bank; it reads the socket
-of every bank from PBANK and sets the write bank by pboard by hand.
+The prologue in bank 7 (`frame.s`): the address and bank from `DIRH/DIRL` (0: return), the
+shape's flags, width and lines; horizontal clip to `sp_c0..sp_c1` with `sp_c` the first
+image column; vertical clip from `lb0` to char rows `sp_r0..sp_r1` and lines `sp_ra0`,
+`sp_ra1`; the record's rectangle; (Model B) the mirror's columns; the blitter chosen once
+(`sp_disp` = `SPRDISP_FN`, `_FM` or `_FC`: its first entry in `sprrow_tab`); the screen
+base from `ring_addr7` and the source row pointer; then `call_bank` to the row loop in the
+data's bank.  `sp_clip` counts the window edges it was cut against.
 
-1. The level file to STAGE_LVL.  It ends with the Master's LV_PAGE0 in two whole
-   sectors; the Model B's file table reads it short of them (`LFILE`, PAGE0_SECS).
-2. The header, attr and altcls to bank 7; the objects to LV_OBJS; `map_shr` = 8 - lw
-   and map_stride = 1 << lw from the header.
-3. The map, run-length coded, unpacked into bank 5 at $9C00: exactly 1 << (lw + lh)
-   bytes (the stream is not terminated).
-4. Each of the level's tile-set files staged in turn, its full tiles copied to
-   consecutive slots from TILES and its half tiles' stored rows to their slots; then
-   the halves' fill palette after them (16 bytes), HPAIR0/HPAIR1 patched, and on the
-   Model B the gather's shape and each half's low bits (HLOW, bank 5).
-5. The sprites: SPRC to its fixed places if it is not already there; then SPRX staged (the
-   Master: from the disc the first time, then kept in HAZEL and ANDY and restored from
-   there), and every image the placement list names copied to its bank and address
-   (or, from BAKEITEM0, baked: *The build options*).
-6. The directory's level part to DIR_TABLE, bank 7, as the packer finished it:
-   no table is built at load.
-7. FLATTAB to bank 6.  On the Master, LV_PAGE0 to $0400 and both screens cleared.
+### The row loop
 
-Then LDPROG's `ld_resume` (the chain's restart asked for, interrupts on) returns to the
-game, which goes on from the header (the
-map's size and the window's limits, which it sets for the engine; `lv_reset`).
+`NIB_LOOPS bank` (`sprloops.s`) emits, for each sprite bank: `ds_entry` (at `BANKENTRY`,
+opens the write window), `spr_fn`'s cells first so they sit in the bank's first page, the
+column step `spr_retp` (ptr + `sp_lines`) which `spr_fn` falls into, the column loop
+`ds_colloop` whose `jmp` operand is **patched once a row** with the entry for that row's
+lines (`sprrow_tab[sp_disp + 2 * (first line, or SPRTAB_N-1 for the partial loop)]`), the row
+step `ds_rowdone` (source + `sp_rinc`, screen + 640 folded by `ringup`), the mirrored step
+`spr_retm`, then after `PAD PADB_FM, PADM_FM` the mirrored cells `spr_fm`, the two partial
+loops, the copy blitter `spr_fc` and `sprrow_tab` (`SPRTAB_N` = 9 entries a blitter: a cell
+from each first line, and the partial loop).
 
-### Bank 7's images
+### Placement
 
-`go_title`, `go_game` and `go_menu` go through the same `ld_go` with X an image load
-(defs.inc LDOP_), and LDPROG's `image_load` is the same machinery as a level's: the
-image staged and copied to its place, then its bank numbers and write-bank stores
-patched as the boot loader patches BANKS.  The game's image brings more: its variables
-(GAMEBSS) are zeroed, so a game starts the same whatever the menus left there, and the
-bar template is read to its place.  Then LDPROG goes on to the game's hook (their
-addresses come from the game's debug info: `build.sh`).  For `go_game` (the menus'
-way out) it calls `hook_image` and jumps to `hook_play` (through the kernel's
-`game_in`, a label for the test harness) with the stack reset and the disc still open
-(`ld_open`): the first level's load goes straight on without parking the chain and
-reading LDPROG again.  For `go_menu` (the game's way out, with A for the menus) it
-resumes the chain and jumps to `hook_over`; for `go_title` (start-up), `hook_title`.
+`tools/sprpack.py` places a bank's images: the cost is the column pointer's page crossings
+over the eight line phases (`CARRY` 9 cycles, the mirrored walk's `BORROW` 7) plus the
+`(zp),Y` reads that cross a page inside an image (`READ` 3.5 a boundary), weighted by draws
+a frame; a deterministic search over order and padding, cached in `build/sprpack.cache`.
+The weights are the game's (Cleo's `tools/drawfreq.json`, from its `test/drawfreq.mjs`).
 
-## The level files
+### Resident and staged; baking
 
-The format has one definition, `tools/levelfile.py`.  A game's packer builds a
-`levelfile.Level` in the engine's terms and `encode()` writes it; `ldprog.s` reads it, taking the section numbers (SEC_) and the
-header's offsets (HDR_) from `levelfmt.inc`, which the build writes from
-`levelfile.py inc`, so the writer and the reader cannot drift apart.  The build also
-runs `levelfile.py check` over every level file (the table, the sections in order,
-the header's counts against the sections, the stages' sizes), and
-`test/test_levelfile.py` tests the writer against its reader
-(`python3 -m unittest discover test`).
+`SPRC` is read once (`sprc_ok`) to `SPRC_BASE` in bank 4 (and `SPRC5_BASE` in bank 5 when
+`SPRC5_LEN` is non-zero; 0 today) and stays; `SPRX` is staged every load (or refilled from
+HAZEL/ANDY on the Master) and the level's placement list copies its items out
+(`place_walk`): each entry item, bank, address, extra (`levelfile.placement`, `PL_*`),
+`img_tab` (5 bytes an item: file, offset, length) saying where the item is in the stage.
+An item from `BAKEITEM0` on is not copied but *baked* (`ldprog.s bake`): the level's own
+tiles where the object stands, decoded as the gather does, with the game's overlay from SPRX
+(a column's pixels then its mask) ANDed and ORed over them, column by column into the bank.
+The object's tile rides in the entry's extra (`x | y << 8`); `bake_kind.bin` gives the
+slot's kind and `bake_geom.bin` the kind's shape (`BG_WC BG_LINES BG_DX BG_DTY BG_OV BG_SKIP`,
+`BG_LEN` = 8).  Nothing baked is on the disc.
 
-A level file starts with a table of 13 section offsets:
 
-| # | Section |
-|---|---|
-| 0 | the header, 32 bytes (below) |
-| 1 | the objects, 6 bytes each (at most 149, LV_OBJS's room): the game's, copied to LV_OBJS |
-| 2, 3 | two tables by tile id, 256 each: the game's, copied to LV_ATTR0 and LV_ALTCLS |
-| 4 | the tile list: the files, each with its full-tile count, then each full tile's index in its file |
-| 5 | the sprite placement list, 6 bytes an item: item, bank (4 or 5), image address, and 0 or, for an item the loader bakes, its tile (x \| y << 8); $FF |
-| 6 | the map, RLE: c < 128, c+1 literals; c >= 128, the next byte c-126 times |
-| 7 | FLATTAB's pairs |
-| 8 | the half tiles: index in file, row, file |
-| 9 | the halves' fill palette (8 first bytes, 8 second), then each half's low bits (fill row: 8 top, 16 bottom; colour: 0-7) |
-| 10 | empty (reserved: the removed mirrored tiles' MIRTAB) |
-| 11 | the sprite directory's level part, 2 x (BOXID0 + BOXN): the images' addresses by id, low bytes then high (0: not in this level; bit 7 clear: bank 5) |
-| 12 | LV_PAGE0, 512 bytes, sector aligned at the end |
+## 9. The disc and the loader
 
-The header (LV_HDR): the engine's fields are lw and lh (+0, +1: log2 of the map's
-size in tiles), the objects' count (+6) and the tile set's shape (+20..+31,
-`levelfile.Shape`: +21 the tile count, +22 map_shr = 8 - lw, +23 the half count,
-+24-26 half0-2, +27 the halves' page, +28 HALFOFF, +29 and +30 reserved (the removed
-mirrored tiles' first id, half0 + the half count, and their count, 0),
-+31 the solid's fill byte); +2..+5 and +7..+19 are the game's.  `encode()` refuses a
-game field in the engine's bytes.  `levelfile.check` takes the game's BOXID0 and BOXN
-(the build passes its assets.inc).
+### The files
 
-The file must fit the Model B's STAGE_LVL (8K, without LV_PAGE0) and the Master's
-stage (20K); a Master-only build (MASTERONLY: `levelfile.py` reads it from the
-environment) needs only the second.
+Thirty files, in disc order (`build.sh` DISC; `files.inc` gives each one's `F_<name>_SEC` and
+`_N`): `!BOOT LOADER BANKSB BANKSM IMG7M LDPROGM LDPROGB IMG7B BAR SPRX SPRC TILES0 TILES1
+L0..L15 TILES2`.  A game's start reads LDPROG, IMG7 and BAR in turn, so they are neighbours:
+the Model B's in that order, the Master's around them.  `mkdfs.py` lays files out from
+sector 2 (a DFS catalogue holds 31).  `!BOOT` is `*RUN LOADER`; LOADER runs at $1900
+(`loader.cfg`).  As built today the last file ends at sector 681 + 27 = 708 of 800.
 
-## The build options
+### The driver slot
 
-`tools/build.sh` takes its options from the environment (the game's `build.sh`
-exports them), passes each to the assembler (`-D`; `cpu.inc` makes the rest 0) and
-to its tools.  With none set a game builds for both machines.  What each changes:
+The MOS is gone once the game runs, so the game has its own driver (`disc.s`): the Model B's
+8271 or Acorn 1770, the Master's 1770.  Both are assembled for the same place at the top of
+the kernel (`DRV8271`/`DRV1770`, asserted equal) and BANKS carries both, each piece flagged
+by controller (`PIECE_8271` bit 7, `PIECE_1770` bit 6); the boot loader copies in only the
+machine's, so the kernel pays for the larger, not both.  A driver: +0 `jmp` to its track
+read (`DRV_TRACK`: `ld_cnt` sectors of track `ld_trk` from sector `ld_sc` to `ld_dst`, C = 1
+to try again), +3 its NMI stub's length, +4 the stub, which `ld_go` copies to `NMIPAGE`
+($0D00: the NMI lands there, so the stub starts there).  The page's last three bytes are the
+stub's state: `LD_RES`, `LD_DONE`, `LD_SECS`.  Neither driver may hold a bank patch
+(`build.sh piece_bytes`).  The 8271's read: load the head through the drive control
+special register (the 8271 latches "not ready" and only a read-drive-status clears it, so
+one is sent first), then read data; the 1770's: seek if the head is elsewhere, read
+multiple with the stub counting sectors and forcing an interrupt at the last.
+`read_sectors` divides `ld_sec` by `SECTRK` (10) and reads a track's run at a time.
 
-- **MASTERONLY.**  build.sh's targets are `master` alone: no Model B assembly, and
-  the Master is linked unpinned (no `pincfg.py`), its bank 7 image sized from its own
-  `od65` segment sizes; the shared files come from `build/master`; the disc has no
-  BANKSB, LDPROGB or IMG7B; no layout check.  The boot loader, assembled with it,
-  answers a Model B with "<game> needs a BBC Master 128".  The engine's asserts that
-  held the Master to the Model B's code ends (`* <= B4_CODE_END`) still hold, so a
-  game sets B4_CODE_END and B5_CODE_END to its own ends.
-- **BAKEITEM0** (the game's assets.inc): items from it on are baked by the loader
-  (`ldprog.s bake`), not copied: the level's own tiles where the object stands, decoded
-  as the Model B's gather does (the solid, the flats, the halves, full tiles: no
-  mirrored ones), with the game's overlay laid over them -- (backdrop AND mask) OR
-  pixels, a column's pixels then its mask, staged in SPRX.  The placement entry's last
-  two bytes carry the object's tile (x | y << 8; an image's are 0); `bake_kind.bin` gives each baked slot its kind
-  and `bake_geom.bin` each kind's shape (bytes, lines, the offset from (8x, y) in game
-  pixels across and tile rows down, the overlay's offset in SPRX).  img_tab stops at
-  BAKEITEM0.  Cleo bakes every trampoline's rest state and its costliest stars: 309
-  items over the 16 levels, 0.2-0.34 s of the Model B's CPU a load, nothing on the disc.
-- **GAMEHAZEL.**  banks.cfg's HAZ area ($C000-$DFFF) takes HAZCODE, HAZDATA and
-  HAZBSS into `hazel.bin`, a BANKS piece with bank byte 1, which the loader copies
-  with ACCCON Y set and leaves set for good.  `ldprog.s`'s `main_ram` keeps Y, and
-  SPRX is staged from the disc every load (no unkeep).  With Y set throughout,
-  the interrupt path (the hardware vector, the MOS's entry, IRQ1V) works on the
-  Master (MOS 3.20, on jsbeeb: the MOS's entry code is not under HAZEL, whatever
-  ldprog.s's comment on unkeep says).
-- **GAMESOUND.**  The vsync's `jsr sound_tick` becomes `jsr hook_sound`, followed by
-  sound_tick's last act (`mus_on` to `mus_tick`, the tune's step); `sound_tick` and the
-  game's `sfx_tab` are not assembled.
-- **DRAWFLAGS.**  `draw_sprites` stores SPR_XH in the record as it is (so a flip is a
-  change to `match_sprites`), takes bit 7 into `sp_dfl` (a zero-page byte) and gives
-  the prologue x without it; `draw_sprite` takes `sp_dfl` as the flags, XORed into
-  `sprg_fl`'s with SPRGFL.
-- **TALLMAP.**  `wcyh` (zero page) and `draw_rect`'s full map row: *The display*.
-- **TIGHTBSS.**  The sprite records are nine arrays of 2 x MAXREC bytes (engine/defs.s:
-  `REC_ID`, `REC_XL`, `REC_XH`, `REC_YL`, `REC_YH`, `REC_CX` the column's low byte,
-  `REC_CY`, `REC_W`, `REC_H` = height | column high bits << 5 | clipped << 7; BUFROWS
-  < 32 asserted), buffer 0's records then buffer 1's, indexed by register: `recb`
-  (recp's byte) is the current buffer's first, `rq` (rp's) the record in hand, which
-  `draw_sprites` steps and the prologue writes the rectangle at (`tmp3` its scratch); `match_sprites` walks Y with X, `erase_old` steps `rq`.  The
-  dirty list likewise: `DIRTYX` then `DIRTYY`, DIRTYMAX a buffer.  build.sh drops
-  ENGBSS's `align = $100` from the linked cfg.
-- **MAXSPR.**  build.sh passes `-D MAXSPR=n`, which engine/defs.s takes over assets.inc's
-  MAXSPRDEF; 28 when neither sets it.
+### The loads
 
-## Timing
+Every load is the load-time program's: the kernel's `ld_go` stops the tune, `load_begin`
+(section 5), `sei`, copies the NMI stub down, reads LDPROG to $0E00 and jumps to it.
+`load_level_b` (X = level 0..15) returns to its caller; `go_title` (`LDOP_TITLE`), `go_game`
+(`LDOP_GAME`) and `go_menu` (`LDOP_OVER`, A = 0 lost / 1 won) go on to the game's hook with
+the stack reset (`ldprog.s ld_image`): `hook_title`, or `hook_image` then `game_in` ->
+`hook_play`, or `hook_over`.  `ld_open` is set after the game's image load so the level
+loop's first `load_level_b` goes straight on without re-parking (the chain is parked and
+LDPROG in place); `ld_resume` clears it at every load's end.  `ld_img` records which image
+is in (the harness reads it).
 
-A standard 312-line frame is 39,936 cycles at 2 MHz.  How often the game renders is
-the game's: it waits on `vsyncs` (the interrupt counts them) and calls `render_frame`,
-which waits for the previous frame's flip; a flip is taken at a vsync at least two
-after the last.  `frame_top`, the game's label, is reached exactly once per rendered
-frame, before the game's logic reads the keys: the test harness breaks there.
+### A level load, step by step (`ldprog.s lv_load`)
 
-Per frame, bank 7 crosses once a sprite and once a tile rectangle through `call_bank`,
-twice into bank 6 (`selbb`, `validate`), and `draw_rect` once a tile row through
-`map_strip`.
+1. (Master) `main_ram`: ACCCON X and Y clear.
+2. Read the level file to `STAGE_LVL` (the Model B stops short of its last `LV_PAGE0_SECS`).
+3. The sections, by the file's own offset table: `hdr` (and the game's tail) to `LV_HDR`;
+   `objs` to `LV_OBJS`; `attr` to `LV_ATTR0`, `altcls` to `LV_ALTCLS`.
+4. The shape: `map_shr` from the header, `map_stride = 1 << lw`.
+5. The map, run-length coded, unpacked into bank 5 at `MAP5` -- exactly its `1 << (lw+lh)`
+   bytes (`unrle`).
+6. The tiles: each file of the set the level uses is staged in turn; its full tiles go to
+   consecutive slots from `TILES + (TOFF+1)*64`, its half tiles' rows to the halves' page at
+   `HALFOFF` slots of 32; then the halves' fill palette (`HPAIR_LEN` = 16) where the halves
+   end, and on the Model B each half's low bits to `HLOW`.
+7. The shape into the blitters: `SOLIDF`, `HPAIR0`, `HPAIR1` patched in bank 6; on the Model
+   B `half0`, `halfhi5` (the page less `GH_TILE`), `half_sub` in zero page.
+8. The sprites: SPRC once; SPRX staged (or kept); `place_walk` over the placement list,
+   baking the items from `BAKEITEM0`.
+9. The directory's level part to `DIR_TABLE`; `FLATTAB` to bank 6.
+10. (Master) `LV_PAGE0` to $0400, and both screens cleared of what the load staged there.
+11. `ld_resume`: `ld_open = 0`, `load_req = LDR_RESUME`, stale flags cleared, `cli`.
 
-## The 6502 spellings
+An image load (`image_load`): stage the image file, copy it to `GAME_ADDR`/`MENU_ADDR`,
+apply its bank-number and write-bank lists (`img7fix.inc`), and for the game's image zero
+`GAME_BSS` to its exact end and read BAR straight to `BARADDR`.
 
-The engine (and a game, if it likes) is written once, with 65C02 idioms spelt as macros
-(`cpu.inc`) that expand for the 6502.  Their contracts:
+### The level file format
 
-- `stz`: A is dead at the site (the 6502 form is `lda #0 / sta`).  `zero m, ...`
-  clears up to eight addresses with one `lda #0`; `sta0 m, ...` the same where A is
-  already 0; `stzx` where A is live and X dead (`ldx #0 / stx`); `stz01` for a 0/1
-  flag that is 1 (`dec`).
-- `inca`/`deca`: the carry is destroyed on the 6502 (`clc / adc #1`, `sec / sbc #1`);
-  `incax` keeps it, with X dead (`tax / inx / txa`).
-- `ldaz`/`cmpz`, (zp) with no index: Y is destroyed (`ldy #0`); `ldaz0`/`staz0`
-  where Y is already 0, `ldazx` where Y is live and X dead, `ldy1` for Y = 1 from 0.
-- `bitimm`: Z from A & v, A and X kept, through `mtmp` -- not for the interrupt.
-- `bra`: the 6502's `jmp`.
+`tools/levelfile.py` is the one definition: `python3 levelfile.py inc` writes `levelfmt.inc`,
+which `defs.inc` and `ldprog.s` include, so writer and reader cannot drift.  A file is a
+table of 13 two-byte section offsets then the sections in order (`SECTIONS`): `hdr objs
+attr altcls tiles place map flat halves hpair mir dir page0`.  The header is `HDR_LEN` = 32
+bytes: `HDR_LW`, `HDR_LH` (log2 of the map in tiles), `HDR_NOBJ` at 6, the tile set's
+`Shape` at `HDR_SHAPE` = 20 (`ntiles map_shr nhalf half0 half1 half2 halfpage halfoff mir0
+nmir solidfill`), and the game's own fields at 2..5 and 7..19 (`HDR_GAME`; the writer
+rejects a game field anywhere else).  A *header tail* of the game's bytes may follow the 32
+(the whole section stays under a page): the loader copies the section whole, so the tail
+lands at `LV_HDR + HDR_LEN`, where the game keeps memory for it (Cleo's `RNGTAB` in
+`GAMELVL`).  Objects are `OBJ_BYTES` = 6 each, `OBJ_MAX` = 149.  The map's RLE: a control
+byte c < 128 means c+1 literals follow, c >= 128 the next byte c-126 times.  A placement
+entry is `PLACE_LEN` = 6 bytes (item, bank, address, extra) ending in `PL_END` ($FF).
+Section `mir` is empty (the slot the removed mirrored tiles had).  `page0` is `PAGE0_LEN` =
+512 bytes, sector aligned and last, so the Model B's loader reads the file short of it.
+Limits: without `page0` a file must fit the Model B's stage (`STAGE_LVL_B`, 8K) unless
+`MASTERONLY`, and whole the Master's (`STAGE_M`, 20K).  `levelfile.py check <assets.inc>
+<level>...` verifies every invariant the loader relies on; `build.sh` runs it on all 16.
 
-**Anonymous labels.**  The sources use ca65's `:`/`:+`/`:-` labels heavily, and several
-bare `:` lines are kept, unreferenced, only to hold the count: deleting a line that
-starts with `:` retargets every `:+`/`:++` that jumps across it, and on a cold path no
-test will notice.
 
-## Testing
+## 10. Sound
 
-`test/lib/harness.mjs` drives jsbeeb frame-exactly: every wait is "run to the next
-`frame_top`" (a label the game places where it is reached once a rendered frame,
-before its logic reads the keys), never a poll of cycles, which would let key timing
-drift with code size.  A break waits for the label's bank and, in bank 7, its image
-(the kernel's `ld_img`); `fingerprint()` hashes every input to `render_frame`'s cost
-(the engine's state and the game's, `gameScene`), so frame costs are only compared
-between like scenes.  `test/lib/boards.mjs` emulates the Watford and Solidisk
-write-select boards on jsbeeb, counting every store into sideways RAM that reaches a
-bank other than the one paged.  `tools/pagecheck.py` lists every branch that crosses
-a page; `tools/layoutcheck.py` fails the build if the two machines' data do not lie
-alike.  A game's own tests compare a build with a reference, level by level, on both
-machines.
+Both players write the SN76489 through the system VIA's slow bus (`snd_write`: port A out,
+the sound write-enable latch low for 8 nops, port A back to the keyboard's shape; it keeps
+X, Y and the carry).
+
+### Effects
+
+The game sets `sfx_req` (zero page) to a 1-based index; the vsync's `sound_tick` starts it
+from `sfx_tab` (the game's table of word pointers; `sfx_tab-2,x` with X = 2 x index).  An
+effect is steps of `SFXSTEP_LEN` = 4 bytes -- three bytes written to the chip, then the
+frames to hold them -- ending in `SFX_END` ($FF), which written to the chip is the noise
+channel's silence (asserted); the end also silences channel 2.  `sfx_ptr`, `sfx_dur` are the
+player's state; `sfx_ptr+1 = 0` means none playing.  `sound_tick` is a step of the vsync
+handler on both machines (inlined; the effects themselves sit with it under `PLACEH`).  With
+`GAMESOUND` the vsync calls the game's `hook_sound` instead.
+
+### The tune
+
+The game's `music_addr` (in its menus' image) is a period table of `MUS_NNOTES` = 72 x 2
+bytes for MIDI notes `MUS_NOTE0` = 24 .. 95, then 4-byte records: frames, a note a voice
+(0 a rest), frames = 0 looping to the top (`engine/menus.s`; `tools/midi2snd.py` writes it,
+voices chosen by "CHANNELS:RANK" triples, Cleo's default `1:max/0:min/0:min2`).  The player
+`music_tick` lives in `MUSCODE`, first in the menus' image, beside its data: it runs only
+while that image is in bank 7.  `music_start` sets `mus_on`; the vsync copies `mus_on` to
+`mus_tick`; the interrupt's tail steps the tune when `mus_tick` is set, with bank 7 paged
+(the Model B's stub `irq_vret`, the Master's handler through `page_logic`).  `music_stop` is
+in the kernel because the kernel stops it: every load calls it (`ld_go`) and the menus'
+image may be gone.  `mus_vol` is 3, 8, 8 (melody louder).
+
+
+## 11. The build
+
+`tools/build.sh` is run from the game's directory by the game's own `build.sh`, which
+exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, `GAME_ASSETS`
+(run once per machine with `TARGET` and `BD` set), `GAME_MUSIC` (once, first), `DISC_TITLE`,
+`DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
+flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
+`MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS`, and `MAXSPR=n`.
+`GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` is the Master's alone (`cpu.inc` errors).
+`SKIP_ASSETS=1` skips the music and asset steps.
+
+The passes, in order:
+
+1. The tune (`GAME_MUSIC`).
+2. Per machine: the assets (`GAME_ASSETS`); `game.cfg` from `banks.cfg` with the build dir
+   substituted, `B4X/B5X/B6X` sized from `assets.inc`, `ENGBSS`'s align dropped under
+   `TIGHTBSS`; `levelfmt.inc`.
+3. The shared files compared across machines (`cmp`), `levelfile.py check` on every level.
+4. The disc list; `!BOOT`.
+5. Three passes until the sector table settles: `mkdfs.py table` -> `files.inc` (copied to
+   the Master); per machine `ca65` of the game, bank 7's sizes from `od65`, the Master's cfg
+   pinned, `ld65` with `-Ln labels.txt --dbgfile game.dbg`; `defs_ld.inc` from `labels.txt`
+   and `game.dbg` (the `want` list, `SOLIDF`, the hooks, the images' addresses and lengths,
+   `GAME_BSS*`); `IMG7`; `img7fix.inc`; `ldconst.s` assembled for its printed constants;
+   LDPROG; BANKS with its asserts and printed line; then the header equality check,
+   `gamename.inc`, LOADER.
+6. `mkdfs.py build` -> the disc; `assets.inc` compared; `layoutcheck.py`; `ls -l`.
+
+What stops a build: a shared file differing between machines; a level file failing
+`check`; `files.inc` not settling; a bank patch outside the pieces or on a non-bank byte; a
+write-bank entry not on `sta $FE30`; a patch site in the menus' image; the game image's
+variables running into its code; BANKS running into BOOTRAM; the header addresses differing
+between machines; `assets.inc` differing; any layout difference; and every `.assert` in the
+sources (the bank code ends, `BANKENTRY`, the stub sizes, the page-sharing of dispatch
+groups, ...).  The build prints `BANKS: n pieces, n bytes, n bank patches, n write-bank
+stores` per machine -- today 9 pieces / 16 / 13 for the Model B and 10 / 8 / 0 for the Master
+-- and `layout: the data sits alike on both machines`.
+
+Generated includes: `levelfmt.inc` (the format), `defs_ld.inc` (addresses for the loaders
+and tests), `img7fix.inc` (the images' patch lists), `files.inc` (sectors), `gamename.inc`
+(the loader's message).  Requirements: cc65's `ca65 ld65 od65`, Python 3; the tests need
+Node and jsbeeb in the npx cache (`harness.mjs findJsbeeb`).
+
+
+## 12. Testing, the 6502 spellings and the ca65 traps
+
+### The harness
+
+`test/lib/harness.mjs` drives a game under jsbeeb frame-exactly.  The contract: every wait
+is "run to the next `frame_top`", a label the game places at the one point reached exactly
+once a rendered frame, before its logic reads `keys` (Cleo's `game.s`); inputs are written
+while stopped there, so nothing in the protocol can observe a cycle count.  Breaks are
+bank- and image-aware: `loadBanks` reads `game.dbg` for each label's segment (`SEGBANK`,
+`SEGIMG`), `at()` waits for that bank in `romsel_cpy` and that image in `ld_img`.
+`fingerprint()` hashes every input to the renderer's cost (the window, the buffers' state,
+the sprite list, the records, the dirty lists, and the game's `gameScene()`), so a cycle
+comparison is valid only where fingerprints match.  `installMeter()` measures render work
+from the instruction after `render_frame`'s inlined spin (found by disassembling `lda
+flip_req / bne render_frame`) to `render_done`, the interrupt's time inside it separately,
+and the logic from `frame_top` to `render_frame`.  `test/lib/boards.mjs boardEmu` emulates a
+Watford or Solidisk board on a jsbeeb Model B and counts every store into a bank other than
+the one paged for reading.
+
+The engine's own unit test is `test/test_levelfile.py` (`python3 -m unittest discover -s
+beebgame/test`, 11 tests): the writer against the reader, the RLE, the directory's split
+and bank-5 flag, the header tail, the limits, and that `ldprog.s` names sections and header
+fields only by the constants `levelfile.py` defines.  The game's behavioural gate is its
+own: Cleo's `test/sweep.sh` runs 89 checks (16 levels x 5 window comparisons, the boards,
+the menus, the load sync, the board stores) against a snapshot.
+
+The tools: `tools/layoutcheck.py` and `tools/pincfg.py` (section 1), `tools/pagecheck.py`
+(page-crossing branches), `tools/codecmp.py old.s new.s` (two sources' code compared with
+comments and layout stripped: the check for a comment-only edit).
+
+### The 6502 spellings
+
+`cpu.inc` gives one source for both CPUs.  On the Master each macro is its one 65C02
+instruction; on the Model B an expansion whose side effects are stated in each header and
+audited at every site:
+
+| macro | Master | Model B | note |
+|-------|--------|---------|------|
+| `stz m` | `stz` | `lda #0 / sta` | A dead at the site |
+| `zero m,...` / `sta0 m,...` | `stz` each | one `lda #0` / `sta` each | `sta0`: A already 0 |
+| `stzx m` | `stz` | `ldx #0 / stx` | X dead |
+| `stz01 m` | `stz` | `dec m` | a 0/1 flag that is 1 |
+| `inca` / `deca` | `inc a` / `dec a` | `clc / adc #1`, `sec / sbc #1` | the carry is destroyed |
+| `incax` | `inc a` | `tax / inx / txa` | the carry survives |
+| `ldaz zp` / `cmpz zp` | `lda (zp)` / `cmp (zp)` | `ldy #0 / lda (zp),y` | Y destroyed, 0 after |
+| `ldaz0` / `staz0` | `lda (zp)` / `sta (zp)` | the `,y` form | Y already 0 |
+| `ldazx zp` | `lda (zp)` | `ldx #0 / lda (zp,x)` | X dead |
+| `ldy1` | `ldy #1` | `iny` | Y is 0 |
+| `bitimm v` | `bit #v` | `sta mtmp / and #v / php / lda mtmp / plp` | through `mtmp`; not in the interrupt |
+| `bra t` | the instruction | `jmp t` | |
+
+Inside `.if .not BHW` the Master's code is written natively (`stz`, `inc a`, `lda (zp)`,
+`tsb`, `trb`); the macros are for shared code.  The bank and board macros (`bankimm`,
+`setbank`, `BANKREF`, `wrsel`, `wrselx`, `wrback`, `WRREC`, `ldpbank`, `PLACEH`, `SAMEPAGE`,
+`PAD`) are section 4's.
+
+### The ca65 traps
+
+- A normal label ends ca65's cheap-local (`@`) scope, so one added inside a routine breaks
+  its `@` references.  So does an equate: `tiles.s` relies on `RINGHIOP := * + 1` ending a
+  scope at `draw_rect`'s head and on the first `:=` after the row loop ending it again
+  (`HPAIR0`, `HPAIR1`), and `build.sh` looks `@s0f` up in `game.dbg` under `draw_rect` *or*
+  `RINGHIOP` for that reason.  Hence the `@bf_`/`@wr_` site labels of section 4.
+- A line starting with `:` is an anonymous label; adding or removing one retargets every
+  `:+`/`:-` that crosses it.  The ring macros contain some (`macros.s` gives each one's
+  count; `ringmod7` has two on the Model B and none on the Master, so nothing may branch
+  over it with `:+`), and a few sources keep unreferenced `:` lines to hold a count
+  (`ldprog.s`, `tiles.s`, `kernel.s`).
+- `.segment` blocks are layout: the order of `ENGCODE`'s blocks in `frame.s` and the pads
+  before them are the measured placement (section 1).

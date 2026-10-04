@@ -1,235 +1,193 @@
 # Writing a game on beebgame
 
-This guide takes you from an empty directory to a game that boots from one disc on
-a BBC Model B (with 64K of sideways RAM) and a BBC Master 128.  It follows the steps
-in the order you will take them, and shows each with the code of Cleo, the game
-beebgame was built for (github.com/ebenupton/cleo, `beeb/`).  This guide is the
-contract between the engine and a game -- the hooks, the segments, the files, the
-limits; `README.md` is the overview, and `DESIGN.md` is the detail of how the engine
-works.  A game that does not fit a Model B can be built for the Master alone, with
-more room: Step 11.
+This guide takes you from an empty directory to a game that boots from one disc on a BBC
+Model B (with 64K of sideways RAM) and a BBC Master 128.  It follows the steps in the
+order you will take them, and shows each with the code of Cleo, the game beebgame was
+built for (github.com/ebenupton/cleo, `beeb/`).  It is the contract between the engine and
+a game -- the hooks, the segments, the files the build gives you and the files you give
+it, the limits.  `README.md` is the overview; `DESIGN.md` is how the engine works inside.
 
-What the engine does for you: the display (a scrolling MODE 1 playfield, double
-buffered, with a status bar), the tile and sprite blitters, redrawing only what
-changed, the keyboard, sound effects and music, the disc, loading each level into
-sideways RAM, and swapping between your menus and your game.  What you write: the
-game's logic, its menus, its HUD, and a tool that turns your art and levels into the
-files the engine loads.
+What the engine does for you: the display (a scrolling MODE 1 playfield, double buffered,
+with a status bar outside it), the tile and sprite blitters, redrawing only what changed,
+the keyboard, sound effects and a tune, the disc, gathering each level into sideways RAM,
+and swapping between your menus and your game.  What you write: the game's logic, its
+menus, its HUD, and a tool that turns your art and levels into the files the engine loads.
+
+Every symbol named here is in the sources; where a number is given in brackets it is the
+value in Cleo's build on the day of writing, for orientation, and the symbol is what to
+read.
 
 ## Before you start
 
 You need:
 
-- **cc65** (`ca65`, `ld65`, `od65`) and **Python 3**.  Your own asset tools will
-  probably want Pillow and numpy; the engine's tools need neither.
-- **jsbeeb** (`npx jsbeeb` once, so that it is in the npm cache) and **Node**, for
-  the tests.  The harness finds jsbeeb there.
+- **cc65** (`ca65`, `ld65`, `od65`) and **Python 3**.  The engine's own tools need no
+  other package; Cleo's asset converter wants Pillow and numpy.
+- **Node** and **jsbeeb**, for the tests.  The harness (`test/lib/harness.mjs`
+  `findJsbeeb`) looks for jsbeeb in npm's npx cache, `~/.npm/_npx/*/node_modules/jsbeeb`.
 
 Three facts about the machines shape everything you write:
 
-1. **Two CPUs.**  The Model B has a 6502, the Master a 65C02.  Your code is assembled
-   for both: write 6502, or use the 65C02 idioms `cpu.inc` spells for both (`stz`,
-   `zero`, `inca`/`deca`, `ldaz`, `bitimm`, `bra`...; the contracts are at the end
-   of `DESIGN.md`).  `BHW` is 1 when assembling for the
-   Model B, 0 for the Master; use `.if BHW` where the hardware really differs, which
-   in game code is almost never.
-2. **Two window sizes.**  The playfield is 160 game pixels wide on both, but 84 game
-   pixels tall on the Model B (21 character rows) and 120 on the Master (30 rows):
-   `WINPX`, `VISROWS`, `VISLINES` in `engine/defs.s`.  Your camera, your menus and your
-   level design must work in both.
-3. **Banked code.**  Your game's code lives in bank 7 of sideways RAM, beside the
-   engine's.  It can call the engine directly; the engine reaches the other banks
-   itself.  Your menus are a second image of bank 7 that the engine swaps in over
-   your game, so the two can never call each other.
+1. **Two CPUs.**  The Model B has a 6502, the Master a 65C02, and your code is assembled
+   once for each (`BHW` is 1 for the Model B's hardware, 0 for the Master's: `cpu.inc`).
+   Write 6502, or the 65C02 idioms `cpu.inc` spells for both -- `stz`, `zero`, `sta0`,
+   `stzx`, `stz01`, `inca`/`deca`/`incax`, `ldaz`/`cmpz`/`ldaz0`/`staz0`/`ldazx`, `ldy1`,
+   `bitimm`, `bra` -- each with a stated contract (which registers and flags its Model B
+   expansion destroys: the header of `cpu.inc`).  Inside `.if .not BHW` write native
+   65C02; inside `.if BHW` plain 6502.  In game code `.if BHW` is rarely needed.
+2. **Two window sizes.**  The playfield is `WINPX` game pixels wide on both (160) but
+   `VISROWS` character rows tall: 21 on the Model B (84 game pixels), 30 on the Master
+   (120) -- `engine/defs.s` `VISROWS`, `VISLINES`.  Your camera, your menus and your level
+   design must work in both.
+3. **Banked code, two images.**  Your game's code lives in bank 7 of sideways RAM, beside
+   the engine's renderer, below a resident kernel.  Your menus are a *second image* of the
+   same memory, which the engine loads from disc over your game and your game over it
+   (`disc.s` `go_game`, `go_menu`), so the two can never call each other; both call the
+   kernel.
 
 ## The concepts
 
-The engine works in several units at once, and most mistakes in a new game are
-mixing two of them.  This section defines them and then shows how the tiles and the
-sprites are laid out in memory.  Throughout this guide, and the
-engine's other documents, the word "pixel" never stands alone: it is always a
-**screen pixel** or a **game pixel**.
+The engine works in several units at once, and most mistakes in a new game are mixing two
+of them.  In this guide, as in the engine's sources, "pixel" never stands alone.
 
 ### Screen pixels, game pixels, scanlines
 
-A **screen pixel** is MODE 1's: 320 across a scanline, one of four colours (two
-bits).  A **scanline** is one line of the display.
-
-A **game pixel** is the game's square pixel: **2 screen pixels wide and 2 scanlines
-tall**.  Everything the game sees -- positions, speeds, sizes, the map -- is in game
-pixels.  The playfield is 160 game pixels wide on both machines (320 screen pixels),
-and 84 game pixels tall on the Model B (168 scanlines) or 120 on the Master (240).
-
-A game pixel's colour is not one of the four: it is a 2x2 **dither** of its four
-screen pixels, chosen from black, cyan, magenta and yellow to come nearest the colour
-the artist meant (Cleo's `tools/convert.py` does this).  So a game pixel can show
-many more than four colours, and it is the smallest thing the art can change.
+A **screen pixel** is MODE 1's: 320 across a scanline, one of four colours (two bits).  A
+**scanline** is one line of the display.  A **game pixel** is the game's square pixel, 2
+screen pixels wide and 2 scanlines tall; everything the game sees -- positions, speeds,
+sizes, the map -- is in game pixels.  A game pixel's colour is a 2x2 dither of its four
+screen pixels (Cleo's `tools/convert.py` chooses the dither), so the art shows more than
+the four colours the palette has: `set_palette` lays black, cyan, magenta and yellow as
+logical 0..3 (`kernel.s`).
 
 ### Bytes, characters, character rows
 
-MODE 1 packs **4 screen pixels into a byte** -- that is 2 game pixels across and 1
-scanline down.  Screen pixel i of a byte (0 the leftmost) keeps its colour's high bit
-in bit 7-i and its low bit in bit 3-i.
+MODE 1 packs 4 screen pixels into a byte: 2 game pixels across, one scanline down.  A
+**character** is 8 bytes stacked, a byte a scanline: 2 game pixels wide, 4 tall.  A
+**character row** is `ROWCHARS` (80) characters: `ROWBYTES` (640) bytes, the full width.
+A tile is `TILECHARS` (4) characters across and `TILEROWS` (2) character rows down:
+`TILEBYTES` (64) bytes, 8 x 8 game pixels (`defs.inc`).
 
-The screen is built from **characters**: a character is 8 bytes stacked, one byte a
-scanline -- 4 screen pixels (2 game pixels) wide, 8 scanlines (4 game pixels) tall.
-A **character row** is 80 characters side by side: 640 bytes, the full width.
-
-| Unit | Screen pixels across | Scanlines down | Game pixels across x down | Bytes |
+| Unit | Screen pixels across | Scanlines down | Game pixels | Bytes |
 |---|---|---|---|---|
-| screen pixel | 1 | 1 | half x half | a quarter |
 | game pixel | 2 | 2 | 1 x 1 | half a byte on each of 2 scanlines |
 | byte | 4 | 1 | 2 x half | 1 |
 | character | 4 | 8 | 2 x 4 | 8 |
-| tile | 16 | 16 | 8 x 8 | 64 |
-| character row | 320 | 8 | 160 x 4 | 640 |
+| tile | 16 | 16 | 8 x 8 | `TILEBYTES` |
+| character row | 320 | 8 | 160 x 4 | `ROWBYTES` |
 
 ### Where things are: the coordinates
 
-- **Map coordinates** are in game pixels from the map's top left: the window's
-  position (`wx`, `wy`) and every sprite's (`spx`, `spy`).
-- **Tile coordinates** are map coordinates divided by 8: the map is a grid of
-  1 << lw by 1 << lh tiles (its header's lw and lh), one byte (a tile id) each.
-- **Character coordinates** are what the display scrolls by: `wcx` = wx / 2
-  (character columns, 2 game pixels each) and `wcy` = wy / 4 (character rows, 4 game
-  pixels each).
+- **Map coordinates** are game pixels from the map's top left: the window's position
+  (`wx`, `wy`) and every sprite's reference point (`spx`, `spy`).
+- **Tile coordinates** are map coordinates divided by `TILEPX` (8): the map is a grid of
+  `1 << lw` by `1 << lh` tiles (the level header's `HDR_LW`, `HDR_LH`), a tile id a byte.
+- **Character coordinates** are what the display scrolls by.  `render_frame` derives them:
+  `wcx` = `wx` / 2, `wcy` = `wy` / 4, `wfine` = (`wy` & 3) * 2 scanlines (`frame.s`).
 
-What can move by how much:
-
-| What | Across | Down |
-|---|---|---|
-| the window (`wx`, `wy`) | 2 game pixels (a character column: `wx` must be even) | 1 game pixel (2 scanlines) |
-| a sprite (`spx`, `spy`) | 2 game pixels: the engine drops the low bit of its screen x | 1 game pixel |
-| a tile | 8 game pixels (it is on the map's grid) | 8 game pixels |
-
-So a sprite drawn one game pixel further right each frame appears to move every
-other frame.  A game that needs smoother movement across must keep a second image
-shifted by one game pixel and choose between them itself.
+What can move by how much: the window moves 2 game pixels across (a character: `wx` is
+even -- Cleo's `clamp_window` clears its low bit) and 1 game pixel down (two scanlines,
+through `wfine`); a sprite moves 2 game pixels across (`draw_sprite` takes its column as
+(`spx` - `sprg_rx` - `wx`) >> 1) and 1 down; a tile sits on the map's 8-pixel grid.
 
 ### A tile
 
-A tile is 8 x 8 game pixels: 4 characters across, 2 character rows down, 64 bytes, in
-the screen's own order -- the top character row's four characters (8 bytes each, a
-scanline a byte), then the bottom row's:
+A tile is `TILEBYTES` bytes in the screen's own order: the top character row's four
+characters (8 bytes each, a scanline a byte), then the bottom row's.  Tiles are opaque.
+The level's tile ids are not all tiles (`convert.py` `pack_tiles`'s comment block, and
+`gather.s`):
 
-```text
-bytes  0-7   8-15  16-23  24-31      scanlines 0-7    (game-pixel rows 0-3)
-bytes 32-39 40-47  48-55  56-63      scanlines 8-15   (game-pixel rows 4-7)
-      char0 char1  char2  char3      each 2 game pixels (4 screen pixels) wide
-```
+| Id | What | Bank 6 cost |
+|---|---|---|
+| 0 | the level's **solid**: a one-byte fill (the header's `HDR_SOLIDFILL`, which the loader patches into the row loop at `SOLIDF`) | none |
+| 1 .. `HDR_NTILES`-ish | **full tiles**: id k is stored at slot k + `TOFF` from `TILES` | `TILEBYTES` |
+| `HDR_HALF0` .. +`HDR_NHALF`-1 | **half tiles**: one character row stored (`HALFBYTES`, 32) from the page `HDR_HALFPAGE`, the other row a fill or the same row again, in three runs: top row filled (to `HDR_HALF1`), bottom row filled (to `HDR_HALF2`), both rows the stored one | `HALFBYTES` |
+| `FLAT0` .. 253 | **flat tiles**, `NFLAT` of them: two bytes alternating down the scanlines (`FLATTAB`'s pairs) | 2 bytes of `FLATTAB` |
+| 254, 255 | the two **solids** of the tile set, `FLATTAB`'s last two pairs | as a flat |
 
-The two scanlines of a game-pixel row are separate bytes, because the dither puts
-different screen pixels on each.  Tiles are opaque: a tile covers its 8 x 8 game
-pixels completely, and the level's tile ids say which tile goes where.
+`vars.s` asserts `FLAT0 + NFLAT + 2 = 256`.  `FLAT0` and `NFLAT` are the game's, in
+`assets.inc`; `NFLAT` is Cleo's packer knob (`NFLAT=n sh build.sh`, default 4), not an
+engine option.  Where a level has more flat tiles than `NFLAT`, Cleo's packer stores the
+surplus as full tiles.
 
 ### A sprite's image
 
-A sprite is a rectangle `W` bytes wide on the screen -- 2W game pixels, 4W screen
-pixels -- and h game pixels tall.  Its image is stored as **4-bit game pixels**: one
-byte for each game-pixel row of each column, holding that column's two game pixels, 4
-bits each (the left in the high nibble).  Each is an index into one palette of 15
-colours, the game's, and 0 is transparent, so a sprite is half a byte a game pixel and
-needs no mask.  The image is stored **column by column**: all h bytes of column 0, top
-to bottom, then column 1, and so on.  A 6 x 4 game-pixel sprite is 3 bytes wide and 4
-rows tall:
+A sprite is `W` bytes wide on the screen (2W game pixels) and some game pixels tall.  Its
+image is **4-bit game pixels**: a byte for each game-pixel row of each byte column, the
+left pixel in the high nibble, each nibble an index into one palette of fifteen 2x2
+patterns, 0 transparent (`convert.py` `NIB_PATTERNS`, `NIBTAB`).  The image is stored
+**column by column**: all the rows of column 0, then column 1.  The blitters expand a
+stored byte through three 256-byte tables the game supplies in `nibtab.bin` and the
+engine assembles into both sprite banks at `L0TAB`, `L1TAB`, `NMASK` (`banks.s`
+`NIB_TABLES`, `defs.inc`): the byte's two game pixels on their first scanline, on their
+second, and the AND mask for its transparent pixels.  `SWAPTAB`, the dot reversal that
+mirrors a byte, follows them in both banks.  Every image is drawn either way round.
 
-```text
-image bytes, column-major (W = 3, lines = 4, 12 bytes):
-  column 0: bytes 0-3    game pixels 0-1 across, game-pixel rows 0-3
-  column 1: bytes 4-7    game pixels 2-3 across
-  column 2: bytes 8-11   game pixels 4-5 across
-each byte:  bits 7-4 the left game pixel, bits 3-0 the right (0: transparent)
-```
+A **box** (`SPF_COPY`) is the other kind: opaque screen bytes, every scanline stored
+(`SPF_FULLRES`), copied without a mask -- for a sprite that always sits on a known
+backdrop.  Cleo's box stars are boxes; the engine draws boxes first so they never paint
+over a sprite (`draw_sprites`, `frame.s`).
 
-The palette is three tables your asset step writes as `nibtab.bin`, 768 bytes, each
-indexed by a stored byte: `L0TAB` and `L1TAB`, its first and second scanline as
-screen bytes (each game pixel's dither), and `NMASK`, the AND mask for its transparent
-game pixels ($00 for none, $CC or $33 for one).  When the sprite is drawn, a byte of 0
-draws nothing and each other byte's two screen bytes become (screen AND NMASK) OR the
-line.  The engine puts the tables, with its own table that reverses a byte's four
-screen pixels (SWAPTAB), at $BC00-$BFFF of both sprite banks, so either bank can hold
-any image and draw it mirrored or not.
+### Sprite ids, boxes and the directory
 
-### Sprite ids, and boxes
+Sprite ids are bytes.  Ids `0` .. `BOXID0`-1 are images, `BOXID0` .. `BOXID0`+`BOXN`-1 are
+boxes, and ids from `BOXID0`+`BOXN` are the boxes' **still aliases**: id `BOXID0`+`BOXN`+k
+draws box `BOXID0`+k, with the promise that nothing can have disturbed it, so the engine
+keeps it on screen without redrawing when it is the same frame in the same place
+(`draw_sprites`).  `BOXID0` and `BOXN` are the game's (`assets.inc`), and
+`BOXID0 + 2*BOXN <= 256` for the aliases to be ids (Cleo's `assets.py` asserts it).
 
-A sprite id indexes the level's directory.  Your asset step chooses two numbers,
-`BOXID0` and `BOXN`: ids below `BOXID0` are ordinary sprites (4-bit images), and the
-`BOXN` ids from `BOXID0` are **boxes**, opaque rectangles with their background baked
-into the art.  A box is not 4-bit: it is stored as screen bytes, every scanline (2h
-bytes a column, as a tile is), and drawn by a plain copy, so its background keeps its
-dither exactly.  A box suits a thing that sits still on a known background.  Two rules
-come with boxes:
+The **directory** that turns an id into an image is split:
 
-- A box drawn at the same place as the box before it must cover it completely -- the
-  frames of one animation, the same size.  The engine does not erase the old one.
-- Ids from `BOXID0 + BOXN` up (to `BOXID0 + 2 x BOXN - 1`) are **still** aliases: each
-  draws as the box `BOXN` below it, and tells the engine nothing will move over it, so
-  it may skip redrawing the box while it is unchanged.  Use them for boxes the player
-  can never pass in front of.
+- the **level's part**, `DIR_TABLE` (`banks.s`, in `ENGBSS`): for each of the
+  `BOXID0`+`BOXN` ids the image's address in its sprite bank, low bytes then high bytes;
+  a high byte of 0 means "not in this level", bit 7 clear means bank 5 (bank 4's are
+  `$8000`-up as written).  The level file carries it (`levelfile.directory()`), the
+  loader copies it in;
+- the **game's part**, the geometry by shape, `sprgeom.inc`: `sprg_ix` (shape index by
+  id), then by shape `sprg_w` (bytes wide), `sprg_rx`, `sprg_ry` (the reference point's
+  offset from the image's top left, signed: `draw_sprite` subtracts them from `spx`,
+  `spy`), `sprg_ln` (stored rows: scanlines for a box, game-pixel rows otherwise) and,
+  when `assets.inc` defines `SPRGFL`, `sprg_fl` (`SPF_MIRROR` 1, `SPF_FULLRES` 2,
+  `SPF_COPY` 8: `engine/defs.s`).  Cleo includes it in `GAMEDATA` (`gamedata.s`); it must
+  be somewhere in the game's image, where `draw_sprite` runs.
 
+### The two images of bank 7
 
-### A sprite's directory
-
-A sprite is described in two parts: its **shape**, which is the game's and the same
-in every level, and its image's **address**, which is the level's.
-
-The shapes are tables your asset step writes, `sprgeom.inc`, and your game assembles
-where the engine can read them with bank 7 paged (bank 7's GAMEDATA, or HAZEL):
-`sprg_ix`, a byte by sprite id, the sprite's shape; and by shape:
-
-| Table | Field | Unit |
-|---|---|---|
-| `sprg_w` | W, the width | bytes (2 game pixels each) |
-| `sprg_rx` | refx, the reference point across (signed) | game pixels |
-| `sprg_ry` | refy, the reference point down (signed) | game pixels |
-| `sprg_ln` | lines, the rows stored: h for an image, 2h (its scanlines) for a box | rows |
-| `sprg_fl` | flags (with `SPRGFL = 1` in assets.inc): bit 0 drawn mirrored, bit 1 every scanline stored (set for a box, clear for an image: two scanlines a stored byte), bit 3 a box (copied) | |
-
-Sprites that share a shape share its entry.  Without SPRGFL the flags are 0, or the
-sprite list's mirror with DRAWFLAGS (Step 11), so a game that mirrors by sprite id,
-or has boxes, sets SPRGFL and writes `sprg_fl`; Cleo does.
-
-The level's part is the directory proper, `DIR_TABLE` in bank 7, written by
-`levelfile.directory()`: two arrays by id, `DIRL` then `DIRH`, BOXID0 + BOXN
-bytes each, the image's address, its high byte 0 when the image is not in this level
-(not drawn) and with bit 7 clear when it is in bank 5 (the images are all at
-$8000-$BFFF, so bit 7 is otherwise always set).  It covers the boxes, and the
-prologue folds a "still" alias onto its box.  Commando's 180 ids have 106 shapes:
-180 + 4 x 106 bytes once, and 360 in each level, where the 8-byte entries the engine
-once kept took 1,440 in both.
-
-The sprite's top left lands at (`spx` - refx, `spy` - refy) in map coordinates, so the
-reference point is where the game says the sprite is: a character's feet, say, so
-that its frames of different sizes all stand on the same ground.
+Bank 7 holds, at its top, the **kernel** (`KRNDATA`, `KRNCODE`, `KRNBSS`, then the disc
+driver's slot and `KRNHW`/`GAMEHI`): resident, never swapped.  Below it is one of two
+files read from the disc: the **game's image** (`GAMEDATA`, `GAMECODE`, `ENGCODE`: your
+logic and the engine's renderer) or the **menus' image** (`MUSCODE`, `MNUCODE`,
+`MNUDATA`, `MNUBSS`: your menus and the engine's tune player).  Below both, not in either
+file, lie the level's tables (`ENGLVL`, `GAMELVL`) and the game image's variables
+(`GAMEBSS`, `GAMEROWH`, `GAMEOBJ`, `ENGBSS`), which the loader zeroes as the game's image
+comes in (`ldprog.s` `image_load`, `GAME_BSS` in `defs_ld.inc`).  `cfg/banks.cfg` is the
+one map; its header says how `build.sh` sizes the areas.
 
 ## Step 1: make the project
 
-Make a repository with beebgame as a submodule, and lay it out like Cleo's:
+Make a repository with beebgame as a submodule and lay it out as Cleo does:
 
 ```text
 mygame/
-  beebgame/          the engine (git submodule add https://github.com/ebenupton/beebgame beebgame)
-  build.sh           your build: sets beebgame's driver going
-  src/               your 6502 sources
-    main.s           the root: the engine's sources and yours, and the hooks
-    keymap.inc       your keys
-  assets/            your source art, levels and music, in the repository: the
-                     build reads nothing from outside it
-  tools/             your asset pipeline
-  test/              your tests, on beebgame's harness
-  build/             generated
+  beebgame/        the engine (git submodule)
+  build.sh         your build: sets the driver's variables and runs it
+  src/             your sources: main.s (the root), keymap.inc, the rest
+  tools/           your asset pipeline (Cleo: assets.py, convert.py)
+  test/            your tests, on beebgame's harness (Cleo: harness.mjs, sweep.sh ...)
+  assets/          your source art, levels and music
+  build/           generated: build/modelb, build/master, the disc
 ```
 
-Cleo's `src/` has `main.s`, `logic.s` (the game's logic and HUD), `game.s` (the game
-loop), `menu.s` (the menus), `gamedata.s` (its tables) and `keymap.inc`; its
-`assets/v500/` is the original J2ME game's data (the tile and sprite sheets, the
-levels, the tune), which its `tools/convert.py` reads.
+Cleo's `src/` is `main.s` (the root and the hooks), `logic.s` (the logic and the HUD),
+`game.s` (the level and frame loops, the sound effects), `menu.s` (the menus),
+`gamedata.s` (its tables) and `keymap.inc`.
 
 ## Step 2: the build script
 
-Your `build.sh` sets a few variables and runs the engine's driver, which assembles
-everything twice (once per machine), builds the loaders and writes the disc.  Cleo's,
-whole:
+Your `build.sh` exports a few variables and runs the engine's driver,
+`beebgame/tools/build.sh`, from your directory, where `build/` is made.  Cleo's, whole
+(`beeb/build.sh`):
 
 ```sh
 #!/bin/sh
@@ -239,109 +197,139 @@ cd "$(dirname "$0")"
 export GAME_MAIN=src/main.s GAME_SRC=src DISC_TITLE=CLEO DISC_OUT=build/cleo.ssd GAME_NAME=Cleo
 export GAME_MUSIC="python3 beebgame/tools/midi2snd.py assets/v500/thm.mid build/MUSIC"
 export GAME_ASSETS="python3 tools/assets.py"
-exec sh beebgame/tools/build.sh
+sh beebgame/tools/build.sh
+[ -n "$ALLLEVELS" ] || cp build/cleo.ssd ../cleo.ssd
 ```
 
-- `GAME_MAIN`, `GAME_SRC`: your root source and your include directory.
-- `GAME_ASSETS`: your asset step, run once per machine with `TARGET` (`modelb` or
-  `master`) and `BD` (`build/modelb`, `build/master`) set.  Step 8 says what it must
-  write.
-- `GAME_MUSIC`: run once before everything (it may be empty).
-- `DISC_TITLE`, `DISC_OUT`, `GAME_NAME`: the disc's title and file, and the name the
-  boot loader uses when it has to tell someone their machine will not do.
+The driver's environment (its header):
 
-`SKIP_ASSETS=1 sh build.sh` reassembles without rerunning your asset step: the quick
-loop while you work on code.
+| Variable | Meaning |
+|---|---|
+| `GAME_MAIN` | the root source; it includes the engine's (Step 3).  Required. |
+| `GAME_SRC` | your include directory (`-I`).  Required. |
+| `GAME_ASSETS` | a command run once per machine with `TARGET` (`modelb` or `master`) and `BD` (`build/$TARGET`) set: it writes that directory's assets and `build/TILES0-2` (Step 8).  Required. |
+| `GAME_MUSIC` | a command run once, first (may be empty).  Cleo's turns its MIDI into `build/MUSIC`. |
+| `DISC_TITLE` | the disc's title.  Required. |
+| `DISC_OUT` | the disc image; `build/game.ssd` by default. |
+| `GAME_NAME` | the game's name in the boot loader's messages (`gamename.inc`); `DISC_TITLE` by default. |
+| `SKIP_ASSETS=1` | skips `GAME_MUSIC` and `GAME_ASSETS`. |
 
-## Step 3: the root source
+The options -- `MASTERONLY`, `GAMEHAZEL`, `GAMESOUND`, `DRAWFLAGS`, `TALLMAP`, `TIGHTBSS`,
+`ALLLEVELS`, `MAXSPR=n` -- are Step 11's; the driver passes each as a `-D` and `cpu.inc`
+defaults it to 0.  `NFLAT` is not the driver's: Cleo's `convert.py` reads it from the
+environment.
 
-A game is one ca65 assembly.  Your `main.s` includes the engine's sources in a fixed
-order with yours between, then defines the five hooks the engine calls.  Cleo's:
+The driver assembles your root twice -- `--cpu 6502` for `build/modelb`, `--cpu 65C02 -D
+BHW=0` for `build/master` -- with `-I $BD -I $GAME_SRC -I beebgame/src` and
+`--bin-include-dir $BD`, so `.include` finds the generated includes in `$BD`, your own in
+`GAME_SRC` and the engine's, and `.incbin` reads from `$BD` alone: everything your sources
+`.incbin` must be written there by `GAME_ASSETS`.
 
-```asm
+## Step 3: the root source and the hooks
+
+Your root includes the engine's sources in this order, with yours between, and defines
+the hooks.  Cleo's `src/main.s`, whole but for its header:
+
+```ca65
         .include "cpu.inc"          ; (-D BHW=0: the Master)
         .include "defs.inc"
         .include "engine.s"
-        .include "logic.s"          ; ---- Cleo's
+        .include "logic.s"
         .include "game.s"
-        .include "menu.s"           ; ----
+        .include "menu.s"
         .include "low.s"
         .include "disc.s"
-  .if BHW                           ; (the Master's CRTC folds its ring itself)
+  .if BHW                          ; (the Master's CRTC folds its ring itself)
         .include "mirror.s"
   .endif
         .include "banks.s"          ; (the engine's tables, then the game's)
-        .include "gamedata.s"       ; Cleo's
+        .include "gamedata.s"
         .include "init.s"
 
-hook_title = game_main              ; start-up, the menus' image in (menu.s)
-hook_play  = level_loop             ; a game starts, the game's image in (game.s)
-hook_over  = menu_over              ; a game has ended, the menus' image in; A = 0 lost,
+hook_title = game_main             ; start-up, the menus' image in (menu.s)
+hook_play  = level_loop            ; a game starts, the game's image in (game.s)
+hook_over  = menu_over             ; a game has ended, the menus' image in; A = 0 lost,
                                     ; 1 won (menu.s)
-hook_image = bar_bg                 ; the game's image has come in (logic.s)
-hook_hud   = redraw_hud             ; render_frame, bar_dirty set: the bar's digits (logic.s)
+hook_image = bar_bg                ; the game's image has come in: the bar's template
+                                    ; with it, so the HUD's digit cache is stale (logic.s)
+hook_hud   = redraw_hud            ; render_frame, bar_dirty set: the bar's digits (logic.s)
 ```
 
-| Hook | Called | What it does |
-|---|---|---|
-| `hook_title` | once, at start-up, with the menus' image in (jumped to) | your title screen |
-| `hook_play` | when `go_game` has loaded your game's image (jumped to, the stack reset, interrupts still off) | your level loop |
-| `hook_over` | when `go_menu` has loaded the menus' image (jumped to; A is what you gave `go_menu`) | your game-over screen, then back to the title |
-| `hook_image` | just after the game's image is loaded, before `hook_play` | anything the load has made stale (Cleo: the HUD's digit cache) |
-| `hook_hud` | from `render_frame` while `bar_dirty` is set | draw the status bar's changing parts |
-| `hook_sound` | (GAMESOUND only: Step 11) from the vsync interrupt, instead of the engine's sound effects | your sound player's tick |
+The engine calls six things in your game.  Three of them (`hook_title`, `hook_image`,
+`hook_over`) are reached from the load-time program in main RAM, which takes their
+addresses from `defs_ld.inc` (`build.sh` reads them from the debug file); the others are
+assembled into the engine's own code.
 
-The assembler will stop with "symbol undefined" if you leave one out.
+| Hook | Called from | When | In | Out |
+|---|---|---|---|---|
+| `hook_title` | `ldprog.s` `ld_image` (`@title`), after `ld_resume` | start-up (`init.s` -> `go_title`), and never again: `go_menu` goes to `hook_over` | the menus' image is in bank 7; the chain resumes at the next vsync (`ld_resume`); the palette is black (`init.s` `boot` blanked it); the stack is reset to `STACKTOP`; interrupts on | never returns: it ends in `go_game` |
+| `hook_over` | `ldprog.s` `ld_image`, after `ld_resume` | the game's image called `go_menu` | A = `go_menu`'s A (Cleo: 0 lost, 1 won); the menus' image is in; the chain is running; the stack reset | never returns: it ends in `go_game` |
+| `hook_image` | `ldprog.s` `ld_image` (`jsr`) | the menus' image called `go_game`: the game's image has been read in, its bank numbers and write-bank stores patched, `GAME_BSS` zeroed and the bar's template (`BAR`) read to `BARADDR` | the game's image is in; **interrupts are off and the chain parked** (the load has not ended: `ld_open` = 1); A is undefined; the stack reset | returns; A, X, Y free |
+| `hook_play` | `disc.s` `game_in` (`jmp`), straight after `hook_image` | the same | as `hook_image` left it | never returns: it ends in `go_menu`.  Its first act must be a level load (`load_level_b`), which with `ld_open` set goes straight on and ends in `ld_resume`: only then do the vsyncs count and the flips land |
+| `hook_hud` | `frame.s` `render_frame` (`jsr`), after its wait for the last flip | once a rendered frame when `bar_dirty` is non-zero; `render_frame` then clears it (`stz01`: set it to 1 and no other value) | bank 7 paged (the game's image); the bar at `BARADDR` is on display and single buffered: the digits must be finished before the CRTC reaches it, (`QROWS`-`QVSYNC`)*8 scanlines after the vsync | returns; A, X, Y free |
+| `hook_sound` | `kernel.s`, the vsync's step of the interrupt, after `scan_keys` -- only with `GAMESOUND=1`, in place of the engine's `sound_tick` | every vsync, whichever image is in bank 7 | the interrupt's: A, X, Y saved by the handler (`irq_x`, `irq_y`, `MOS_IRQA`); the engine still copies `mus_on` to `mus_tick` after it | returns; it must store into no sideways bank (the interrupt's rule, `vars.s`) and so must live outside both images: HAZEL (`GAMEHAZEL`) or the kernel's segments |
+
+Two facts about the image hooks: the stack is reset to `STACKTOP` before each, so
+"nothing the other image called is returned to" (`disc.s`), and `hook_image` and
+`hook_play` run with the display parked and interrupts off -- no `vsyncs`, no flip --
+until the level load that `hook_play` must begin with.  `game_in` is also the label the
+test harness runs to (Step 10).
+
+The game's **three ways out** are the kernel's (`disc.s`): `go_game` (from the menus:
+the game's image, `hook_image`, `hook_play`), `go_menu` (from the game: A = whatever
+`hook_over` wants, the menus' image, `hook_over`) and `load_level_b` (from the game: X =
+the level 0..15; returns).  Each stops the tune, parks the chain at a frame boundary
+(`load_begin`), reads the load-time program and runs it.  **The engine does not blank the
+palette for a load**: the loader uses the screen as its staging area (`ldprog.s`), so call
+`blank_palette` before any of the three and `set_palette` when your first frames are
+built, as Cleo does in `level_loop`, `new_game` and `game_over`.
 
 ## Step 4: where your code and variables go
 
-Put everything in the game's segments; the engine's linker maps place them.
+`cfg/banks.cfg` names the segments; yours are the `GAME*`, `MNU*`, `ZPGAME` and (Step 11)
+`HAZ*` ones.  Every segment you use must exist there; the loader's zeroing and the
+build's sizing depend on them.
 
-| Segment | What | Where |
+| Segment | Where | What goes in it |
 |---|---|---|
-| `ZPGAME` | your zero page (about 110 bytes) | after the engine's |
-| `GAMECODE`, `GAMEDATA` | your game's code and tables | bank 7, the game's image |
-| `GAMEBSS` | your game's variables (zeroed each time the image loads) | bank 7, the game's image |
-| `MNUCODE`, `MNUDATA`, `MNUBSS` | your menus, and their art and tune | bank 7, the menus' image |
-| `LOWBSS` | a few bytes both images see | low RAM, shared with the engine: keep it small |
+| `ZPGAME` | zero page, after the engine's `ZEROPAGE`, up to `$FC` (`ZP` is `$00`-`$FB`; `$FC` is the ROM's interrupt entry's, `$FD` `ROMSEL_CPY`, `$FE`-`$FF` the engine's `ZPTOP`) | your hot variables, and **everything the menus set for the game** (Cleo: `level`, `lives`, `health`, `seed`, `max_level`): zero page survives the image swap; `GAMEBSS` does not |
+| `GAMELVL` | bank 7, after `ENGLVL` (`LV_ATTR0`, `LV_ALTCLS`, `LV_HDR`) in the room before `$8300` (224 bytes) | tables filled at a level's start.  The level file's **header tail** lands at `LV_HDR + HDR_LEN`, so a variable there receives it (Cleo's `RNGTAB`, asserted at that address; then `MROWL`).  Not zeroed by an image load |
+| `GAMEBSS` | bank 7 from `$8300`, page aligned | your small variables (keep it under 128 bytes so `GAMEROWH`'s half page follows in the same page: the cfg's comment).  **Zeroed as the game's image comes in** |
+| `GAMEROWH` | after `GAMEBSS`, aligned to a half page | a half-page table (Cleo's `MROWH`).  Zeroed |
+| `GAMEOBJ` | after it, page aligned | your page-aligned arrays (Cleo's object state, `LV_OBJST` ..).  Zeroed |
+| `ENGBSS` | after `GAMEOBJ`, page aligned (`TIGHTBSS`: unaligned) | the engine's: records, lists, `DIR_TABLE`.  Zeroed |
+| `GAMEDATA`, `GAMECODE` | the game's image, before the engine's `ENGCODE`; the file `GAME` | your tables and code.  Only this image can call the engine's `ENGCODE` (`render_frame`, `add_sprite`, `mark_dirty`, `lv_reset`) |
+| `MNUCODE`, `MNUDATA`, `MNUBSS` | the menus' image from `$8000`, after the engine's `MUSCODE`; the file `MENU` | your menus, their tables (the tune's stream at `music_addr`, Step 7), their variables |
+| `GAMEHI` | the top page of bank 7 (`B7H`), after the kernel's `KRNHW` | resident bytes that must survive both swaps and the zeroing: Cleo's `score` and `hi_score`, which the menus show and the game keeps |
+| `KRNCODE`, `KRNDATA`, `KRNBSS` | the kernel | the engine's; a game may add resident code (the build sizes the kernel from the object's segment totals) |
 
-Two rules:
+Three rules follow from the swap.  **The two images never call each other**: the menus
+reach the kernel (`KRNCODE`: `set_palette`, `blank_palette`, `calc_ring`,
+`build_sections`, `menu_sections`, `ring_addr7`, `music_stop`, `go_game`), low RAM
+(`selbb`, `map_*`) and their own `MUSCODE` (`music_start`), never `render_frame`.  **The
+menus' image carries no bank-number or write-bank sites**: `bankimm`, `setbank`, `wrsel`
+are patched by the loader for the game's image only, and the build fails on a `@bf_`/
+`@wr_` site in an `MNU*` segment ("use ldpbank": `cpu.inc` `ldpbank` reads the physical
+bank from `PBANK`).  **What the menus hand the game lives in zero page or `GAMEHI`**.
 
-- **Define a zero-page variable before its first use.**  ca65 assembles a forward
-  reference as absolute (a byte and a cycle more), so put your zero page ahead of
-  your code, in the first of your sources `main.s` includes, as Cleo's `logic.s` does:
-
-  ```asm
-          .segment "ZPGAME": zeropage
-  bin_i:     .res 1
-  frame:    .res 2
-  px:       .res 2                  ; player x, y (game pixels, map coordinates)
-  ...
-  ```
-
-- **The game's image and the menus' image cannot call each other.**  Both are at
-  the same addresses in bank 7, one at a time.  Anything both need goes in the kernel
-  (`PLACEH "MRAMCODE", "KRNCODE"`) or in zero page and low RAM.
-
-`build.sh`'s link reports a full bank as a memory area overflow; `python3
-beebgame/tools/pagecheck.py build/modelb` lists your branches that cross a page (a
-cycle each when taken).
+Each machine's own zero page variables are reserved on the other too (`vars.s`), and
+`tools/layoutcheck.py` fails the build if any shared variable or segment differs between
+the two links: your data lies at one address on both machines by construction, and the
+Master's shorter code is pinned to the Model B's starts (`tools/pincfg.py`).
 
 ## Step 5: the menus
 
-`hook_title` runs with the menus' image in bank 7.  Draw into buffer 0 of the ring
-with the window at the origin, keep the palette black until the page is finished,
-then show it.  The engine provides `calc_ring`, `ring_addr7` (a map character's screen
-address), `menu_sections` (the display, without the status bar), `set_palette`,
-`blank_palette`, `music_start`, `music_stop`, and `vsyncs`, `flip_req` and `keys`.
-Cleo's two helpers are a pattern to copy:
+A menu draws into ring buffer 0 and shows it through the kernel.  Cleo's three helpers
+(`menu.s`) are the pattern:
 
-```asm
-menu_begin:                         ; window at (0,0), buffer 0, cleared, palette black
+```ca65
+; menu_begin: window at (0,0), buffer 0 as work buffer, cleared; screen blanked until
+; menu_show has flipped the finished page in
+menu_begin:
         jsr blank_palette
-:       lda flip_req                 ; the game may still have a flip pending
+:       lda flip_req               ; the game may still have a flip pending
         bne :-
-        sta wx                      ; A = 0
+        sta wx                     ; A = 0: flip_req was
         sta wx+1
         sta wy
         sta wy+1
@@ -350,28 +338,27 @@ menu_begin:                         ; window at (0,0), buffer 0, cleared, palett
         sta wcy
         sta wfine
         sta cur_buf
-        jsr selbb                   ; (bank 6's select_backbuf, through low RAM)
+        jsr selbb                  ; (bank 6's select_backbuf, through low RAM)
         jsr calc_ring
-        jmp clear_ring              ; (zero the ring: Cleo's)
+        jmp clear_ring
 
-menu_show:                          ; display buffer 0, palette on
-        stz cur_buf
-        jsr menu_sections
-    .if .not BHW
-        stz next_buf                 ; (the Master: its handler's flip reads it)
-    .endif
+; menu_show: display buffer 0 (build sections, flip)
+menu_show:
+        stz cur_buf                ; (A is dead: build_sections loads it)
+    .if BHW
+        sta next_sect              ; A = 0 (the stz).  Before the build: the vsync reads
+    .else                          ;  it only for a flip, and flip_req is 0 until below
+        stz next_buf               ; (the Master: its handler's flip reads it)
         stz next_sect
-        inc flip_req
+    .endif
+        jsr menu_sections          ; the kernel's (engine.s)
+        inc flip_req               ; 0 -> 1: every way in has waited for it to clear
 :       lda flip_req
         bne :-
-        inc cur_buf
-        jmp set_palette
-```
+        inc cur_buf                ; 0 -> 1: next game frame renders into the other buffer
+        jmp set_palette            ; page is on display: colours back
 
-For input, wait a vsync and take the keys newly down (`keys` holds `K_LEFT`, `K_RIGHT`,
-`K_UP`, `K_DOWN`, `K_FIRE`, set by the interrupt from your key map):
-
-```asm
+; wait one vsync and return new key edges in A (keys pressed now but not last time)
 menu_keys:
         lda vsyncs
 :       cmp vsyncs
@@ -384,293 +371,281 @@ menu_keys:
         rts
 ```
 
-Draw text and pictures through `ring_addr7`, a character row at a time.  If your menus
-are all on black, a picture needs no mask: Cleo's are run-length streams copied
-straight to the screen (its `menu.s`).
+`clear_ring` is Cleo's: it zeroes from `CLEAR0` to `$8000` (both machines' buffer 0,
+and the Model B's mirrors and second ring).  `menu_sections` (`kernel.s`) is
+`build_sections` with the bar's section pointed at two black ring rows below the window
+(`MENUBAR`), so the bar is neither shown nor touched while the menus run.  To put bytes
+on the page, `ring_addr7` (A = the character row, `w16` = the column, C = 0) gives the
+screen address of a ring character in `sp`; Cleo's `draw_glyph_rows` and `blit` use it.
 
-**Music.**  `jsr music_start` plays the tune at `music_addr` from the interrupt,
-looping; `jsr music_stop` silences it (every load does too).  Cleo starts it on the
-title unless it is already playing.
+The tune: `music_start` (the engine's, in `MUSCODE`, the menus' image) starts the stream
+at `music_addr`, which your `MNUDATA` provides (Step 7); `music_stop` is the kernel's and
+every load calls it.  Cleo plays the tune on the title and stops it for the win/lose
+screen.
 
-**Starting a game.**  Set up the game's state in zero page -- it survives the swap --
-and `jmp go_game`.  The engine loads the game's image and jumps to `hook_play`:
-
-```asm
-new_game:
-        stz level
-        ...
-        lda #3
-        sta lives
-        sta health
-        ...
-        jmp go_game
-```
-
-**After a game.**  Your game ends with `lda #n / jmp go_menu`; the engine loads the
-menus' image and jumps to `hook_over` with n in A.  Cleo's shows its win or lose
-screen and goes back to the title:
-
-```asm
-menu_over:
-        jsr win_lose                 ; A = 0 lost, 1 won
-        jmp title_loop
-```
+The way out is `go_game`: Cleo's `new_game` sets `score`, `lives`, `health`, `level` (in
+zero page and `GAMEHI`), calls `blank_palette`, and jumps.
 
 ## Step 6: the game
 
-`hook_play` runs with your game's image in, interrupts off and the disc still open.
-Cleo's level loop is the pattern: load the level, set it up, render both buffers with
-the palette black, then run frames pegged to the vsync.
+The game's image comes in at `hook_play`.  Cleo's `level_loop` (`game.s`), as it is:
 
-**Loading a level.**  `load_level_b` (X = the level, 0..15) gathers the level into the
-banks.  Call it first in `hook_play`: the engine arrives there with interrupts off and
-the disc still open from loading the game's image, and the first level's load goes
-straight on and ends by turning them on -- nothing before it may wait on a vsync.  Then take the map's shape from the header and reset the engine's records --
-the engine reads `mapw`, `maph`, `maxwx`, `maxwy`, `maplw`, `maplh`, which you set.
-Cleo's `load_level`, shortened:
-
-```asm
-load_level:
-        jsr load_level_b            ; the disc: everything into the banks
-        ...                         ; mapw = 8 << lw, maph = 8 << lh (game pixels), from
-        ldx LV_HDR+HDR_LW           ;  the header: HDR_ offsets are the engine's
-        stx maplw                   ;  (levelfmt.inc)
-        ...
-        ldx LV_HDR+HDR_LH
-        stx maplh
-        ...                         ; maxwx = mapw - WINPX, maxwy = maph - VISLINES/2
-        jsr lv_reset                 ; the records and the buffers' state
-        sta nspr                    ; A = 0: the sprite list empty
-        rts
-```
-
-Your own header fields and objects are there too: `LV_HDR` (your bytes: +2..+5,
-+7..+19), `LV_OBJS` (6 bytes an object), and the two per-tile tables `LV_ATTR0` and
-`LV_ALTCLS`, 256 bytes each, for whatever your logic wants to know about a tile id.
-
-**The level loop:**
-
-```asm
+```ca65
 level_loop:
-        jsr blank_palette           ; hide the loading and the first frame's build-up
+        jsr blank_palette          ; hide the loading and the first-frame build-up
         ldx level
-        jsr load_level
-        jsr level_init              ; (the game's: the objects, the player, the camera)
-        lda #1
-        sta bar_dirty                ; the bar on the first render
-        jsr game_frame              ; render both buffers before the palette comes back
+        ; the level: X = level index 0..15 (even = main, odd = bonus)
+        jsr load_level_b           ; the disc: everything into the banks (disc.s)
+        lda #TILEPX                ; mapw = TILEPX << lw ; maph = TILEPX << lh
+        sta mapw
+        sta maph
+        zero mapw+1, maph+1
+        ldx LV_HDR+HDR_LW
+        stx maplw
+:       asl mapw
+        rol mapw+1
+        dex
+        bne :-
+        ldx LV_HDR+HDR_LH
+:       asl maph
+        rol maph+1
+        dex
+        bne :-
+        lda mapw                   ; C = 0: the last rol shifted out maph's bit 15
+        sbc #WINPX-1
+        sta maxwx
+        lda mapw+1
+        sbc #0
+        sta maxwx+1
+        lda maph                   ; C = 1: mapw >= WINPX
+        sbc #VISLINES/2
+        sta maxwy
+        lda maph+1
+        sbc #0
+        sta maxwy+1
+        jsr lv_reset               ; the records (bank 7) and the buffers' state (main RAM)
+        sta nspr                   ; A = 0: lv_reset ends with a stz
+        jsr level_init
+        sty bar_dirty              ; Y = 1 (level_init's exit): the digits on the first
+                                    ; render (the bar's template is in place already: bar_bg)
+        ; initial camera; render both buffers before the palette comes back
+        jsr game_frame
         jsr render_frame
+
         jsr game_frame
         jsr render_frame
         jsr set_palette
-        lda vsyncs
-        sta logicvs
+```
+
+In order: blank, load (`load_level_b`, X = the level), read the header's `HDR_LW`/`HDR_LH`
+into the map's size and the window's limits (`maplw`, `mapw`, `maph`, `maxwx`,
+`maxwy` are zero page the engine declares for the game: `vars.s`), `lv_reset` (both
+buffers invalid, the records and dirty lists empty; it leaves A = 0 for `nspr`), your own
+`level_init`, two frames rendered dark so both buffers hold the scene, then `set_palette`.
+On the Model B the level's objects are read to `LV_OBJS` in display RAM (`defs.inc`):
+read them before the first `render_frame`, as Cleo's `level_init` does.
+
+What the loader has set when `load_level_b` returns (`ldprog.s` `lv_load`): `LV_HDR`
+(the 32-byte header and your tail after it), `LV_OBJS` (`HDR_NOBJ` objects of
+`OBJ_BYTES`), `LV_ATTR0` and `LV_ALTCLS` (your two 256-byte tables by tile id),
+`map_shr` and `map_stride`, the map in bank 5, the tiles in bank 6, the sprites in banks
+4 and 5, `DIR_TABLE`, `FLATTAB`, and the chain running again.
+
+The frame loop (`game.s`): Cleo renders every `VSPEG` (3) vsyncs and drops time lost to
+a long frame rather than catching up.  `frame_top` is reached exactly once a rendered
+frame, before the logic reads `keys`; the harness breaks there (Step 10).
+
+```ca65
 frame_loop:
-        lda vsyncs                  ; a rendered frame every VSPEG vsyncs (3: 16.7 Hz)
+        lda vsyncs
         sec
         sbc logicvs
         cmp #VSPEG
         bcc fl_wait
         lda vsyncs
         sta logicvs
-frame_top:                          ; once a rendered frame, before the logic reads
-        jsr game_frame              ;  the keys: the test harness breaks here
-        ...
+frame_top:                         ; exactly once per rendered frame, before the two
+                                    ; logic steps read 'keys': the test harness breaks
+                                    ; here so every wait and every input it applies is
+                                    ; quantised to a frame boundary (test/harness.mjs)
+        jsr game_frame             ; (nspr is 0 here: render_frame and load_level clear it)
+        lda exiting
+        bne fl_over
         jsr render_frame
         jmp frame_loop
 ```
 
-Label `frame_top` exactly as Cleo does: the test harness runs frame to frame by it.
+What a frame's logic does with the engine (`frame.s`, `lowram.s`):
 
-**A frame of logic** does three things the engine reads:
+| Call | In | Out |
+|---|---|---|
+| `add_sprite` | A = id; `spx`, `spy` = its reference point in game pixels (map coordinates); with `DRAWFLAGS`, bit 7 of `spx+1` mirrors it | the list grows by one, or the sprite is dropped when `nspr` = `MAXSPR`; A, X clobbered, Y kept |
+| `mark_dirty` | A = the tile's map column, X = its row | queued in both buffers' dirty lists; a full list (`DIRTYMAX`, 20) marks the buffer to be redrawn whole |
+| `map_row` | A = the tile row | `map_ptr` = the row's address in the map (bank 5); Y = 0; X kept |
+| `map_byte` | `map_ptr`, Y = the column | A = the tile id; X, Y kept |
+| `map_col` | `map_ptr`, Y | A = the tile, `tp` = the tile above, `tp+1` below; X clobbered |
+| `map_put` | A = the id, `map_ptr`, Y | the map written (a write window, closed again); A, X, Y kept.  Then `mark_dirty` |
+| `render_frame` | `wx` (even), `wy`; the sprite list; `bar_dirty` | draws the back buffer, requests the flip, `nspr` = 0, `cur_buf` flips.  It does not wait: the next logic step overlaps the pending flip |
+| `bar_dirty` | set to 1 when the HUD changed | `render_frame` calls `hook_hud` and clears it |
 
-- **The window.**  Set `wx`, `wy` (game pixels, map coordinates; `wx` even) and keep them within
-  `0..maxwx`, `0..maxwy` (Cleo's `clamp_window`).  `render_frame` scrolls to them.
-- **The sprites.**  Empty the list (`stz nspr`), then for each sprite set `spx`, `spy`
-  (game pixels, map coordinates: the sprite's reference point; across, the sprite
-  lands on the even game pixel at or left of it) and `lda #id / jsr add_sprite`.  At most
-  `MAXSPR` a frame (the build's `MAXSPR`, Step 11, else your assets.inc's `MAXSPRDEF`, Step 8, else 28).  `render_frame` erases what moved,
-  keeps what did not and draws the rest.
-- **The map.**  Read and write it through `map_row` (A = a tile row: `map_ptr` = the row),
-  `map_byte` and `map_put` (Y = the column); after a change, `lda #tx / ldx #ty / jsr
-  mark_dirty` so both buffers redraw that tile.
+Window limits are yours to keep: the engine draws what `wx`, `wy` say (Cleo's
+`clamp_window`).  Both machines render the same `wx`, `wy`; only `VISROWS` differs, so a
+camera that places the player `CAM_Y` from the top shows more below on the Master.
 
-Then `jsr render_frame`.  It waits for the previous frame's flip, draws, and asks for
-the flip; your logic for the next frame runs while it waits.
-
-**Sound.**  `lda #n / sta sfx_req` plays effect n (from 1) from your `sfx_tab`.
-
-**The status bar** is two character rows outside the ring, at `BARADDR`.  Its template
-(BAR, your asset) is loaded with the game's image; set `bar_dirty` when a number
-changes and draw it in `hook_hud`.  Cleo's `redraw_hud` draws digits into the bar from
-`digits_art`, remembering what each slot shows (`BARCACHE`), which is why its
-`hook_image` resets that cache.
-
-**Ending.**  When the game is over, `lda #n / jmp go_menu`.  Between levels, just go
-round the level loop again: `load_level_b` keeps the game's image and loads only the
-level.
+The way out is `go_menu` with A set for `hook_over` (Cleo: `game_over`, after the
+hi-score compare and `blank_palette`).
 
 ## Step 7: keys, sound effects, music
 
-**Keys:** `src/keymap.inc`, on your include path, gives the key numbers the interrupt
-scans and the `K_` bit each sets.  Cleo's:
+**Keys.**  `kernel.s` `scan_keys` includes your `keymap.inc` right after itself (so it
+lands in the interrupt's segment: `PLACEH "MRAMCODE", "KRNCODE"`) and reads three things
+from it: `KEYN`, `key_tab` (`KEYN` internal key numbers, written to the keyboard through
+the system VIA) and `key_bits` (the `K_` bit each sets).  The vsync builds `keys` from
+them; the `K_LEFT` .. `K_FIRE` bits are `engine/defs.s`'s.  Cleo's (`src/keymap.inc`):
 
-```asm
-; Z and cursor left K_LEFT, X and cursor right K_RIGHT, : and cursor up K_UP,
-; RETURN and SPACE K_FIRE, / and cursor down K_DOWN
+```ca65
 KEYN = 10
 key_tab:  .byte $61,$19, $42,$79, $48,$39,$49, $68,$29, $62
 key_bits: .byte K_LEFT,K_LEFT, K_RIGHT,K_RIGHT, K_UP,K_UP,K_FIRE, K_DOWN,K_DOWN, K_FIRE
 ```
 
-**Sound effects:** `sfx_tab`, a word per effect, each a list of SN76489 steps (the
-channel's latch byte, its data byte, its volume byte, and how many frames to hold)
-ending `$FF`.  It must be resident, so place it with `PLACEH`:
+**Sound effects.**  Set `sfx_req` (zero page) to a 1-based index and the vsync's
+`sound_tick` plays entry `sfx_req` of your `sfx_tab`, a table of words.  An effect is
+steps of `SFXSTEP_LEN` (4) bytes -- three bytes written to the SN76489 in turn, then the
+frames to hold them -- ending in `SFX_END` (`$FF`, which written to the chip is also the
+noise channel's silence); the end also silences tone channel 2.  `sfx_tab` and the
+effects must be where `sound_tick` is: Cleo's `game.s` puts them under `PLACEH
+"MRAMCODE", "KRNCODE"` (bank 7 on the Model B, main RAM on the Master) and builds each
+step with a macro:
 
-```asm
-        PLACEH "MRAMCODE", "KRNCODE"    ; bank 7's kernel on the Model B, main RAM on the Master
+```ca65
+.macro SFX ch, lo4, hi, att, dur
+        .byte SN_LATCH | (ch << SN_CHSHIFT) | lo4, hi, SN_LATCH | SN_VOL | (ch << SN_CHSHIFT) | att, dur
+.endmacro
+SFX_CH = 2
 sfx_tab: .word sfx_jump, sfx_star, sfx_throw, sfx_hit, sfx_kill, sfx_power, sfx_die
-sfx_jump: .byte $C0|8, 12, $D0, 2,  $C0|4, 9, $D2, 2,  $C0|0, 7, $D4, 2,  $C0|8, 5, $D6, 3, $FF
+sfx_jump:  SFX SFX_CH, 8, 12, 0, 2
+           SFX SFX_CH, 4, 9, 2, 2
+           SFX SFX_CH, 0, 7, 4, 2
+           SFX SFX_CH, 8, 5, 6, 3
+           .byte SFX_END
 ```
 
-**Music:** `beebgame/tools/midi2snd.py <in.mid> <out> [voices]` turns a MIDI file
-into the player's stream: three voices, each taking a note a frame from the notes
-sounding on some MIDI channels.  `voices` says which: three `CHANNELS:RANK` joined by
-`/`, RANK `max`, `min`, `max2` (the second highest) or `min2` (the second lowest).
-The default is Cleo's tune's, `1:max/0:min/0:min2` (the melody the highest note on
-channel 1, the backing the two lowest on channel 0); Commando's is
-`3,10:max/0:min/3,10:max2`.  Put the stream in your menus' image at `music_addr`:
+An effect must not sit in page 0 (`sound_tick` tests its address's high byte for "one
+playing").  With `GAMESOUND=1` none of this is assembled and the vsync calls your
+`hook_sound` instead (Step 3).
 
-```asm
-        .segment "MNUDATA"
-music_addr:
-        .incbin "music.bin"
-```
+**The tune.**  Your `MNUDATA` provides `music_addr`: `MUS_TAB_LEN` (144) bytes of
+periods for MIDI notes `MUS_NOTE0` .. +`MUS_NNOTES`-1 (24..95), then 4-byte records --
+frames, then a note for each of the three voices (0 a rest) -- with frames = 0 to loop
+(`engine/menus.s`).  `tools/midi2snd.py <in.mid> <out> [<voices>]` writes exactly that
+from a MIDI file; the voices argument picks each voice's note from the MIDI channels
+(`CHANNELS:RANK` x 3, joined by `/`; Cleo's default `1:max/0:min/0:min2`).  Cleo's
+`GAME_MUSIC` runs it to `build/MUSIC`, its asset step copies that to `music.bin`, and
+`gamedata.s` incbins it at `music_addr`.  The player (`music_tick`) is stepped from the
+interrupt only while `mus_on` is set, which `music_start` sets and `music_stop` clears;
+it lives in the menus' image, so the tune plays in the menus and stops at every load.
 
 ## Step 8: the assets
 
-Your `GAME_ASSETS` step writes, for each machine, into `$BD`:
+`GAME_ASSETS` runs once per machine with `TARGET` and `BD` set, and must write the same
+shared files on both runs: the build compares `SPRX`, `SPRC`, `BAR` and `L0`-`L15`
+between `build/modelb` and `build/master` and stops if they differ, and `assets.inc` too.
+Into `$BD` it writes:
 
-| File | What |
+| File | Read by | What |
+|---|---|---|
+| `assets.inc` | the engine, the loaders' constant pass (`ldconst.s`) and your sources | the constants below |
+| `L0` .. `L15` | the loader (`ldprog.s` `lv_load`) | the sixteen level files, `tools/levelfile.py`'s format |
+| `SPRC` | the loader, once | the resident sprites: `SPRC_LEN` bytes to bank 4 at `SPRC_BASE`, then `SPRC5_LEN` to bank 5 at `SPRC5_BASE` |
+| `SPRX` | the loader, every level | every other image and box, from which each level copies its own (the Master keeps it in HAZEL/ANDY after the first read unless `GAMEHAZEL`) |
+| `img_tab.bin` | `ldprog.s` (`.incbin`) | an entry per item of `IMGTAB_LEN` (5) bytes: the file (the loader's file numbers: 0 is `SPRX`), offset, length -- items up to `BAKEITEM0` |
+| `nibtab.bin` | `banks.s` (`.incbin`, `NIBTAB_LEN` = 768) | the sprites' expansion tables `L0TAB`, `L1TAB`, `NMASK` |
+| `sprgeom.inc` | your `GAMEDATA` (`.include`) | `sprg_ix`, `sprg_w`, `sprg_rx`, `sprg_ry`, `sprg_ln`, `sprg_fl` |
+| `BAR` | the loader, with the game's image | the status bar's template, `BARROWS` * `ROWBYTES` (1280) bytes, read to `BARADDR` |
+| `bake_kind.bin`, `bake_geom.bin` | `ldprog.s`, only when `assets.inc` defines `BAKEITEM0` | Cleo's baked boxes: by slot its kind; by kind `BG_LEN` (8) bytes (`BG_WC`, `BG_LINES`, `BG_DX`, `BG_DTY`, `BG_OV`, `BG_SKIP`) |
+| whatever your sources `.incbin` | you | Cleo: `alt.bin`, `digits.bin`, `digtab.bin`, `font.bin`, `music.bin`, `title.bin` and `title.inc` |
+
+and into `build/`: `TILES0`, `TILES1`, `TILES2`, the tile set, each at most `TILE_CHUNK`
+(256) tiles of `TILEBYTES` -- 16K, what either machine stages at a time (`convert.py`).
+The loader's file table names exactly these (`ldprog.s` `ftab`: three tile files, `tfi`).
+
+**assets.inc.**  The engine reads these (the rest of Cleo's -- `HDR_STARTX`.., `RQ_*`,
+`OT_*`, `SPR_*`, `BINMAXDEF`, `TP_*`, `TBUF_LEN`, `HUD_*`, `GLYPHW`.. -- are its own, and
+you may add yours the same way):
+
+| Constant | Meaning | Reader |
+|---|---|---|
+| `FLAT0`, `NFLAT` | the fill ids: `NFLAT` flats from `FLAT0`, then the two solids (`FLAT0 + NFLAT + 2 = 256`) | `gather.s`, `vars.s`, `ldprog.s` |
+| `BOXID0`, `BOXN` | the first box id and the box count | `frame.s`, `banks.s`, `ldprog.s` |
+| `SPRGFL` | define it (= 1) when `sprgeom.inc` carries `sprg_fl`; leave it out and the only flag is `DRAWFLAGS`'s mirror | `frame.s` |
+| `MAXSPRDEF` | the sprite list's size, when the build's `MAXSPR` is not given; 28 without either | `engine/defs.s` |
+| `TOFF` | tile id k is at slot k + `TOFF` from `TILES`; bank 6's code must end before slot `TOFF`+1 (`init.s` asserts it) | `defs.inc`, `gather.s`, `ldprog.s`, `init.s` |
+| `TILES` | bank 6's tile origin, page aligned (Cleo's `$8600`) | `defs.inc`, `gather.s`, `ldprog.s` |
+| `MAP5` | the map in bank 5: a fixed 8K below `B4_DATA_END` | `defs.inc` (`LV_MAP`), `ldprog.s` |
+| `B4_DATA_END` | where the expansion tables start in banks 4 and 5 (`L0TAB`) | `defs.inc` |
+| `B4_CODE_END`, `B5_CODE_END` | where the engine's code ends in the sprite banks: your sprites start there.  Asserted equal on the Model B and not passed on the Master (`sprloops.s`, `gather.s`), and `build.sh` sizes the link's areas to them, so a wrong value stops the build | `sprloops.s`, `gather.s`, `build.sh` |
+| `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | the resident and staged sprite files | `ldprog.s` |
+| `IMGTAB_LEN` | `img_tab.bin`'s entry (5) | `ldprog.s` |
+| `BAKEITEM0`, `BG_*` | the first baked item and the geometry record (optional: the loader bakes nothing without `BAKEITEM0`) | `ldprog.s` |
+
+`B4_CODE_END` and `B5_CODE_END` are the engine's numbers, not yours: Cleo's `assets.py`
+sets them by hand because the packer runs before the assembler.
+
+**A level file** is one call to `levelfile.encode()` (`beebgame/tools/levelfile.py`, the
+one definition: `python3 levelfile.py inc` writes the `levelfmt.inc` the loader and
+`defs.inc` include, so the two cannot drift).  The file is a table of thirteen section
+offsets (`SECTIONS`: `hdr objs attr altcls tiles place map flat halves hpair mir dir
+page0`), then the sections:
+
+| Section | Content |
 |---|---|
-| `assets.inc` | the constants the engine is built with (below) |
-| `L0` .. `L15` | the levels: sixteen files, written with `tools/levelfile.py` |
-| `SPRC` | the sprites every level draws, loaded once, to fixed places in banks 4 and 5 |
-| `SPRX` | every other sprite image, from which each level takes its own |
-| `img_tab.bin` | where each item is in SPRX: 5 bytes each (file, offset, length) |
-| `nibtab.bin` | the sprites' palette: `L0TAB`, `L1TAB`, `NMASK`, 768 bytes (*A sprite's image*) |
-| `sprgeom.inc` | the sprites' shapes, `sprg_ix` and `sprg_w` .. `sprg_fl`, for your GAMEDATA or HAZEL to include (*A sprite's directory*) |
-| `BAR` | the status bar's template, 1,280 bytes |
-| anything your own sources `.incbin` (Cleo: the tune, the font, the title pictures) |
+| `hdr` | `HDR_LEN` (32) bytes: `HDR_LW`, `HDR_LH` (log2 of the map in tiles), `HDR_NOBJ`, the game's fields at `HDR_GAME` (offsets 2-5 and 7-19), and the tile set's `Shape` at `HDR_SHAPE` (20): `ntiles`, `map_shr` (8 - lw), `nhalf`, `half0..2`, `halfpage` (high byte), `halfoff`, `mir0`, `nmir` (0), `solidfill`.  Then your **header tail** (`Level.header_tail`), under a page in all: the loader copies the whole section to `LV_HDR` |
+| `objs` | `OBJ_BYTES` (6) a record, `OBJ_MAX` (149) at most: yours, copied to `LV_OBJS` |
+| `attr`, `altcls` | two 256-byte tables by tile id: yours (`LV_ATTR0`, `LV_ALTCLS`) |
+| `tiles` | the tile list: the files this level uses (count, then each file's number and its full tiles), then each full tile's index in its file (`convert.py` `_tilelist`) |
+| `place` | `levelfile.placement()`: `PLACE_LEN` (6) bytes an entry -- item, bank (4 or 5), image address, extra (0, or the tile `x | y << 8` of an item the loader bakes) -- ending in `PL_END` |
+| `map` | `1 << (lw + lh)` tile ids, row major, run-length coded (`rle`: c < 128 is c+1 literals, else the next byte c-126 times) |
+| `flat` | `FLATTAB`'s pairs, `FLATTAB_LEN` = 2*(`NFLAT`+2) |
+| `halves` | two bytes a half tile: its index in its file, and its stored row with the file's place in the level's list << 1 |
+| `hpair` | the halves' fill palette, `HPAIR_LEN` (16: 8 first bytes, 8 second), then each half's low bits (fill row and colour) |
+| `mir` | empty (the removed mirrored tiles' slot; `nmir` = 0) |
+| `dir` | `levelfile.directory()`: `2*(BOXID0+BOXN)` bytes (above) |
+| `page0` | `PAGE0_LEN` (512): the Master's gather table, a pair per id, 256 low then 256 high, in whole sectors at the end -- the Model B's loader reads the file short of them |
 
-and into `build/`: `TILES0`, `TILES1`, `TILES2`, the tile set, up to 256 tiles (16K)
-each.  The files the loader reads must be identical on both machines (the build
-checks): build them from the Model B's layout.
-
-**assets.inc:**
-
-| Constant | Meaning |
-|---|---|
-| `TOFF` | tile id k is in slot k + TOFF of bank 6 (the first slot clear of its code: Cleo's is 2) |
-| `FLAT0`, `NFLAT` | the fill ids: NFLAT flat tiles from FLAT0, then the two solids at 254 and 255, so FLAT0 = 254 - NFLAT (asserted) |
-| `BOXID0`, `BOXN` | the first box id, and how many boxes (*Sprite ids, and boxes*) |
-| `SPRGFL` | 1 when the shapes carry flags, `sprg_fl` (*A sprite's directory*); leave it out otherwise |
-| `MAXSPRDEF` | the sprite list's size: the most sprites on screen at once (optional: 28 if left out; the build's `MAXSPR`, Step 11, overrides it) |
-| `SPRC_BASE`, `SPRC_LEN`, `SPRC5_BASE`, `SPRC5_LEN`, `SPRX_LEN` | the resident and staged sprites (below) |
-| `MAP5` | the map's place in bank 5 ($9C00) |
-| `B4_CODE_END`, `B5_CODE_END` | where the engine's sprite-bank code ends: your sprites start there |
-
-Your asset step may add your own constants to `assets.inc` for your own sources
-(Cleo adds BINMAXDEF, its bin walk's list size, and its title pieces' TP_ and
-TBUF_LEN); the engine reads only the ones above.
-
-`B4_CODE_END` and `B5_CODE_END` are the engine's, not yours: take them from the
-engine version you build against (Cleo's `tools/assets.py` has the current ones).  If
-they are wrong the build stops with an assertion saying which.
-
-**A level file** is one call to `levelfile.encode()`.  Your packer gathers the level
-in the engine's terms: the map as tile ids, the tile set's shape and lists, the
-sprites' placements and directory, and your own header fields, objects and tile
-tables.  Cleo's, from `tools/assets.py`:
+`encode()` asserts the sizes and the two stage limits (`STAGE_LVL_B`: 8K less `page0` on
+the Model B; `STAGE_M`: 20K on the Master), and the build runs `levelfile.py check` on
+every level.  Cleo's call, from `tools/assets.py` `pack_level`:
 
 ```python
-import levelfile as lf       # (beebgame/tools on sys.path)
-
-ghdr = {HDR_STARTX: L['start'][0], HDR_STARTY: L['start'][1],
-        HDR_EXITX: L['exit'][0], HDR_EXITY: L['exit'][1]}          # Cleo's own fields
-placement = lf.placement([(item, bank, img_addr, 0), ...])  # images this level loads
-directory = lf.directory(entries)                           # BOXID0 + BOXN: None or (addr, bank)
-data = lf.encode(lf.Level(lw=L['lw'], lh=L['lh'], game_header=ghdr,
-                          shape=lf.Shape(**T['B']['shape']),
+data = lf.encode(lf.Level(lw=L['lw'], lh=L['lh'], game_header=ghdr, shape=lf.Shape(**T['B']['shape']),
                           objects=bytes(objs), tile_tables=(bytes(attr), bytes(acls)),
-                          tiles=T['B']['tiles'], placement=placement, map=mapb,
-                          flat=T['flat'], halves=T['halves'], hpair=T['hpair'],
-                          mir=T['B']['mir'], directory=directory,
-                          page0=T['B']['page0'], boxid0=BOXID0, boxn=BOXN))
-open(os.path.join(OUT, 'L%d' % n), 'wb').write(data)
+                          tiles=T['B']['tiles'], placement=placement, map=mapb, flat=T['flat'],
+                          halves=T['halves'], hpair=T['hpair'], mir=T['B']['mir'],
+                          directory=directory, page0=T['B']['page0'], header_tail=RNGTAB,
+                          boxid0=BOXID0, boxn=BOXN))
 ```
 
-`encode()` checks the sizes and limits (the objects, the stages, the map, the header's
-engine fields); the build runs `levelfile.py check` on every level too.  The format is
-in `DESIGN.md`, *The level files*.
+`ghdr` is `{HDR_STARTX: .., HDR_STARTY: .., HDR_EXITX: .., HDR_EXITY: .., 7: 1}` plus the
+twelve special tile ids from `HDR_SPECIAL`; `RNGTAB` is Cleo's collision table, which
+`logic.s` keeps in `GAMELVL` at `LV_HDR + HDR_LEN`.
 
-**The tiles and the sprites** are the part to be most careful with: their layouts are
-the blitters' (`DESIGN.md`, *The tiles* and *The sprites*).  In short:
+**The tiles.**  The engine has no tile packer: Cleo's `convert.py` `pack_tiles` builds a
+level's ids, lists and `Shape` from the tile set and is where to start.  What it must
+produce is above (*A tile*); the limits are the ids (`FLAT0` - 1 below the flats) and
+bank 6's room, `$C000` - (`TILES` + (`TOFF`+1)*`TILEBYTES`) bytes [14,656: 229 slots], a
+half tile taking half a slot.  Id 0 must be a one-byte fill: the same byte on every
+scanline.
 
-- A tile's 64 bytes and a sprite's image, shape and directory are laid out as
-  *The concepts* shows.
-- Tile id 0 is the level's solid colour, and it must be a one-byte fill: the same
-  byte on every scanline (black, or a pure ink), because the row loop stores a single
-  byte for it.  The top NFLAT + 2 ids, from `FLAT0`, are flat tiles (a colour's
-  dither, two bytes alternating down the scanlines), all of them the level's to
-  choose: Cleo puts its two solids, cyan and black, in the last two, but to the engine
-  they are two more flats.  The rest, 1 to FLAT0 - 1, are full tiles (all 64 bytes
-  stored) and half tiles (one character row of the two stored, the other a fill).
-- Two limits bind separately: the ids (FLAT0 - 1 for the tiles that are not flat:
-  249 with NFLAT = 4), and bank 6's room for the stored tiles, from the first slot
-  clear of the code to $BFFF: ($C000 - $8600) / 64 - 1 - TOFF slots (229), a half
-  tile taking half a slot.  Your packer has to meet both, and choose what to give up when a level does
-  not (Commando's drops the flips of its least-used flipped tiles, then draws its
-  least-used tiles as their nearest neighbour).  A flat tile costs two
-  bytes in bank 6 rather than 64: choose NFLAT for the most flat tiles a level uses
-  (Cleo's packer takes it from the environment, `NFLAT=n sh build.sh`, and stores a
-  level's surplus flat tiles as full ones).
-- Any image, mirrored or not, and any box may go in either sprite bank: both have
-  every blitter and the palette's tables.
-
-**What the art costs.**  A sprite image is half a byte a game pixel; a box, two bytes
-a game pixel (its screen bytes).  The two sprite banks have about 14K (bank 4) and 6K
-(bank 5) for the resident sprites and one level's own.  Measure your art against that
-early.
-
-**Resident and staged sprites.**  Every sprite image is in one of two files, and which
-is your choice:
-
-- **SPRC, the resident sprites**, loaded once, at the first level, to fixed places:
-  SPRC_LEN bytes to bank 4 from SPRC_BASE (= B4_CODE_END), then SPRC5_LEN bytes to
-  bank 5 from SPRC5_BASE (= B5_CODE_END).  They stay for the whole session, so every
-  level's directory names them at those addresses and no level loads them again.
-- **SPRX, the staged sprites**, SPRX_LEN bytes: everything else.  Each level load
-  stages SPRX whole and copies out just the images that level's placement list names,
-  to the addresses the list gives.  `img_tab.bin` has an entry per item saying where in
-  SPRX its image is (zeros for a resident item).
-- The rest of each sprite bank is the level's: bank 4 from the end of SPRC's part to
-  $BBFF, bank 5 from the end of its part to $9BFF.
-
-Make resident what (nearly) every level draws -- the player, what the player throws,
-the pickups -- and stage the rest.  A bigger resident set means shorter loads and less
-room for each level's own sprites; a smaller one, the reverse.  Limits: SPRX at most
-16K (the Model B's stage) and 12K (the Master keeps it in HAZEL and ANDY); the
-resident parts and the biggest level's own sprites together must fit each bank.
-Cleo declares its split in one place at the top of its packer (`RESIDENT_IDS` in
-`tools/assets.py`).
-
-Today the engine has no tile packer or sprite placer of its own beyond `sprpack.py`
-(which orders a bank's images to save page crossings).  **Start from Cleo's**:
-`tools/convert.py` `pack_tiles` builds a level's tile ids, lists and shape from its
-tile art, and `tools/assets.py` places each level's sprites, writes SPRC, SPRX and
-img_tab.bin, and sizes MAXSPR from the level's objects.  Copy them and replace what
-reads Cleo's data (its `assets/v500` sheets and levels, its object types) with your own.
+**The sprites.**  Likewise Cleo's `assets.py`: it decides the resident set
+(`RESIDENT_IDS`), places each level's images in the two banks (`place_sprites`), orders
+them against page crossings with the engine's `tools/sprpack.py` (`settle_level`), writes
+`SPRC`, `SPRX`, `img_tab.bin`, the placement and directory, and sizes `MAXSPRDEF` from the
+most sprites a window can hold.  The room is bank 4 from `B4_CODE_END` to `B4_DATA_END`
+[14,452 bytes] and bank 5 from `B5_CODE_END` to `MAP5` [6,117], shared between the
+resident sprites and one level's own.  `SPRX` is at most 16K (the stage) and, to stay
+resident on the Master, `SPRX_PAGES <= $30` (12K: `ldprog.s`).  Any image or box may go
+in either bank: both have every blitter and the tables.
 
 ## Step 9: build and run
 
@@ -679,121 +654,113 @@ git submodule update --init
 sh build.sh
 ```
 
-The build prints a line per level from your asset step, the bank pieces, `layout: the
-data sits alike on both machines`, and the disc.  Boot it in jsbeeb or BeebEm
-(SHIFT+BREAK), as a Master 128 and as a Model B with sideways RAM.
+The driver's passes (`beebgame/tools/build.sh`): the music step, then per machine the
+asset step, a copy of `banks.cfg` with the bank areas sized from `assets.inc`, and
+`levelfmt.inc`; the shared-file comparison and `levelfile.py check`; then three passes
+in which the disc's sector table (`files.inc`) is made, the game assembled and linked
+(the Master's pinned to the Model B's addresses), `defs_ld.inc`, `IMG7`, `img7fix.inc`,
+`LDPROG` and `BANKS` written with their asserts, and the pass repeated until `files.inc`
+settles.  Then the boot loader, the disc, `layoutcheck.py` and an `ls -l` of the banks
+and the disc.  It prints, among other lines, `BANKS: n pieces, n bytes, n bank patches, n
+write-bank stores` per machine and `levelfile: 16 level files check`.
 
-What stops a build, and what to do:
+What the build gives your sources, in `$BD`:
 
-| Message | Meaning |
-|---|---|
-| `Symbol 'hook_...' is undefined` | a hook is missing from `main.s` (Step 3) |
-| ld65's `Memory area overflow` in `B7` or `B7M` | your game's image, or your menus', is full (the limits below) |
-| `the game image's variables run into its code` | GAMEBSS and the engine's variables have met your code: trim either |
-| `bank 4's code must end where its sprites start` | `B4_CODE_END` (or B5) in your assets.inc is not this engine's |
-| `a bank-number or write-bank site in the menus' image` | your menus used `bankimm`/`wrsel`: read the bank from PBANK (`ldpbank`) instead |
-| `layout: n differences` | a variable sits at different addresses on the two machines: something you put in a shared segment differs by `BHW` |
-| `a hot branch crosses a page` (a warning) | a `SAMEPAGE` in the engine is not met: move code, or ask |
+| Include | Written by | Contains |
+|---|---|---|
+| `assets.inc` | your asset step | Step 8's constants |
+| `levelfmt.inc` | `tools/levelfile.py inc` | `SEC_*`, `HDR_*`, `HDR_LEN`, `OBJ_BYTES`, `OBJ_MAX`, `PLACE_LEN`, `PL_*`, `RLE_*`, `LV_PAGE0_SECS` (included by `defs.inc`) |
+| `files.inc` | `tools/mkdfs.py table` | `F_<file>_SEC` and `F_<file>_N` for every disc file (included by `disc.s`) |
+| `sprgeom.inc` | your asset step | the geometry by shape |
+| `defs_ld.inc` | `build.sh`, from `labels.txt` and `game.dbg` | for the loaders and the tests: the addresses in its `want` list (`boot`, `read_sectors`, `LV_HDR`, `DIR_TABLE`, `map_shr`, `PBANK`, `ld_open`, `game_in`, `hook_title`, `hook_image`, `hook_over` ...), `SOLIDF`, `GAME_ADDR`/`GAME_LEN`, `MENU_ADDR`/`MENU_LEN`, `GAME_BSS`/`GAME_BSS_PAGES`/`GAME_BSS_REM`, then every constant `ldconst.s` prints (the memory map's and the screen's shape).  Not for your game's sources: your game is linked, the loaders are not |
+| `img7fix.inc` | `build.sh` | each image's bank-number and write-bank patch lists, for `ldprog.s` |
+| `build/gamename.inc` | `build.sh` | `GAME_NAME`, for the boot loader |
+
+The disc, in order (`build.sh` `DISC`): `!BOOT` (`*RUN LOADER`), `LOADER`, `BANKSB`,
+`BANKSM`, `IMG7M`, `LDPROGM`, `LDPROGB`, `IMG7B`, `BAR`, `SPRX`, `SPRC`, `TILES0`,
+`TILES1`, `L0` .. `L15`, `TILES2` -- the two machines' pieces around the shared files, the
+levels after them.  Boot it in jsbeeb or BeebEm as a Model B with sideways RAM or a
+Master 128; the boot loader finds the banks, says which machine it is on, and reads that
+machine's `BANKS`.
 
 ## Step 10: test
 
-`test/lib/harness.mjs` drives jsbeeb frame-exactly: every wait is "run to the next
-`frame_top`", so a test's inputs land on the same frame whatever the code's timing.
-Subclass `Harness` to name your game's state for the scene fingerprint, and write
-the way into a level.  Cleo's `test/harness.mjs`:
+The engine's harness, `test/lib/harness.mjs`, drives a build under jsbeeb frame by
+frame.  Its contract with your game is one label: **`frame_top`**, reached exactly once
+a rendered frame before the logic reads `keys`.  Every wait is `runTo(A.frame_top)` and
+every input is written while stopped there, so nothing in a test can observe a cycle
+count -- and so nothing in it can observe code size (the header says why).
 
-```js
-import { Harness, loadLabels, loadBanks, dbgPath } from "../beebgame/test/lib/harness.mjs";
-export * from "../beebgame/test/lib/harness.mjs";
+What it exports:
 
-export class CleoHarness extends Harness {
-  gameScene() {
-    const A = this.A;
-    return [["px", A.px, 2], ["py", A.py, 2], ["vx", A.vx, 2], ["vy", A.vy, 2],
-            ["frame", A.frame, 2], ["health", A.health, 1], ["hurt", A.hurt, 1],
-            ["level", A.level, 1], ["score", A.score, 3]];
-  }
-}
-```
+- `findJsbeeb()`, `loadLabels(file)` (the linker's `labels.txt` plus the constants of the
+  `defs_ld.inc` beside it), `dbgPath(labels)` and `loadBanks(dbg)`: the bank and image of
+  every label from its segment's name -- `SPR4*` bank 4, `SPR5*`/`MAP5*` 5, `TIL*` 6,
+  `GAME*`/`ENG*`/`MNU*`/`KRN*` 7, with `GAME*`/`ENG*` in the game's image and `MNU*` in
+  the menus' -- so a break at a bank 7 address waits for that bank and that image
+  (`ld_img`).  Name your segments to fit, or extend `SEGBANK`;
+- `class Harness(s, A, banks)`: `rd`/`wr`/`rd16`/`wr16`, `cyc()`, `runTo(pc, budget)`,
+  `inBank(name, f)`, `installMeter()` (the render window from `render_frame`'s fall
+  through its flip spin to `render_done`, the interrupt's share separated, instructions
+  counted; the logic from `frame_top` to `render_frame`), and `fingerprint()`: a hash of
+  every input to the renderer's cost (the window, the buffers' state, `nspr` and the
+  sprite list, the records, the dirty lists) plus your `gameScene()`.  A cycle comparison
+  is valid only where fingerprints match;
+- `boards.mjs` `boardEmu(cpu, "watford" | "solidisk")`: a write-select board on a jsbeeb
+  Model B, counting in `cpu.boardMismatch` every store into a bank other than the one
+  paged -- what a missing write-bank store does.
 
-Its `open()` boots the disc, patches the title's `jsr title_menu` to start a game,
-waits for the engine's `game_in` (the game's image just in) to choose the level, and
-runs to the first `frame_top`.  `boards.mjs` emulates the Watford and Solidisk
-write-select boards on jsbeeb, which has neither.
-
-Keep a reference build (`build/`'s disc, labels and `game.dbg`) and compare a new
-build against it level by level on both machines: Cleo's `test/sweep.sh`,
-`wincmp.mjs` and `bwincmp.mjs` are the model, and its `roundtrip.mjs` plays whole
-sessions through both images.  `python3 -m unittest discover -s beebgame/test` tests
-the engine's level file writer.
+Cleo's `test/harness.mjs` is the pattern for a game's own: `CleoHarness.gameScene()`
+names the player, the frame, the level and the score, and `open({disc, labels, level})`
+boots through the real title, patches `title_loop` to start a game, runs to `game_in`,
+patches `level_loop`'s `ldx level` to the level wanted, runs to `level_init`, patches
+`scan_keys` to `rts` (inputs come from the harness), runs to `frame_top` and installs the
+meter.  `test/bopen.mjs` does the same on a Model B (`BMODEL`, `BBOARD`, `BSWRAM`).  On
+them Cleo builds its gate, `test/sweep.sh REF` (the current build against a snapshot made
+by `test/snapshot.sh DIR`: every level's window and scene on both machines, with seeded
+keys, the menus, the frame period through a load, the boards).  The engine's own unit
+test is `python3 -m unittest discover -s beebgame/test` (the level file format).
 
 ## Step 11: a game for the Master alone, and the other build options
 
-A game that cannot fit the Model B -- its code bigger than bank 7's game image, say --
-can be built for the Master alone and take options the Model B cannot have.  They
-are environment variables your `build.sh` exports before it runs the driver, each 0
-unless set, and each one the assembler sees too (`cpu.inc`).  With none set a game's disc is
-exactly what it was.  Cleo sets none; Commando sets them all:
+Each option is an environment variable of the driver, passed to the assembler as `-D`
+and defaulted to 0 in `cpu.inc` (`build.sh`'s header).  With none set a game builds for
+both machines.
 
-```sh
-export MASTERONLY=1 GAMEHAZEL=1 GAMESOUND=1 DRAWFLAGS=1 TALLMAP=1 TIGHTBSS=1 MAXSPR=24
-```
-
-| Option | What it does | What the game does for it |
+| Option | What it does | Where |
 |---|---|---|
-| `MASTERONLY` | builds the Master alone: no Model B assembly, link or files on the disc, the Master linked at its own addresses (not pinned to the Model B's), its layout the level files'; the boot loader tells a Model B the game needs a Master 128 | writes its assets once, to `build/master`; its code may be 65C02 throughout |
-| `GAMEHAZEL` | the segments HAZCODE, HAZDATA, HAZBSS in HAZEL ($C000-$DFFF, 8K), copied there once at boot and seen by both images; ACCCON Y stays set; SPRX is read from the disc at every level load (HAZEL no longer keeps it).  Needs MASTERONLY | puts code and variables there (they are visible whatever bank is paged); zeroes its HAZBSS itself; uses no `bankimm` there (read PBANK, as the menus do) |
-| `GAMESOUND` | the vsync calls the game's `hook_sound` instead of the engine's sound effects; the tune is still the engine's | defines `hook_sound`, resident (HAZEL, say): it runs in the interrupt, X and Y SAVED, and may use only its own zero page |
-| `DRAWFLAGS` | bit 7 of a sprite's x high byte (`spx+1` at `add_sprite`) mirrors it, so one image is drawn either way round | sets the bit; map x stays below 32768 |
-| `TALLMAP` | maps up to 256 tiles tall (the window's character row keeps its high bits for the tile blitter's map row).  The Master alone: its ring is 32 rows | nothing |
-| `TIGHTBSS` | the engine's bank 7 variables packed: a sprite record is 9 bytes (the rectangle's column high bits share the height's byte: a map is at most 1,024 characters wide), kept as arrays a byte of each by record (as the dirty list is), and ENGBSS follows GAMEBSS where it ends instead of at the next page | nothing |
-| `MAXSPR=n` | the sprite slots, the most sprites on screen at once (the list, and a record each a buffer): n over assets.inc's `MAXSPRDEF`; 28 when neither is set | adds at most n sprites a frame (Commando: its sort list's 24) |
+| `MASTERONLY=1` | the Master alone: no Model B assembly, link or files; the Master linked unpinned, its own layout the level files'.  The boot loader stops on a Model B with "needs a BBC Master 128" | `build.sh`, `loader.s` |
+| `GAMEHAZEL=1` | your code in HAZEL as well: segments `HAZCODE`, `HAZDATA`, `HAZBSS`, a piece of `BANKS` the boot loader copies once (`PIECE_HAZEL`).  Needs `MASTERONLY`; `SPRX` is then read at every level load (nothing is kept in HAZEL/ANDY) | `build.sh`, `banks.cfg`, `ldprog.s` `SPRXKEEP` |
+| `GAMESOUND=1` | the vsync calls your `hook_sound` in place of `sound_tick`; the tune's step is still raised | `kernel.s` |
+| `TALLMAP=1` | maps up to 256 tiles tall: the window's character row keeps its high bits (`wcyh`) for the tile blitter's map row.  The Master alone (`cpu.inc` errors with `BHW`) | `cpu.inc`, `vars.s`, `frame.s` |
+| `DRAWFLAGS=1` | the sprite list's x high byte carries draw flags: bit 7 mirrors the image, so one image is drawn either way round from the list | `frame.s` `draw_sprites`, `draw_sprite` |
+| `TIGHTBSS=1` | the engine's bank 7 variables packed: 9-byte sprite records as arrays (`RECSZ`), `ENGBSS` not page aligned (the driver edits the cfg) | `engine/defs.s`, `build.sh` |
+| `MAXSPR=n` | the sprite slots, over your `MAXSPRDEF`; 28 when neither sets it | `engine/defs.s` |
+| `ALLLEVELS=1` | a test build: the engine passes the flag and your game acts on it (Cleo: every main level on the chooser, every bonus level taken; its `build.sh` then skips the copy to `../cleo.ssd`) | `cpu.inc`, Cleo's `menu.s`, `game.s` |
 
-**What else a Master-only game may use.**  Beyond bank 7 and (GAMEHAZEL) HAZEL: the
-objects' area LV_OBJS at $1C00 keeps what the loader put there all through the level
-(Step 6), and zero page from $73 (no Model B segment ZPHW, and the Master linked unpinned;
-$74 with DRAWFLAGS) to $EF.
-Nothing else in main RAM is the game's.
+Commando (github.com/ebenupton/commando) is the second game on the engine, built with
+`MASTERONLY`, `GAMEHAZEL`, `GAMESOUND`, `DRAWFLAGS`, `TALLMAP` and `TIGHTBSS`.
 
 ## Limits to design within
 
-- **Sixteen levels**, `L0`..`L15`, and three tile files: the loader names them, so
-  all sixteen (and all three) must exist and be valid whatever the game uses (a game
-  with fewer writes small stubs: Commando's are a 32 x 32 map of one tile).
-- **Sprites:** BOXID0 + BOXN sprite ids, and the still aliases after them (BOXID0 +
-  2 x BOXN in all), at most 256; at most MAXSPR on screen at once.  The directory,
-  2 bytes an id, is in bank 7 (ENGBSS) and in every level file.
-- **Staged items:** img_tab.bin (5 bytes an item) is part of LDPROG, which must fit
-  $0E00-$1BFF with its code: about 210 items with Cleo's (the Master's loader, the
-  larger; the Model B's leaves room for about 250).  Number only the staged
-  images, not every sprite id.
-- **Tiles:** FLAT0 - 1 ids for the tiles that are not flat, and bank 6's slots for
-  the stored ones (Step 8).
-- **The map:** 1 << lw by 1 << lh tiles, 8K at most, and at most 128 tiles tall (the
-  window's character row is a byte: 256 character rows); 256 tall on a Master-only
-  build with TALLMAP.
-- **Objects:** 149 at most, 6 bytes each, yours to define -- the one section of a
-  level file wholly the game's, so any other per-level data (Commando's missions and
-  their texts) goes there too.  The loader copies them to LV_OBJS: on the Master
-  ($1C00) nothing touches them until the next load, and a game may keep reading
-  them; on the Model B that is display RAM, gone at the first render.
-- **A level file** must fit the Model B's 8K level stage, not counting its 512-byte
-  LV_PAGE0 tail (MASTERONLY: the Master's 20K).  Every one carries the sprite
-  directory and LV_PAGE0: a big directory is paid sixteen times on the disc.
-- **Sprite files:** SPRX at most 12K (16K with GAMEHAZEL, which reads it from the
-  disc every time); SPRC's parts and each level's own sprites within banks 4 and 5.
-- **Bank 7:** the game's image runs from $8000 to the kernel, whose start the build
-  sets from the kernel's size and the disc driver slot's below $BF00 ($B807 with
-  Cleo's: 14,343 bytes).  Take off the level's
-  tables and the page alignment after them (768: GAMEBSS starts at $8300), the
-  engine's code (ENGCODE: about 1.8K on the Model B, 1.5K on the Master) and its
-  variables (ENGBSS: 82 + 21 x MAXSPR (19 with TIGHTBSS) + 2 x (BOXID0 + BOXN) bytes --
-  822 for Cleo, 2,646 for Commando): what is left, about 11K for Cleo, is yours for
-  code, data and variables.  The link says when it is full.  The menus' image is the same less the music player's 157: about 13.9K
-  for Cleo.
-- **Zero page:** ZPGAME is $81-$EF with both machines (111 bytes), from $7A (or $7B
-  with DRAWFLAGS) on a Master-only build.
-- **The window** is 84 game pixels tall on the Model B and 120 on the Master.
-- **The disc** is one single-sided 80-track DFS disc of 800 sectors.  Its files are the engine's list (the boot files, each machine's bank pieces,
-  loaders and bank 7 images, BAR, SPRX, SPRC, TILES0-2, L0-L15): a game adds none, and
-  what it needs goes in those -- the menus' art, for instance, in the menus' image.
+Every budget is in the build's output; read it there (`build/modelb/labels.txt`'s
+`__SEG_RUN__`/`__SEG_SIZE__`, `assets.inc`, `ls -l build/*`).  The brackets are Cleo's
+values on the day of writing.
+
+| Budget | How to read it | Cleo today |
+|---|---|---|
+| the game's image: your `GAMEDATA` + `GAMECODE` + the engine's `ENGCODE`, ending at the kernel | free room = `__B7_START__` - (`__ENGBSS_RUN__` + `__ENGBSS_SIZE__`) | 39 bytes |
+| the menus' image: `MUSCODE` + `MNUCODE` + `MNUDATA` + `MNUBSS`, from `$8000` to the kernel | `__KRNDATA_RUN__` - (`__MNUBSS_RUN__` + `__MNUBSS_SIZE__`) | 2,249 bytes |
+| the game image's variables, `GAMEBSS` .. `ENGBSS`, zeroed at each image load | `__GAMEBSS_RUN__` to `__ENGBSS_RUN__` + `__ENGBSS_SIZE__`; `ENGBSS` = `DIRTYLIST` 4*`DIRTYMAX` + `SPRREC` 2*`MAXREC`*`RECSZ` + `RECCNT` 2 + `KEEP` `MAXREC` + `DIRTYCNT` 2 + `SPRLIST` 5*`MAXSPR` + `DIR_TABLE` 2*(`BOXID0`+`BOXN`) (`vars.s`, `banks.s`) | `ENGBSS` 1,064 bytes with `MAXSPR` 24 |
+| zero page for the game | `ZP` ends at `$FC`: `ZPGAME` has what the engine's `ZEROPAGE` leaves (`__ZPGAME_RUN__`, `__ZPGAME_SIZE__`) | 113 bytes from `$8B`, all used |
+| `GAMELVL` | the room between `ENGLVL`'s end and `$8300`: 224 bytes, your header tail first | 216 used |
+| `GAMEHI` | the top page of bank 7 after `KRNHW` (`__GAMEHI_RUN__` to `$C000`) | 6 of 146 used |
+| the level file | `STAGE_LVL_B` (8K, less `page0`'s 512) on the Model B; `STAGE_M` (20K) on the Master; `OBJ_MAX` 149 objects; the header tail under 224 bytes | 2,560 to 7,936 bytes |
+| the map | a fixed 8K at `MAP5`: `lw + lh <= 13` | 256x32, 128x64, 64x128, 32x32 |
+| bank 6 | `$C000` - (`TILES` + (`TOFF`+1)*`TILEBYTES`) bytes of tiles, half tiles half a slot; the fills (`FLAT0`..255 and 0) cost none | 14,656 bytes: 229 slots |
+| banks 4 and 5 | `B4_DATA_END` - `B4_CODE_END` and `MAP5` - `B5_CODE_END`, for the resident sprites and the level's own | 14,452 and 6,117 bytes |
+| `SPRX` | 16K (the stage); 12K to stay resident on the Master (`SPRX_PAGES <= $30`) | 8,483 bytes |
+| sprites a frame | `MAXSPR` (the list); `DIRTYMAX` (20) dirty tiles a buffer before it is redrawn whole | `MAXSPRDEF` 24 |
+| the load-time program | `LDPROG`'s area is `$0E00` bytes (`banks.cfg` `LDP`); it grows with `img_tab.bin` and the bake tables | 2,538 / 2,678 bytes |
+| the disc | 80 tracks of 10 sectors (`NTRACKS`, `SECTRK`); used to the last file's `F_<name>_SEC` + `_N` | 708 of 800 sectors |
+| the window | `WINPX` 160 by `VISLINES`/2 game pixels: 84 (Model B) or 120 (Master) | -- |
