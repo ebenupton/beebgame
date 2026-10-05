@@ -89,6 +89,15 @@ STAGE_M = 0x8000 - 0x3000
 # the build's: no Model B, so no limit of its
 MASTERONLY = os.environ.get('MASTERONLY') == '1'
 PAGE0_LEN = 512
+# UDATA5 (the build option): the objects section is the game's bytes, up to the objects' room
+UDATA5 = os.environ.get('UDATA5') == '1'
+UDATA_MAX = OBJ_BYTES * OBJ_MAX
+
+
+def udata_start(udata, lv_map):
+    """UDATA5: where the loader puts the game's bytes in bank 5 -- ending at the map (LV_MAP,
+    the game's MAP5), so its sprites in bank 5 must end by here.  The loader's lv_udata."""
+    return lv_map - len(udata)
 
 
 def dir_len(boxid0, boxn, res_n=0):
@@ -216,6 +225,11 @@ class Level:
     game_header: dict = field(default_factory=dict)
     # the game's bytes after the header: the loader copies them on to LV_HDR + HDR_LEN
     header_tail: bytes = b''
+    # UDATA5, the build option: the game's own bytes, any length up to the objects' room
+    # (UDATA_MAX), in place of objects (which must then be empty; HDR_NOBJ is 0).  The
+    # loader copies them to LV_OBJS, as objects, and on to bank 5 to end at the map
+    # (LV_MAP): lv_udata, their start there (udata_start)
+    udata: bytes = None
 
 
 def header(lv):
@@ -225,6 +239,7 @@ def header(lv):
     h = bytearray(HDR_LEN)
     h[HDR_LW], h[HDR_LH] = lv.lw, lv.lh
     assert len(lv.objects) % OBJ_BYTES == 0 and len(lv.objects) // OBJ_BYTES <= OBJ_MAX
+    assert lv.udata is None or (not lv.objects and 0 < len(lv.udata) <= UDATA_MAX), 'UDATA5: the game\'s bytes, no objects'
     h[HDR_NOBJ] = len(lv.objects) // OBJ_BYTES
     for o, v in lv.game_header.items():
         assert o in HDR_GAME, 'header byte %d is the engine\'s' % o
@@ -244,7 +259,7 @@ def encode(lv):
     assert len(lv.page0) == PAGE0_LEN
     maprle = rle(lv.map)
     assert unrle(maprle) == lv.map
-    body = dict(hdr=header(lv), objs=lv.objects, attr=lv.tile_tables[0], altcls=lv.tile_tables[1],
+    body = dict(hdr=header(lv), objs=lv.objects if lv.udata is None else lv.udata, attr=lv.tile_tables[0], altcls=lv.tile_tables[1],
                 tiles=lv.tiles, place=lv.placement, map=maprle, flat=lv.flat, halves=lv.halves,
                 hpair=lv.hpair, mir=lv.mir, dir=lv.directory, page0=lv.page0)
     off = 2 * len(SECTIONS)
@@ -312,7 +327,10 @@ def check(data, boxid0, boxn, res_n=0):
     assert (len(data) - PAGE0_LEN <= STAGE_LVL_B or MASTERONLY) and len(data) <= STAGE_M, 'too big for a stage'
     sec = decode(data, boxid0, boxn, res_n)
     f = sec['fields']
-    assert len(sec['objs']) == OBJ_BYTES * f['nobj'] and f['nobj'] <= OBJ_MAX, 'the objects'
+    if UDATA5:
+        assert f['nobj'] == 0 and len(sec['objs']) <= UDATA_MAX, 'UDATA5: the game\'s bytes'
+    else:
+        assert len(sec['objs']) == OBJ_BYTES * f['nobj'] and f['nobj'] <= OBJ_MAX, 'the objects'
     assert len(sec['map']) == 1 << (f['lw'] + f['lh']), 'the map'
     assert f['map_shr'] == 8 - f['lw'], 'map_shr'
     assert len(sec['attr']) == 256 and len(sec['altcls']) == 256, 'the tile tables'

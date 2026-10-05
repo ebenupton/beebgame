@@ -325,6 +325,10 @@ KEEP:      .res MAXREC             ; match_sprites' verdict a sprite (KEEP_SAME,
                                    ;  KEEP_BOX, 0); erase_old and draw_sprites read it
 DIRTYCNT:  .res 2                  ; each buffer's dirty tiles queued: mark_dirty
                                    ;  counts, draw_dirty and lv_reset zero
+  .if UDATA5
+lv_udata:  .res 2                  ; UDATA5: the level's own bytes in bank 5, their start
+                                   ;  (they end at LV_MAP): the loader's (ldprog.s lv_load)
+  .endif
 ; The sprite draw list, one array per field (index = the sprite's number, so no
 ; stride to multiply by): id, x lo/hi, y lo/hi in game pixels (map coordinates).
 ; add_sprite writes it; draw_sprites and match_sprites read it.  SPRLIST names the

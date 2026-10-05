@@ -22,7 +22,9 @@
 ; keeps SPRX in HAZEL and ANDY across loads); GAMEHAZEL (the game's code in
 ; HAZEL: cpu.inc); TILEMIRROR (mirrored full tiles, cpu.inc: the Model B's
 ; gather reads MIRTAB, the baker draws them reversed); GAMELDINIT (the game's
-; level start, its ldgame.s, called at a level load's end: ld_game, below).
+; level start, its ldgame.s, called at a level load's end: ld_game, below);
+; UDATA5 (the objects section the game's bytes, copied on to bank 5 to end at
+; the map: lv_load).
 ; ============================================================================
   .ifndef BHW                      ; cpu.inc's flags, again: it is the game's (its
 BHW = 1                            ;  65C02 spellings and link imports), not this
@@ -35,6 +37,9 @@ TILEMIRROR = 0
   .endif
   .ifndef GAMELDINIT
 GAMELDINIT = 0
+  .endif
+  .ifndef UDATA5
+UDATA5 = 0
   .endif
 ; SPRXKEEP: the Master (without GAMEHAZEL) keeps SPRX in HAZEL and ANDY
 SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)
@@ -403,7 +408,8 @@ lvsec:  stx dst+1
 ;   Uses:  everything; the screen as the stage
 ;   Pre:   interrupts off, the palette black (the stage is the screen)
 ; The parts, in the file's order of use: the header to LV_HDR (the game's tail
-; with it), the objects to LV_OBJS, the two tile tables to LV_ATTR0 and
+; with it), the objects to LV_OBJS (UDATA5: the game's bytes, and on to bank 5
+; to end at MAP5: lv_udata), the two tile tables to LV_ATTR0 and
 ; LV_ALTCLS; the map's shape (map_shr, map_stride) and the map, run-length
 ; coded, to MAP5 in bank 5; the tiles -- each of the level's files of the tile
 ; set staged in turn and its tiles copied to their slots in bank 6: the full
@@ -438,6 +444,27 @@ lv_load:
         lda #SEC_OBJS              ; the objects, OBJ_BYTES each, to main RAM
         ldx #>LV_OBJS              ;  (level_init reads them once, before the
         jsr lvsec                  ;  first render)
+  .if UDATA5
+        ; UDATA5: the section is the game's bytes, copied on to bank 5 to end at the
+        ; map, their start in lv_udata (cnt: still lvsec's length)
+        .assert <MAP5 = 0 && <LV_OBJS = 0, error, "UDATA5: MAP5 and LV_OBJS page-aligned"
+        sec
+        lda #0                     ; (<MAP5)
+        sbc cnt
+        sta dst
+        sta lv_udata
+        lda #>MAP5
+        sbc cnt+1
+        sta dst+1
+        sta lv_udata+1
+        lda #0                     ; (<LV_OBJS)
+        sta src
+        lda #>LV_OBJS
+        sta src+1
+        ldx PB_MAP
+        jsr bcopy
+        stx dst                    ; (X = 0: dst's low byte 0 again, as lvsec has it)
+  .endif
         lda #SEC_ATTR              ; the two tile tables, 256 bytes each: the attr
         ldx #>LV_ATTR0             ;  by lvsec, which leaves src on the altcls and
         jsr lvsec                  ;  dst on LV_ALTCLS (X = 0)

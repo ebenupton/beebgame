@@ -92,6 +92,9 @@ ALLLEVELS = 0                      ; a test build: every level on the chooser, e
   .ifndef GAMELDINIT
 GAMELDINIT = 0                     ; the game's level start in the load-time program: its
   .endif                           ;  ldgame.s, called at a level load's end (ldprog.s ld_game)
+  .ifndef UDATA5
+UDATA5 = 0                         ; the level's objects section is the game's bytes, copied
+  .endif                           ;  on to bank 5 to end at LV_MAP (lv_udata: their start)
   .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
         .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
   .endif

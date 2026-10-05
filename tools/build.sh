@@ -71,6 +71,11 @@
 #                load ends (ldprog.s ld_game: what it may use and must keep).  It reads the
 #                game's names from gamesyms.inc, written here after the game's link: every
 #                global label and constant of the game's debug file
+#   UDATA5=1     the level's objects section is the game's own bytes (levelfile.py
+#                Level.udata: any length to UDATA_MAX, no objects), which the loader copies
+#                to LV_OBJS as ever and on to bank 5, to end at the map (LV_MAP): their
+#                start there in the engine's lv_udata (ENGBSS), for the game to read in
+#                play.  The game's bank 5 sprites end below them (levelfile.udata_start)
 #   ALLLEVELS=1  a test build: every level on the chooser, every bonus level taken (the
 #                game's menu.s and game.s read it)
 #   MAXSPR=n     the sprite slots (the most sprites on screen at once), over the game's
@@ -83,7 +88,7 @@ set -e
 mkdir -p build
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o
@@ -209,7 +214,7 @@ import re
 want = ['boot','dsk_type','dsk_drv','read_sectors','ld_sec','ld_n','ld_dst',
         'LV_HDR','LV_OBJS','LV_ATTR0','LV_ALTCLS','TILES','DIR_TABLE','map_shr','map_stride','FLATTAB',
         'half0','halfhi5','half_sub','HLOW','MIRTAB','MIRCMP','MIRBASE','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
-        'MAP5','LDZP','STAGE','STAGE_LVL','LDPROG','PBANK','pboard','DSK_BANKS','dsk_board',
+        'MAP5','lv_udata','LDZP','STAGE','STAGE_LVL','LDPROG','PBANK','pboard','DSK_BANKS','dsk_board',
         'ld_img','ld_open','load_req','game_in']
 addr = {}
 import os

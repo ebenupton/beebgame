@@ -876,7 +876,8 @@ is in (the harness reads it).
 1. (Master) `main_ram`: ACCCON X and Y clear.
 2. Read the level file to `STAGE_LVL` (the Model B stops short of its last `LV_PAGE0_SECS`).
 3. The sections, by the file's own offset table: `hdr` (and the game's tail) to `LV_HDR`;
-   `objs` to `LV_OBJS`; `attr` to `LV_ATTR0`, `altcls` to `LV_ALTCLS`.
+   `objs` to `LV_OBJS` (`UDATA5`: the game's bytes, copied on to bank 5 to end at `MAP5`,
+   their start in `lv_udata`); `attr` to `LV_ATTR0`, `altcls` to `LV_ALTCLS`.
 4. The shape: `map_shr` from the header, `map_stride = 1 << lw`.
 5. The map, run-length coded, unpacked into bank 5 at `MAP5` -- exactly its `1 << (lw+lh)`
    bytes (`unrle`).
@@ -914,7 +915,9 @@ nmir solidfill`), and the game's own fields at 2..5 and 7..19 (`HDR_GAME`; the w
 rejects a game field anywhere else).  A *header tail* of the game's bytes may follow the 32
 (the whole section stays under a page): the loader copies the section whole, so the tail
 lands at `LV_HDR + HDR_LEN`, where the game keeps memory for it (Cleo's `RNGTAB` in
-`GAMELVL`).  Objects are `OBJ_BYTES` = 6 each, `OBJ_MAX` = 149.  The map's RLE: a control
+`GAMELVL`).  Objects are `OBJ_BYTES` = 6 each, `OBJ_MAX` = 149; under `UDATA5` the `objs`
+section is instead the game's own bytes, any length to `UDATA_MAX` (the same room), with
+`HDR_NOBJ` 0.  The map's RLE: a control
 byte c < 128 means c+1 literals follow, c >= 128 the next byte c-126 times.  A placement
 entry is `PLACE_LEN` = 6 bytes (item, bank, address, extra) ending in `PL_END` ($FF).
 Section `mir` is `MIRTAB` under `TILEMIRROR` (`nmir` bytes: for each mirrored id, `mir0 + i`,
@@ -966,7 +969,7 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
 `MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
-ALLLEVELS`, and `MAXSPR=n`.
+UDATA5 ALLLEVELS`, and `MAXSPR=n`.
 `GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` on the Model B needs `RINGARITH` (`cpu.inc` errors).
 `SKIP_ASSETS=1` skips the music and asset steps.
 
