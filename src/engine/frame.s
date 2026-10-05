@@ -430,15 +430,18 @@ match_sprites:
         lda REC_H,y                ; not if it was cut at the window's edge and the
         and clip_mask              ;  window has moved since (select_backbuf): its
         bne @next                  ;  new part is the scroll's tiles
-        lda clip_mask              ; kept if the window has not moved since the
-        beq @keep                  ;  buffer drew (select_backbuf), else if it fits
-        jmp @moved                 ;  both windows
+  .if BOXN                         ; (only a still box -- an id past the box stars -- is
+        lda clip_mask              ;  left undrawn when kept: with none, the verdict
+        beq @keep                  ;  changes no pixel and the test goes)
+        jmp @moved                 ; kept if the window has not moved since the buffer
+  .endif                           ;  drew (select_backbuf), else if it fits both windows
 @keep:  lda tmp3
         sta KEEP,x                 ; the same pixels in the same place
 @next:  iny
         inx
         bne @l                     ; always: i + 1 <= MAXSPR < 256
 @done:  rts
+  .if BOXN
         ; ---- the window has moved: kept only if inside the rows and columns both
         ; windows hold (the rest of the buffer is the scroll's tiles, or slots reused
         ; since), as the RECSZ path's @moved.  tmp = the height, then the column's
@@ -478,6 +481,7 @@ match_sprites:
         bcs @no                    ; right of them
         jmp @keep
 @no:    jmp @next
+  .endif
   .else
         ; ---- the RECSZ-byte records, walked through rp; X = i throughout
         ldx #0
