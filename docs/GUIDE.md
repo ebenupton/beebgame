@@ -143,7 +143,10 @@ The **directory** that turns an id into an image is split:
   `BOXID0`+`BOXN` ids the image's address in its sprite bank, low bytes then high bytes;
   a high byte of 0 means "not in this level", bit 7 clear means bank 5 (bank 4's are
   `$8000`-up as written).  The level file carries it (`levelfile.directory()`), the
-  loader copies it in;
+  loader copies it in.  With `DIRSPLIT` (Step 11) the ids below your `RES_N` --
+  every level's alike -- have their part in a sprite bank instead (`RESDIR`, the same
+  form, `RES_N` entries), loaded once with your resident sprites, and `DIR_TABLE` and
+  the level file hold the ids from `RES_N` alone;
 - the **game's part**, the geometry by shape, `sprgeom.inc`: `sprg_ix` (shape index by
   id), then by shape `sprg_w` (bytes wide), `sprg_rx`, `sprg_ry` (the reference point's
   offset from the image's top left, signed: `draw_sprite` subtracts them from `spx`,
@@ -218,7 +221,7 @@ The driver's environment (its header):
 | `SKIP_ASSETS=1` | skips `GAME_MUSIC` and `GAME_ASSETS`. |
 
 The options -- `MASTERONLY`, `GAMEHAZEL`, `GAMESOUND`, `DRAWFLAGS`, `TALLMAP`, `TIGHTBSS`,
-`ALLLEVELS`, `MAXSPR=n` -- are Step 11's; the driver passes each as a `-D` and `cpu.inc`
+`DIRSPLIT`, `ALLLEVELS`, `MAXSPR=n` -- are Step 11's; the driver passes each as a `-D` and `cpu.inc`
 defaults it to 0.  `NFLAT` is not the driver's: Cleo's `convert.py` reads it from the
 environment.
 
@@ -587,6 +590,7 @@ you may add yours the same way):
 | `FLAT0`, `NFLAT` | the fill ids: `NFLAT` flats from `FLAT0`, then the two solids (`FLAT0 + NFLAT + 2 = 256`) | `gather.s`, `vars.s`, `ldprog.s` |
 | `BOXID0`, `BOXN` | the first box id and the box count | `frame.s`, `banks.s`, `ldprog.s` |
 | `SPRGFL` | define it (= 1) when `sprgeom.inc` carries `sprg_fl`; leave it out and the only flag is `DRAWFLAGS`'s mirror | `frame.s` |
+| `RES_N`, `RESDIR`, `RESDIR_BANK` | `DIRSPLIT` only: the resident ids (`0` .. `RES_N`-1, images all), and their directory's address in sprite bank `RESDIR_BANK` (4 or 5), inside `SPRC` | `banks.s`, `lowram.s`, `ldprog.s` (through `ldconst.s`), `levelfile.py check` |
 | `MAXSPRDEF` | the sprite list's size, when the build's `MAXSPR` is not given; 28 without either | `engine/defs.s` |
 | `TOFF` | tile id k is at slot k + `TOFF` from `TILES`; bank 6's code must end before slot `TOFF`+1 (`init.s` asserts it) | `defs.inc`, `gather.s`, `ldprog.s`, `init.s` |
 | `TILES` | bank 6's tile origin, page aligned (Cleo's `$8600`) | `defs.inc`, `gather.s`, `ldprog.s` |
@@ -618,7 +622,7 @@ page0`), then the sections:
 | `halves` | two bytes a half tile: its index in its file, and its stored row with the file's place in the level's list << 1 |
 | `hpair` | the halves' fill palette, `HPAIR_LEN` (16: 8 first bytes, 8 second), then each half's low bits (fill row and colour) |
 | `mir` | empty (the removed mirrored tiles' slot; `nmir` = 0) |
-| `dir` | `levelfile.directory()`: `2*(BOXID0+BOXN)` bytes (above) |
+| `dir` | `levelfile.directory()`: `2*(BOXID0+BOXN)` bytes (above); `DIRSPLIT`: the ids from `RES_N`, `2*(BOXID0+BOXN-RES_N)` bytes (`Level(res_n=RES_N)`) |
 | `page0` | `PAGE0_LEN` (512): the Master's gather table, a pair per id, 256 low then 256 high, in whole sectors at the end -- the Model B's loader reads the file short of them |
 
 `encode()` asserts the sizes and the two stage limits (`STAGE_LVL_B`: 8K less `page0` on
@@ -743,6 +747,7 @@ both machines.
 | `TALLMAP=1` | maps up to 256 tiles tall: the window's character row keeps its high bits (`wcyh`) for the tile blitter's map row.  The Master alone (`cpu.inc` errors with `BHW`) | `cpu.inc`, `vars.s`, `frame.s` |
 | `DRAWFLAGS=1` | the sprite list's x high byte carries draw flags: bit 7 mirrors the image, so one image is drawn either way round from the list | `frame.s` `draw_sprites`, `draw_sprite` |
 | `TIGHTBSS=1` | the engine's bank 7 variables packed: 9-byte sprite records as arrays (`RECSZ`), `ENGBSS` not page aligned (the driver edits the cfg) | `engine/defs.s`, `build.sh` |
+| `DIRSPLIT=1` | the directory's resident part out of bank 7: your packer numbers the ids every level draws alike first (`0` .. `RES_N`-1), writes their entries (`levelfile.directory()` of them: `RES_N` low bytes, `RES_N` high) into `SPRC` at `RESDIR` in bank `RESDIR_BANK`, and the level files' `dir` and `DIR_TABLE` keep the ids from `RES_N` (2 bytes each).  `draw_sprite` reads a resident id's entry through low RAM's `dir_res`, which pages the bank in and bank 7 back: 28 cycles a resident sprite, 5 a level one, for `2*RES_N` bytes of bank 7 | `banks.s`, `frame.s`, `lowram.s`, `ldprog.s`, `levelfile.py` |
 | `MAXSPR=n` | the sprite slots, over your `MAXSPRDEF`; 28 when neither sets it | `engine/defs.s` |
 | `ALLLEVELS=1` | a test build: the engine passes the flag and your game acts on it (Cleo: every main level on the chooser, every bonus level taken; its `build.sh` then skips the copy to `../cleo.ssd`) | `cpu.inc`, Cleo's `menu.s`, `game.s` |
 
@@ -759,7 +764,7 @@ values on the day of writing.
 |---|---|---|
 | the game's image: your `GAMEDATA` + `GAMECODE` + the engine's `ENGCODE`, ending at the kernel | free room = `__B7_START__` - (`__ENGBSS_RUN__` + `__ENGBSS_SIZE__`) | 39 bytes |
 | the menus' image: `MUSCODE` + `MNUCODE` + `MNUDATA` + `MNUBSS`, from `$8000` to the kernel | `__KRNDATA_RUN__` - (`__MNUBSS_RUN__` + `__MNUBSS_SIZE__`) | 2,249 bytes |
-| the game image's variables, `GAMEBSS` .. `ENGBSS`, zeroed at each image load | `__GAMEBSS_RUN__` to `__ENGBSS_RUN__` + `__ENGBSS_SIZE__`; `ENGBSS` = `DIRTYLIST` 4*`DIRTYMAX` + `SPRREC` 2*`MAXREC`*`RECSZ` + `RECCNT` 2 + `KEEP` `MAXREC` + `DIRTYCNT` 2 + `SPRLIST` 5*`MAXSPR` + `DIR_TABLE` 2*(`BOXID0`+`BOXN`) (`vars.s`, `banks.s`) | `ENGBSS` 1,064 bytes with `MAXSPR` 24 |
+| the game image's variables, `GAMEBSS` .. `ENGBSS`, zeroed at each image load | `__GAMEBSS_RUN__` to `__ENGBSS_RUN__` + `__ENGBSS_SIZE__`; `ENGBSS` = `DIRTYLIST` 4*`DIRTYMAX` + `SPRREC` 2*`MAXREC`*`RECSZ` + `RECCNT` 2 + `KEEP` `MAXREC` + `DIRTYCNT` 2 + `SPRLIST` 5*`MAXSPR` + `DIR_TABLE` 2*(`BOXID0`+`BOXN`) (`DIRSPLIT`: less 2*`RES_N`) (`vars.s`, `banks.s`) | `ENGBSS` 1,064 bytes with `MAXSPR` 24 |
 | zero page for the game | `ZP` ends at `$FC`: `ZPGAME` has what the engine's `ZEROPAGE` leaves (`__ZPGAME_RUN__`, `__ZPGAME_SIZE__`) | 113 bytes from `$8B`, all used |
 | `GAMELVL` | the room between `ENGLVL`'s end and `$8300`: 224 bytes, your header tail first | 216 used |
 | `GAMEHI` | the top page of bank 7 after `KRNHW` (`__GAMEHI_RUN__` to `$C000`) | 6 of 146 used |

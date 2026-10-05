@@ -86,9 +86,6 @@ TIGHTBSS = 0                       ; 9-byte sprite records, ENGBSS not page alig
   .ifndef GAMESPRLIST
 GAMESPRLIST = 0                    ; the game writes the sprite list (SPR_*, nspr) itself:
   .endif                           ;  no add_sprite (Commando's main.s sets it)
-  .ifndef DIRSPLIT
-DIRSPLIT = 0                       ; the sprite directory's resident part (ids below the
-  .endif                           ;  game's RES_N) in a sprite bank, not bank 7
   .ifndef ALLLEVELS
 ALLLEVELS = 0                      ; a test build: every level on the chooser, every
   .endif                           ;  bonus level taken (the game's)

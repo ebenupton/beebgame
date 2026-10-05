@@ -60,8 +60,11 @@ FI_TILES2  = 24
 MENU_SECS  = (MENU_LEN + 255) / 256
 PAGE0_SECS = LV_PAGE0_SECS         ; a level file ends with the Master's LV_PAGE0
                                    ;  table (256 lo, 256 hi), in sectors of its own
+  .ifdef RES_N                     ; DIRSPLIT (the game's RES_N, through ldconst.s):
+DIRLEN     = 2*(BOXID0+BOXN-RES_N) ;  the level file carries the ids from RES_N alone,
+  .else                            ;  the resident ids' part being in SPRC (banks.s)
 DIRLEN     = 2*(BOXID0+BOXN)       ; the sprite directory's level part: DIR_TABLE's
-                                   ;  size (banks.s), an address a sprite id
+  .endif                           ;  size (banks.s), an address a sprite id
   .if SPRXKEEP
 SPRX_PAGES = (SPRX_LEN + 255) / 256
   .endif

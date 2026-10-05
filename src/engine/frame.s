@@ -716,7 +716,8 @@ copy_partial:
 ;          coordinates);  rp = its record, with id, x, y, W = 0 and H = REC_CLIP
 ;          already written (draw_sprites; TIGHTBSS: rq);  X dead;  (DRAWFLAGS)
 ;          sp_dfl = the list's mirror flag;  wcx, wcy, wx, wy, wfine;  DIRL/DIRH
-;          (the level's), sprg_* (the game's)
+;          (the level's; DIRSPLIT: the level's ids', RESDIR the resident ids'),
+;          sprg_* (the game's)
 ;   Out:   when the image is in this level and any of the sprite is in the window:
 ;          the record's rectangle (REC_CX, REC_CY, REC_W, REC_H, bit 7 set when
 ;          clipped) and the sprite drawn by the row loop in its data's bank.  Else
@@ -734,7 +735,10 @@ copy_partial:
 ; of the high byte clear for an image in bank 5 (set: bank 4).  The game's part is
 ; the geometry by shape (sprg_ix by id; sprg_w, sprg_rx, sprg_ry, sprg_ln and, with
 ; SPRGFL, sprg_fl by shape).  The flags are defs.s's: SPF_MIRROR, SPF_FULLRES (every
-; scanline stored: a box), SPF_COPY (the copy blitter).
+; scanline stored: a box), SPF_COPY (the copy blitter).  DIRSPLIT: the ids below RES_N
+; are every level's, and their part of the directory is in a sprite bank (RESDIR, in
+; RESDIR_BANK: banks.s), read in low RAM (lowram.s dir_res); bank 7's DIRL/DIRH hold
+; the ids from RES_N.  A resident id costs 28 cycles more than before, a level id 5.
 ; The steps: the address and the geometry; clip horizontally (window columns
 ; sp_c0..sp_c1, first image column sp_c) and vertically (lines lstart..lend of the
 ; buffer, char rows sp_r0..sp_r1); write the record; (Model B) note the mirror's
@@ -757,6 +761,16 @@ draw_sprite:
   .endif
         tax                        ; X = the id
         ; ---- the image's address and bank
+  .if DIRSPLIT
+        ; a resident id (below RES_N): its entry is in the sprite bank, so low RAM's
+        ; dir_res reads it and comes back to ds_dirback (or, for an entry of none,
+        ; returns from here).  A level id: its entry here, the low byte first
+        cpx #RES_N
+        bcs :+
+        jmp dir_res
+:       lda DIRL,x
+        sta sp_ptr
+  .endif
         bankimm ldy, BANK_SPR, BANK_LVL
         lda DIRH,x
         bne :+
@@ -764,10 +778,17 @@ draw_sprite:
 :       bmi :+                     ; bit 7 set: bank 4, the address as it is
         ora #$80                   ; bank 5: the address's bit 7 put back
         bankimm ldy, BANK_TIL1, BANK_LVL
+  .if DIRSPLIT
+:
+ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way back
+        sty sp_dbank
+        sta sp_ptr+1
+  .else
 :       sty sp_dbank
         sta sp_ptr+1
         lda DIRL,x
         sta sp_ptr
+  .endif
         ; ---- the shape's flags, width and lines.  With SPRGFL (the packer emits
         ; it) the flags are the game's, by shape; without it the list's mirror flag
         ; (DRAWFLAGS) is the only flag, or there are none.

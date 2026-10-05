@@ -128,3 +128,42 @@ page_logic:
         sta ROMSEL
         pla
         rts
+
+  .if DIRSPLIT
+; ----------------------------------------------------------------------------
+; dir_res: draw_sprite's directory entry for a resident id (DIRSPLIT), from the
+; resident directory in its sprite bank
+;   In:    X = the id, below RES_N;  jumped to from draw_sprite's prologue (frame.s),
+;          so the return address on the stack is draw_sprite's caller's
+;   Out:   sp_ptr = the image's address, Y = its bank's number (for sp_dbank) and
+;          A = the address's high byte, at draw_sprite's ds_dirback -- or, for an
+;          entry of none (an id with no image), A = 0 and back to draw_sprite's
+;          caller, as draw_sprite's own rts does for an id not in the level
+;   Keeps: X, C
+;   Pre:   bank 7 paged (for reading)
+;   Post:  bank 7 paged again: the entry is read, ds_dirback is bank 7's
+; RESDIR is RES_N low bytes then RES_N high, in levelfile.directory()'s form: a high
+; byte of 0 is none, bit 7 clear is bank 5.  ROMSEL_CPY goes with every switch: the
+; interrupt restores the bank from it.  Bank 7 is put back between the high byte's
+; load and its test (the stores keep N and Z), so the test is the prologue's own.
+; 29 cycles to the test; 28 more than the prologue's level id to ds_dirback, bank 4.
+; ----------------------------------------------------------------------------
+dir_res:
+        bankimm ldy, BANK_SPR+RESDIR_BANK-4, 0, 1
+        sty ROMSEL_CPY
+        sty ROMSEL
+        lda RESDIR,x
+        sta sp_ptr
+        bankimm ldy, BANK_LVL, 0, 1
+        lda RESDIR+RES_N,x
+        sty ROMSEL_CPY
+        sty ROMSEL
+        bne :+
+        rts                        ; no image
+:       bmi :+                     ; bit 7 set: bank 4, the address as it is
+        ora #$80                   ; bank 5: the address's bit 7 put back
+        bankimm ldy, BANK_TIL1, 0, 2
+        jmp ds_dirback
+:       bankimm ldy, BANK_SPR, 0, 2
+        jmp ds_dirback
+  .endif

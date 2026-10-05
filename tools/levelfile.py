@@ -20,11 +20,15 @@ Model B's loader reads the file short of it.  The whole file is whole sectors.
                               directory=lf.directory([None | (addr, bank), ...]),
                               page0=b'...', boxid0=103, boxn=15))
     lf.decode(data, 103, 15)    # the sections back, the map unpacked: for checks
+(DIRSPLIT, the build option: the directory section holds the ids from RES_N alone --
+directory(entries[res_n:]), Level(..., res_n=RES_N) -- the resident ids' part being the
+game's, loaded once with its resident sprites.)
 
 Usage from the command line:
     python3 levelfile.py inc                             # levelfmt.inc to stdout
     python3 levelfile.py check <assets.inc> <level file>...   # check() each; BOXID0 and BOXN
                                                                # from the game's assets.inc
+                                                               # (and RES_N, when DIRSPLIT=1)
 """
 from dataclasses import dataclass, field
 import os, re, sys
@@ -86,10 +90,11 @@ MASTERONLY = os.environ.get('MASTERONLY') == '1'
 PAGE0_LEN = 512
 
 
-def dir_len(boxid0, boxn):
+def dir_len(boxid0, boxn, res_n=0):
     """The directory section's length: 2 bytes a sprite id, BOXID0 + BOXN ids (the game's
-    counts, from its assets.inc)."""
-    return 2 * (boxid0 + boxn)
+    counts, from its assets.inc), less the RES_N resident ids under DIRSPLIT (their entries
+    are not the level's: the game loads them once, with its resident sprites)."""
+    return 2 * (boxid0 + boxn - res_n)
 
 
 # ---------------------------------------------------------------- the map's run length code
@@ -203,6 +208,8 @@ class Level:
     # the game's sprite ids: BOXID0 images, then BOXN boxes (its assets.inc)
     boxid0: int = 0
     boxn: int = 0
+    # DIRSPLIT: the resident ids (0 .. res_n-1), whose entries the directory leaves out
+    res_n: int = 0
     # offset -> byte, HDR_GAME offsets only
     game_header: dict = field(default_factory=dict)
     # the game's bytes after the header: the loader copies them on to LV_HDR + HDR_LEN
@@ -231,7 +238,7 @@ def encode(lv):
     PAGE0_LEN and the two machines' stages."""
     assert len(lv.map) == 1 << (lv.lw + lv.lh), (len(lv.map), lv.lw, lv.lh)
     assert all(len(t) == 256 for t in lv.tile_tables) and len(lv.tile_tables) == 2
-    assert lv.boxid0 > 0 and len(lv.directory) == dir_len(lv.boxid0, lv.boxn)
+    assert lv.boxid0 > 0 and len(lv.directory) == dir_len(lv.boxid0, lv.boxn, lv.res_n)
     assert len(lv.page0) == PAGE0_LEN
     maprle = rle(lv.map)
     assert unrle(maprle) == lv.map
@@ -254,15 +261,15 @@ def encode(lv):
     return out
 
 
-def decode(data, boxid0, boxn):
+def decode(data, boxid0, boxn, res_n=0):
     """The sections by name, the map unpacked and the header's fields under 'fields' (lw, lh,
-    nobj and the shape's).  boxid0 and boxn, the game's, say how long the directory is: the
-    padding between it and LV_PAGE0's sector follows as 'pad'."""
+    nobj and the shape's).  boxid0 and boxn, the game's (and res_n, DIRSPLIT's), say how long
+    the directory is: the padding between it and LV_PAGE0's sector follows as 'pad'."""
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     ends = offs[1:] + [len(data)]
     sec = {n: data[o:e] for n, o, e in zip(SECTIONS, offs, ends)}
     sec['page0'] = sec['page0'][:PAGE0_LEN]
-    n = dir_len(boxid0, boxn)
+    n = dir_len(boxid0, boxn, res_n)
     sec['pad'] = sec['dir'][n:]
     sec['dir'] = sec['dir'][:n]
     h = sec['hdr']
@@ -289,7 +296,7 @@ def inc():
     return '\n'.join(lines) + '\n'
 
 
-def check(data, boxid0, boxn):
+def check(data, boxid0, boxn, res_n=0):
     """A level file's invariants, as the loader relies on them: whole sectors; the section
     table in order, starting after itself; LV_PAGE0 last, sector aligned, PAGE0_LEN long;
     the stages' limits; the header's counts against the sections; the map whole and
@@ -301,7 +308,7 @@ def check(data, boxid0, boxn):
     assert offs[0] == 2 * len(SECTIONS) and offs == sorted(offs), 'the section table'
     assert offs[SEC['page0']] % 256 == 0 and len(data) - offs[SEC['page0']] == PAGE0_LEN, 'LV_PAGE0'
     assert (len(data) - PAGE0_LEN <= STAGE_LVL_B or MASTERONLY) and len(data) <= STAGE_M, 'too big for a stage'
-    sec = decode(data, boxid0, boxn)
+    sec = decode(data, boxid0, boxn, res_n)
     f = sec['fields']
     assert len(sec['objs']) == OBJ_BYTES * f['nobj'] and f['nobj'] <= OBJ_MAX, 'the objects'
     assert len(sec['map']) == 1 << (f['lw'] + f['lh']), 'the map'
@@ -309,7 +316,7 @@ def check(data, boxid0, boxn):
     assert len(sec['attr']) == 256 and len(sec['altcls']) == 256, 'the tile tables'
     assert len(sec['halves']) == 2 * f['nhalf'], 'the half tiles'
     assert len(sec['mir']) == f['nmir'], 'MIRTAB'
-    assert len(sec['dir']) == dir_len(boxid0, boxn), 'the directory'
+    assert len(sec['dir']) == dir_len(boxid0, boxn, res_n), 'the directory'
     assert not any(sec['pad']) and len(sec['pad']) < 256, 'the padding before LV_PAGE0'
     p = sec['place']
     assert len(p) % PLACE_LEN == 1 and p[-1] == PL_END and all(p[i + PL_BANK] in (4, 5) for i in range(0, len(p) - 1, PLACE_LEN)), 'the placements'
@@ -322,9 +329,12 @@ if __name__ == '__main__':
     elif sys.argv[1:2] == ['check'] and len(sys.argv) > 3:
         consts = dict(re.findall(r'^(\w+) = \$?(\w+)', open(sys.argv[2]).read(), re.M))
         boxid0, boxn = int(consts['BOXID0']), int(consts['BOXN'])
+        if os.environ.get('DIRSPLIT') == '1' and 'RES_N' not in consts:
+            sys.exit('levelfile: DIRSPLIT=1 needs the game\'s RES_N (assets.inc): its packer numbers the resident ids first')
+        res_n = int(consts['RES_N']) if os.environ.get('DIRSPLIT') == '1' else 0
         for fn in sys.argv[3:]:
             try:
-                check(open(fn, 'rb').read(), boxid0, boxn)
+                check(open(fn, 'rb').read(), boxid0, boxn, res_n)
             except AssertionError as e:
                 sys.exit('%s: %s' % (fn, e))
         print('levelfile: %d level files check' % (len(sys.argv) - 3))

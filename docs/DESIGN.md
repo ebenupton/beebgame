@@ -775,6 +775,17 @@ and (with `SPRGFL` in `assets.inc`) `sprg_fl` by shape -- Cleo's `sprgeom.inc`, 
 its packer, included by its `gamedata.s`.  Ids from `BOXID0` are boxes; from `BOXID0 +
 BOXN` *still aliases* that draw the box `BOXN` below (`draw_sprite`'s first compare).
 
+`DIRSPLIT` splits the level's part again: the ids below the game's `RES_N` are resident
+(placed alike in every level), and their `RES_N` low and `RES_N` high bytes are the game's,
+at `RESDIR` in sprite bank `RESDIR_BANK`, inside `SPRC` (loaded once).  `DIR_TABLE` keeps
+`2*(BOXID0+BOXN-RES_N)` bytes, and `DIRL`/`DIRH` are its two tables less `RES_N`, so an id
+indexes them as before; the level file's `dir` section is the same ids'.  The prologue
+sends an id below `RES_N` to low RAM's `dir_res` (`lowram.s`), which pages `RESDIR_BANK` in
+(with `ROMSEL_CPY`), reads the entry, pages bank 7 back and jumps to the prologue's
+`ds_dirback` with the address and bank set (or returns for an entry of none): 28 cycles
+more a resident sprite, 5 a level one.  The game's own readers of the directory (Commando's
+`glyph`, in HAZEL) page the bank themselves.
+
 ### draw_sprite
 
 The prologue in bank 7 (`frame.s`): the address and bank from `DIRH/DIRL` (0: return), the
@@ -877,7 +888,8 @@ is in (the harness reads it).
    B `half0`, `halfhi5` (the page less `GH_TILE`), `half_sub` in zero page.
 8. The sprites: SPRC once; SPRX staged (or kept); `place_walk` over the placement list,
    baking the items from `BAKEITEM0`.
-9. The directory's level part to `DIR_TABLE`; `FLATTAB` to bank 6.
+9. The directory's level part to `DIR_TABLE` (`DIRSPLIT`: the ids from `RES_N`, the
+   rest came with SPRC); `FLATTAB` to bank 6.
 10. (Master) `LV_PAGE0` to $0400, and both screens cleared of what the load staged there.
 11. `ld_resume`: `ld_open = 0`, `load_req = LDR_RESUME`, stale flags cleared, `cli`.
 
@@ -947,7 +959,7 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 (run once per machine with `TARGET` and `BD` set), `GAME_MUSIC` (once, first), `DISC_TITLE`,
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
-`MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS`, and `MAXSPR=n`.
+`MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT ALLLEVELS`, and `MAXSPR=n`.
 `GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` is the Master's alone (`cpu.inc` errors).
 `SKIP_ASSETS=1` skips the music and asset steps.
 

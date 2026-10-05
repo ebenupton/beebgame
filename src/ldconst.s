@@ -68,6 +68,9 @@
         OUTC FLAT0
         OUTC BOXID0
         OUTC BOXN
+  .if DIRSPLIT
+        OUTC RES_N                 ; (ldprog.s: the level's directory from RES_N)
+  .endif
         OUTC LDPROG
         OUTC STAGE
         OUTC STAGE_LVL

@@ -26,9 +26,26 @@ LV_HDR:     .res HDR_LEN           ; the header: lw, lh, nobj, the tile set's sh
 ; the high bytes -- 0 when the id is not in this level, bit 7 of the high byte clear
 ; for bank 5 (set: bank 4).  The geometry is the game's (sprg_*), the boxes' too.
 ; draw_sprite (frame.s) reads it; ldprog.s fills it (2*(BOXID0+BOXN) bytes).
+; DIRSPLIT: the ids below the game's RES_N are resident, alike in every level, and their
+; part (RES_N low bytes, then RES_N high, the same form) is the game's, at RESDIR in its
+; sprite bank RESDIR_BANK (4 or 5), loaded once with the resident sprites (SPRC); low
+; RAM's dir_res reads it.  Bank 7 keeps the ids from RES_N alone, 2*(BOXID0+BOXN-RES_N)
+; bytes, and DIRL and DIRH are their tables less RES_N, so an id indexes them as before.
+  .if DIRSPLIT
+    .ifndef RES_N
+        .error "DIRSPLIT: the game's assets.inc must give RES_N, RESDIR and RESDIR_BANK"
+    .endif
+        .assert RES_N > 0 && RES_N <= BOXID0, error, "DIRSPLIT: RES_N resident ids, images all"
+        .assert RESDIR_BANK = 4 || RESDIR_BANK = 5, error, "DIRSPLIT: the resident directory in bank 4 or 5"
+        .assert RESDIR >= $8000 && RESDIR + 2*RES_N <= L0TAB, error, "DIRSPLIT: RESDIR in the bank's data"
+DIR_TABLE:  .res 2*(BOXID0+BOXN-RES_N)
+DIRL      = DIR_TABLE-RES_N
+DIRH      = DIR_TABLE+BOXID0+BOXN-RES_N-RES_N
+  .else
 DIR_TABLE:  .res 2*(BOXID0+BOXN)
 DIRL      = DIR_TABLE
 DIRH      = DIR_TABLE+BOXID0+BOXN
+  .endif
 
 ; ---------------------------------------------------------------- the sprite banks
 ; The expansion tables and SWAPTAB end both sprite banks at the same addresses

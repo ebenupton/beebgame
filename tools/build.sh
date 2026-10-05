@@ -52,6 +52,13 @@
 #   TIGHTBSS=1   the engine's bank 7 variables packed: 9-byte sprite records stored as
 #                arrays (engine/defs.s), and ENGBSS not page aligned (after GAMEBSS as it
 #                falls)
+#   DIRSPLIT=1   the sprite directory's resident part out of bank 7: the game numbers its
+#                resident ids (alike in every level) first, 0..RES_N-1, and puts their
+#                entries (RES_N low bytes, then RES_N high) at RESDIR in sprite bank
+#                RESDIR_BANK with its resident sprites (assets.inc: RES_N, RESDIR,
+#                RESDIR_BANK); DIR_TABLE (bank 7) and the level files' directory hold the
+#                ids from RES_N alone; draw_sprite reads a resident id's entry through low
+#                RAM's dir_res (banks.s, frame.s, lowram.s)
 #   ALLLEVELS=1  a test build: every level on the chooser, every bonus level taken (the
 #                game's menu.s and game.s read it)
 #   MAXSPR=n     the sprite slots (the most sprites on screen at once), over the game's
@@ -64,7 +71,7 @@ set -e
 mkdir -p build
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o
