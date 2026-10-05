@@ -160,8 +160,8 @@ The **directory** that turns an id into an image is split:
 
 ### The two images of bank 7
 
-Bank 7 holds, at its top, the **kernel** (`KRNDATA`, `KRNCODE`, `KRNBSS`, then the disc
-driver's slot and `KRNHW`/`GAMEHI`): resident, never swapped.  Below it is one of two
+Bank 7 holds, at its top, the disc driver's slot, the **kernel** (`KRNCODE`, `KRNDATA`,
+`KRNBSS`) and `KRNHW`/`GAMEHI`, ending at $BFFF with no hole: resident, never swapped.  Below it is one of two
 files read from the disc: the **game's image** (`GAMEDATA`, `GAMECODE`, `ENGCODE`: your
 logic and the engine's renderer) or the **menus' image** (`MUSCODE`, `MNUCODE`,
 `MNUDATA`, `MNUBSS`: your menus and the engine's tune player).  Below both, not in either
@@ -307,7 +307,7 @@ build's sizing depend on them.
 | `ENGBSS` | after `GAMEOBJ`, page aligned (`TIGHTBSS`: unaligned) | the engine's: records, lists, `DIR_TABLE`.  Zeroed |
 | `GAMEDATA`, `GAMECODE` | the game's image, before the engine's `ENGCODE`; the file `GAME` | your tables and code.  Only this image can call the engine's `ENGCODE` (`render_frame`, `add_sprite`, `mark_dirty`, `lv_reset`) |
 | `MNUCODE`, `MNUDATA`, `MNUBSS` | the menus' image from `$8000`, after the engine's `MUSCODE`; the file `MENU` | your menus, their tables (the tune's stream at `music_addr`, Step 7), their variables |
-| `GAMEHI` | the top page of bank 7 (`B7H`), after the kernel's `KRNHW` | resident bytes that must survive both swaps and the zeroing: Cleo's `score` and `hi_score`, which the menus show and the game keeps |
+| `GAMEHI` | the last bytes of bank 7 (`B7H`), after the kernel's `KRNHW`, ending at $BFFF | resident bytes that must survive both swaps and the zeroing: Cleo's `score` and `hi_score`, which the menus show and the game keeps |
 | `KRNCODE`, `KRNDATA`, `KRNBSS` | the kernel | the engine's; a game may add resident code (the build sizes the kernel from the object's segment totals) |
 
 Three rules follow from the swap.  **The two images never call each other**: the menus
@@ -752,7 +752,6 @@ both machines.
 | `DIRSPLIT=1` | the directory's resident part out of bank 7: your packer numbers the ids every level draws alike first (`0` .. `RES_N`-1), writes their entries (`levelfile.directory()` of them: `RES_N` low bytes, `RES_N` high) into `SPRC` at `RESDIR` in bank `RESDIR_BANK`, and the level files' `dir` and `DIR_TABLE` keep the ids from `RES_N` (2 bytes each).  `draw_sprite` reads a resident id's entry through low RAM's `dir_res`, which pages the bank in and bank 7 back: 28 cycles a resident sprite, 5 a level one, for `2*RES_N` bytes of bank 7 | `banks.s`, `frame.s`, `lowram.s`, `ldprog.s`, `levelfile.py` |
 | `MAXSPR=n` | the sprite slots, over your `MAXSPRDEF`; 28 when neither sets it | `engine/defs.s` |
 | `GAMELDINIT=1` | your level start in the load-time program, out of bank 7: your `ldgame.s` (in `GAME_SRC`), whose entry `ld_game` the loader calls at the end of every level load, after `lv_load` and before the load ends (`ld_resume`).  It is assembled into `LDPROG` (segment `LDGAME`, after the loader's code: `cfg/ldprog.cfg`) for the 6502, inside the scope `ldg` with `gamesyms.inc` -- every global label and constant of your link, from its debug file (`build.sh`) -- so it names your variables and the engine's as your game does, and the loader's own (`src`, `dst`, `cnt`, `bcopy`, `pgbank`, `PB_MAP` ...) with `::`.  It runs with interrupts off, bank 7 paged and write-selected (a Model B's board included), the Master's ACCCON as your game runs it (`GAMEHAZEL`: HAZEL in), the level in place (`LV_HDR`, `LV_OBJS`, the map); it may write your zero page and your bank 7 and HAZEL variables, page another bank only through the loader's `bcopy`/`pgbank` (which leave bank 7 paged and write-selected again), call code of your image's (bank 7 is paged), and must return with bank 7 paged and write-selected.  Your game then goes on from `load_level_b`'s return.  `LDPROG`'s room is shared with it (`$0A00` bytes on the Model B, `$0E00` on the Master) | `ldprog.s` `ld_game`, `cfg/ldprog.cfg`, `build.sh` |
-| `KRNTOP=1` | bank 7's top packed with no hole: `KRNHW` (the Model B's chain tables; the Master has none) and any `GAMEHI` end at `$BFFF`, the kernel right under them -- its code, then `KRNDATA`, then `KRNBSS`, so `KRNDATA` shares `KRNHW`'s page and neither crosses one (the build fails if the three are over a page) -- then the disc driver's slot, and the game's and menus' images end at the slot.  Your image and variables are one stretch from `GAMELVL`'s end to the driver: `GAMEHI` is no longer a separate room you need | `tools/build.sh`, `cfg/banks.cfg` |
 | `UDATA5=1` | your level's own bytes in bank 5, up against the map: the level file's objects section holds them (`levelfile.Level(udata=...)`, any length up to `UDATA_MAX` = 894, no objects: `HDR_NOBJ` 0), and the loader copies them to `LV_OBJS` as ever and on to bank 5 to end at `LV_MAP`, their start there in the engine's `lv_udata` (2 bytes, `ENGBSS`).  Read them in play from bank 5 (`map_byte`, or with bank 5 paged); your level start (`ld_game`) can read the `LV_OBJS` copy and turn an address in it into bank 5's by adding `lv_udata - LV_OBJS`.  Records whose position you fix from the top (the last bytes) sit at constant addresses whatever the level's data before them.  Your packer ends the level's bank 5 sprites by `levelfile.udata_start(udata, MAP5)`: the room the data leaves is the level's, not reserved at the largest level's size | `ldprog.s` `lv_load`, `engine/vars.s`, `tools/levelfile.py` |
 | `ALLLEVELS=1` | a test build: the engine passes the flag and your game acts on it (Cleo: every main level on the chooser, every bonus level taken; its `build.sh` then skips the copy to `../cleo.ssd`) | `cpu.inc`, Cleo's `menu.s`, `game.s` |
 
@@ -775,7 +774,7 @@ values on the day of writing.
 | the game image's variables, `GAMEBSS` .. `ENGBSS`, zeroed at each image load | `__GAMEBSS_RUN__` to `__ENGBSS_RUN__` + `__ENGBSS_SIZE__`; `ENGBSS` = `DIRTYLIST` 4*`DIRTYMAX` + `SPRREC` 2*`MAXREC`*`RECSZ` + `RECCNT` 2 + `KEEP` `MAXREC` + `DIRTYCNT` 2 + `SPRLIST` 5*`MAXSPR` + `DIR_TABLE` 2*(`BOXID0`+`BOXN`) (`DIRSPLIT`: less 2*`RES_N`) (`vars.s`, `banks.s`) | `ENGBSS` 1,064 bytes with `MAXSPR` 24 |
 | zero page for the game | `ZP` ends at `$FC`: `ZPGAME` has what the engine's `ZEROPAGE` leaves (`__ZPGAME_RUN__`, `__ZPGAME_SIZE__`) | 113 bytes from `$8B`, all used |
 | `GAMELVL` | the room between `ENGLVL`'s end and `$8300`: 224 bytes, your header tail first | 216 used |
-| `GAMEHI` | the top page of bank 7 after `KRNHW` (`__GAMEHI_RUN__` to `$C000`) | 6 of 146 used |
+| `GAMEHI` | after `KRNHW`, to $BFFF: with `KRNHW`, `KRNBSS` and `KRNDATA` in one page (the build checks) | 6 of 146 used |
 | the level file | `STAGE_LVL_B` (9K, less `page0`'s 512) on the Model B; `STAGE_M` (20K) on the Master; `OBJ_MAX` 149 objects; the header tail under 224 bytes | 2,560 to 7,936 bytes |
 | the map | a fixed 8K at `MAP5`: `lw + lh <= 13` | 256x32, 128x64, 64x128, 32x32 |
 | bank 6 | `$C000` - (`TILES` + (`TOFF`+1)*`TILEBYTES`) bytes of tiles, half tiles half a slot; the fills (`FLAT0`..255 and 0) cost none | 14,656 bytes: 229 slots |

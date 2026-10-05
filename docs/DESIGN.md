@@ -229,9 +229,9 @@ Bank numbers are the code's: `BANK_SPR = 4`, `BANK_TIL1 = 5` (= `BANK_MAP`), `BA
 ```
         bank 4                 bank 5                 bank 6                 bank 7
 $C000 +---------------+     +---------------+     +---------------+     +---------------+
-      | L0TAB L1TAB   |     | L0TAB L1TAB   |     |               |     | KRNHW, GAMEHI | B7H $BF00
-$BC00 | NMASK SWAPTAB |     | NMASK SWAPTAB |     |               |     | driver slot   |
-      |               |     |               |     |               |     | kernel (B7K)  |
+      | L0TAB L1TAB   |     | L0TAB L1TAB   |     |               |     | KRNHW, GAMEHI | B7H, to $BFFF
+$BC00 | NMASK SWAPTAB |     | NMASK SWAPTAB |     |               |     | kernel (B7K)  |
+      |               |     |               |     |               |     | driver slot   |
       |   sprites     |     |  the map 8K   |     |   the level's |     |---------------|
       |   (SPRC, then |     |---------------| MAP5|   tiles, from |     | game image B7 |
       |    SPRX's)    |     |   sprites     |     |   TILES       |     |  ENGCODE      |
@@ -301,15 +301,17 @@ and `LV_HDR` (`HDR_LEN`, with the game's header tail after it).  The menus' imag
 tune's player first (`MUSCODE`), then the game's menus.
 
 `build.sh` fixes the sizes before each link, because ld65 fills an area from its start and
-these must end at fixed places.  From `od65 --dump-segsize` of the Model B's object: the
-slot is as big as the larger driver (`DRVN`) and ends at `B7H`; the kernel ends at the slot,
-moved down a little if `KRNDATA` would straddle a page; the game image ends at the kernel
-(`B7` start = kernel start - the three segments' sizes); the menus' image runs from $8000
-to the kernel.  The Master's are pinned to the Model B's.  As built today: `__KRNDATA_RUN__`
-$B733, `__DRV8271_START__` $BE64 (size $9C), `__B7_START__` $944F, `__ENGBSS_RUN__` $9000
+these must end at fixed places.  From `od65 --dump-segsize` of the Model B's object, down
+from $C000 with no hole: `B7H` holds `KRNHW` then `GAMEHI`, ending at $BFFF; the kernel ends
+at `B7H`, its code first, then `KRNDATA` and `KRNBSS`, so `KRNDATA` lies in `KRNHW`'s page
+(the build fails if `KRNHW`, `GAMEHI`, `KRNBSS` and `KRNDATA` are over a page); the driver
+slot, as big as the larger driver (`DRVN`), ends at the kernel; the game image ends at the
+slot (`B7` start = slot start - the three segments' sizes); the menus' image runs from $8000
+to the slot.  The Master's are pinned to the Model B's.  As built today (Cleo, the Model B): `__KRNCODE_RUN__`
+$B85B, `__DRV8271_START__` $B7BF (size $9C), `__B7_START__` $94B9, `__ENGBSS_RUN__` $9000
 (size $428).  The free room in the game's image is `__B7_START__ - (__ENGBSS_RUN__ +
-__ENGBSS_SIZE__)` -- 39 bytes today; in the menus' image `__KRNDATA_RUN__ - (__MNUBSS_RUN__
-+ __MNUBSS_SIZE__)` -- 2,249.  The game image's variables (`GAMEBSS` to the end of `ENGBSS`)
+__ENGBSS_SIZE__)` -- 145 bytes today; in the menus' image `__DRV8271_START__ - (__MNUBSS_RUN__
++ __MNUBSS_SIZE__)` -- 2,464.  The game image's variables (`GAMEBSS` to the end of `ENGBSS`)
 are zeroed as the image comes in, to their exact end (`defs_ld.inc` `GAME_BSS`,
 `GAME_BSS_PAGES`, `GAME_BSS_REM`; `ldprog.s image_load`).
 
@@ -969,7 +971,7 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
 `MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
-UDATA5 KRNTOP ALLLEVELS`, and `MAXSPR=n`.
+UDATA5 ALLLEVELS`, and `MAXSPR=n`.
 `GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` on the Model B needs `RINGARITH` (`cpu.inc` errors).
 `SKIP_ASSETS=1` skips the music and asset steps.
 

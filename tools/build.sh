@@ -76,11 +76,6 @@
 #                to LV_OBJS as ever and on to bank 5, to end at the map (LV_MAP): their
 #                start there in the engine's lv_udata (ENGBSS), for the game to read in
 #                play.  The game's bank 5 sprites end below them (levelfile.udata_start)
-#   KRNTOP=1     bank 7's top packed with no hole: KRNHW (and a game's GAMEHI) ending at
-#                $BFFF, the kernel right under it (its code, KRNDATA, KRNBSS: KRNDATA in
-#                KRNHW's page), the driver slot under that, the images ending at the slot.
-#                The game's image and variables are one stretch from GAMELVL's end up
-#                (a game need not use GAMEHI)
 #   ALLLEVELS=1  a test build: every level on the chooser, every bonus level taken (the
 #                game's menu.s and game.s read it)
 #   MAXSPR=n     the sprite slots (the most sprites on screen at once), over the game's
@@ -93,7 +88,7 @@ set -e
 mkdir -p build
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5 KRNTOP; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o
@@ -129,8 +124,6 @@ for t in $TARGETS; do
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
     # TIGHTBSS: ENGBSS where GAMEBSS ends, not at the next page
     [ "$TIGHTBSS" = 1 ] && sed -i.bak '/^ *ENGBSS:/s#, align = \$100##' $BD/game.cfg
-    # KRNTOP: the kernel's code before KRNDATA (KRNDATA up in KRNHW's page: below)
-    [ "$KRNTOP" = 1 ] && sed -i.kt -e '/^ *KRNDATA: *load = B7K/{h;d;}' -e '/^ *KRNCODE: *load = B7K/{p;x;}' $BD/game.cfg
     # the banks' code must end where the game's packer starts their data (assets.inc: the
     # level files bake the addresses): the areas sized to it, so an overflow fails the link.
     # Bank 6's ends at the first tile slot, TILES + (TOFF+1)*64
@@ -184,10 +177,9 @@ for pass in 1 2 3; do
         settarget $t
         ca65 -g --cpu $CPU $DEFS -I $BD -I $GAME_SRC -I $BG/src --bin-include-dir $BD \
              -o $BD/main.o $GAME_MAIN -l $BD/main.lst
-        # The top of bank 7, down from KRNHW at B7H ($BF00): the driver slot, as big as the
-        # larger driver (disc.s: the boot loader copies in the machine's one), the kernel
-        # below it, its tables (KRNDATA) kept inside a page; then the game's image, ending at
-        # the kernel: the game's data and code, then the engine's.  From the Model B's sizes
+        # The top of bank 7, down from $BFFF: KRNHW (B7H), the kernel, the driver slot (as big
+        # as the larger driver: disc.s, the boot loader copies in the machine's one); then the
+        # game's image, ending at the slot: the game's data and code, then the engine's.  From the Model B's sizes
         # (od65: the object's segments, before any link); the Master's, pinned to the Model
         # B's, fall short (MASTERONLY: the Master's own, there is no Model B).
         if [ $TARGET = modelb ] || [ "$MASTERONLY" = 1 ]; then
@@ -199,27 +191,18 @@ for pass in 1 2 3; do
             DRVN=$(( D1 > D2 ? D1 : D2 ))
             KD=$(seg KRNDATA)
             B7N=$(seg 'GAMEDATA|GAMECODE|ENGCODE')
-            if [ "$KRNTOP" = 1 ]; then
-                # KRNTOP: KRNHW (and GAMEHI, if a game has one) ends bank 7, the kernel right
-                # under it -- its code, then KRNDATA, then KRNBSS, so KRNDATA shares KRNHW's
-                # page and neither crosses one -- then the driver slot, then the game's image:
-                # no hole anywhere
-                HW=$(seg 'KRNHW|GAMEHI'); KB=$(seg KRNBSS)
-                [ $(( HW + KB + KD )) -le 256 ] || { echo "KRNTOP: KRNHW, KRNBSS and KRNDATA are over a page"; exit 1; }
-                HWS=$(( 0xC000 - HW ))
-                KRNS=$(( HWS - $(seg 'KRNDATA|KRNCODE|KRNBSS') )); KSZ=$(printf '%04X' $(( HWS - KRNS )))
-                DRVS=$(( KRNS - DRVN ))
-                B7S=$(printf '%04X' $(( DRVS - B7N ))); B7N=$(printf '%04X' $B7N)
-                MSZ=$(printf '%04X' $(( DRVS - 0x$(cfgval $CFG B7M start) )))
-                HWN=$(printf '%04X' $(( HW > 0 ? HW : 1 ))); HWS=$(printf '%04X' $HWS)
-                sed -i.top -e "s#^\( *B7H: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$HWS, size = \$$HWN#" $BD/game.cfg
-            else
-            DRVS=$(( 0x$(cfgval $CFG B7H start) - DRVN ))
-            KRNS=$(( DRVS - $(seg 'KRNDATA|KRNCODE|KRNBSS') ))
-            [ $(( (KRNS & 255) + KD )) -gt 256 ] && KRNS=$(( (KRNS & 0xFF00) + 256 - KD ))
-            B7S=$(printf '%04X' $(( KRNS - B7N ))); B7N=$(printf '%04X' $B7N)
-            MSZ=$(printf '%04X' $(( KRNS - 0x$(cfgval $CFG B7M start) ))); KSZ=$(printf '%04X' $(( DRVS - KRNS )))
-            fi
+            # bank 7's top, no hole: KRNHW (and GAMEHI, if a game has one) ends it, the kernel
+            # right under it -- its code, then KRNDATA, then KRNBSS, so KRNDATA shares KRNHW's
+            # page and neither crosses one -- then the driver slot, then the game's image
+            HW=$(seg 'KRNHW|GAMEHI'); KB=$(seg KRNBSS)
+            [ $(( HW + KB + KD )) -le 256 ] || { echo "bank 7's top: KRNHW, KRNBSS and KRNDATA are over a page"; exit 1; }
+            HWS=$(( 0xC000 - HW ))
+            KRNS=$(( HWS - $(seg 'KRNDATA|KRNCODE|KRNBSS') )); KSZ=$(printf '%04X' $(( HWS - KRNS )))
+            DRVS=$(( KRNS - DRVN ))
+            B7S=$(printf '%04X' $(( DRVS - B7N ))); B7N=$(printf '%04X' $B7N)
+            MSZ=$(printf '%04X' $(( DRVS - 0x$(cfgval $CFG B7M start) )))
+            HWN=$(printf '%04X' $(( HW > 0 ? HW : 1 ))); HWS=$(printf '%04X' $HWS)
+            sed -i.top -e "s#^\( *B7H: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$HWS, size = \$$HWN#" $BD/game.cfg
             KRNS=$(printf '%04X' $KRNS); DRVS=$(printf '%04X' $DRVS); DRVN=$(printf '%04X' $DRVN)
         fi
         sed -i.b7 -e "s#^\( *B7: *start = [$]\)[0-9A-F]*, size = [$][0-9A-F]*#\1$B7S, size = \$$B7N#" \
@@ -272,8 +255,8 @@ open(BD + '/IMG7', 'wb').write(menu + bytes(-len(menu) % 256) + open(BD + '/GAME
 # (the files start where their areas do)
 img = {'GAME': (addr['__B7_START__'], os.path.getsize(BD + '/GAME')),
        'MENU': (addr['__B7M_START__'], os.path.getsize(BD + '/MENU'))}
-# (the images end at the kernel, or KRNTOP: at the driver slot under it)
-lim = min(addr['__KRNDATA_RUN__'], addr['__KRNCODE_RUN__'], addr['__DRV8271_START__'])
+# (the images end at the driver slot, under the kernel)
+lim = addr['__DRV8271_START__']
 assert img['MENU'][0] + img['MENU'][1] <= lim and img['GAME'][0] + img['GAME'][1] <= lim
 with open(BD + '/defs_ld.inc', 'w') as f:
     f.write('; generated by build.sh from build/labels.txt\n')
@@ -367,7 +350,7 @@ pieces = [(4, lab['__B4X_START__'], 'b4x.bin'), (4, lab['__B4T_START__'], 'b4t.b
           (5, lab['__B5X_START__'], 'b5x.bin'), (5, lab['__B5T_START__'], 'b5t.bin'),
           (6, lab['__B6X_START__'], 'b6x.bin'),
           (7, lab['__BOOTRAM_START__'], 'boot.bin'),
-          (7, min(lab['__KRNDATA_RUN__'], lab['__KRNCODE_RUN__']), 'b7k.bin'),   # (the kernel's first: KRNDATA, or KRNTOP's KRNCODE)
+          (7, lab['__KRNCODE_RUN__'], 'b7k.bin'),   # (the kernel's first: KRNCODE)
           (7 | K['PIECE_8271'], lab['__DRV8271_START__'], 'drv8271.bin'),
           (7 | K['PIECE_1770'], lab['__DRV1770_START__'], 'drv1770.bin')]
 if os.environ.get('TARGET') == 'master':
