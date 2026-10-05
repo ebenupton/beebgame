@@ -89,6 +89,9 @@ DIRSPLIT = 0                       ; the sprite directory's resident part (ids b
   .ifndef ALLLEVELS
 ALLLEVELS = 0                      ; a test build: every level on the chooser, every
   .endif                           ;  bonus level taken (the game's)
+  .ifndef GAMELDINIT
+GAMELDINIT = 0                     ; the game's level start in the load-time program: its
+  .endif                           ;  ldgame.s, called at a level load's end (ldprog.s ld_game)
   .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
         .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
   .endif

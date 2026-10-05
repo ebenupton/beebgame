@@ -21,7 +21,8 @@
 ; level's tiles and an overlay, bake); SPRXKEEP (the Master without GAMEHAZEL
 ; keeps SPRX in HAZEL and ANDY across loads); GAMEHAZEL (the game's code in
 ; HAZEL: cpu.inc); TILEMIRROR (mirrored full tiles, cpu.inc: the Model B's
-; gather reads MIRTAB, the baker draws them reversed).
+; gather reads MIRTAB, the baker draws them reversed); GAMELDINIT (the game's
+; level start, its ldgame.s, called at a level load's end: ld_game, below).
 ; ============================================================================
   .ifndef BHW                      ; cpu.inc's flags, again: it is the game's (its
 BHW = 1                            ;  65C02 spellings and link imports), not this
@@ -31,6 +32,9 @@ GAMEHAZEL = 0
   .endif
   .ifndef TILEMIRROR
 TILEMIRROR = 0
+  .endif
+  .ifndef GAMELDINIT
+GAMELDINIT = 0
   .endif
 ; SPRXKEEP: the Master (without GAMEHAZEL) keeps SPRX in HAZEL and ANDY
 SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)
@@ -139,8 +143,9 @@ nt    = LDZP + 16                  ; this file's full tiles to go
 ;   In:    X = a level, 0..15 (from load_level_b: its caller is returned to), or
 ;          LDOP_TITLE, LDOP_GAME, LDOP_OVER (go_title, go_game, go_menu: the
 ;          image, then the game's hook); A = go_menu's, for hook_over
-;   Out:   a level: rts to load_level_b's caller with the level in the banks,
-;          the chain asked to resume and interrupts on (ld_resume).  An image:
+;   Out:   a level: rts to load_level_b's caller with the level in the banks
+;          (GAMELDINIT: and the game's ld_game run), the chain asked to resume
+;          and interrupts on (ld_resume).  An image:
 ;          no return -- the stack reset to STACKTOP, then jmp hook_title or
 ;          hook_over (after ld_resume), or hook_image then game_in (hook_play;
 ;          interrupts still off, ld_open = 1: the level loop's first load goes
@@ -153,6 +158,9 @@ ld_entry:
         cpx #LDOP_IMAGE
         bcs ld_image
         jsr lv_load
+  .if GAMELDINIT
+        jsr ld_game                ; the game's level start (LDGAME, below)
+  .endif
 
 ; ----------------------------------------------------------------------------
 ; ld_resume: a load's end -- the disc closed, the chain asked to resume,
@@ -1708,6 +1716,42 @@ bake_kind:  .incbin "bake_kind.bin"
 bake_geom:  .incbin "bake_geom.bin"
   .endif
 img_tab:    .incbin "img_tab.bin"
+
+; ---------------------------------------------------------------- the game's part
+; ----------------------------------------------------------------------------
+; ld_game (GAMELDINIT): the game's own level start, its ldgame.s (the game's
+; include directory: build.sh adds it), in segment LDGAME after this program's
+; code (ldprog.cfg).  It runs once a level load, after lv_load and before
+; ld_resume -- what a game would otherwise do in bank 7 right after
+; load_level_b, done here so that the code is not in bank 7.
+;   In:    lv_load's Out: the level in the banks -- LV_HDR (and the header's
+;          tail) in bank 7, the objects at LV_OBJS (main RAM), the map in bank 5;
+;          bank 7 paged and its write bank (stores to bank 7 land on either
+;          machine and on a Model B's write-select board); the Master: ACCCON X
+;          clear, Y as the game runs (GAMEHAZEL: set, so HAZEL's variables are
+;          in reach); the stage is not (the Master cleared it)
+;   Out:   bank 7 paged and its write bank, as on entry (bcopy and pgbank leave
+;          it so: another bank is paged through them, never by hand)
+;   Uses:  A X Y; this program's zero page (LDZP: src dst cnt ...) and its
+;          helpers (bcopy, pgbank, the PB_ sockets) as ::src, ::bcopy ...; the
+;          game's own zero page and variables -- whatever its level start would
+;          write.  Nothing else of the engine's but what the game's code may
+;          touch: the game's image is in bank 7, and its code is callable
+;   Pre:   interrupts off, the chain parked (a load)
+; The game's symbols: build.sh writes gamesyms.inc from the game's link (every
+; global label and constant of its debug file), included here inside the scope
+; ldg with the game's code, so the game's names (the engine's zero page cnt,
+; tmp, ... among them) win over this program's inside it; this program's are
+; reached with the global scope's ::.
+; ----------------------------------------------------------------------------
+  .if GAMELDINIT
+        .segment "LDGAME"
+        .scope ldg
+        .include "gamesyms.inc"    ; the game's names (build.sh)
+        .include "ldgame.s"        ; the game's code: ld_game, then what it wants
+        .endscope
+ld_game = ldg::ld_game
+  .endif
 
 ; ---- the layout
         .assert LDPROG = __LD_START__, error, "LDPROG (defs.inc) is where ldprog.cfg links this program"

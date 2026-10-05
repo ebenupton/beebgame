@@ -891,7 +891,12 @@ is in (the harness reads it).
 9. The directory's level part to `DIR_TABLE` (`DIRSPLIT`: the ids from `RES_N`, the
    rest came with SPRC); `FLATTAB` to bank 6.
 10. (Master) `LV_PAGE0` to $0400, and both screens cleared of what the load staged there.
-11. `ld_resume`: `ld_open = 0`, `load_req = LDR_RESUME`, stale flags cleared, `cli`.
+11. (`GAMELDINIT`) the game's `ld_game` (its `ldgame.s`, segment `LDGAME` of LDPROG): its level
+    start, run here from main RAM rather than from bank 7 after `load_level_b` returns.  Bank 7
+    is paged and write-selected (`bcopy`'s exit), interrupts are off, the Master's ACCCON is the
+    game's (HAZEL in with `GAMEHAZEL`); it reads the game's names from `gamesyms.inc` (`build.sh`:
+    the game's link's global labels and constants, in the scope `ldg`) and the loader's with `::`.
+12. `ld_resume`: `ld_open = 0`, `load_req = LDR_RESUME`, stale flags cleared, `cli`.
 
 An image load (`image_load`): stage the image file, copy it to `GAME_ADDR`/`MENU_ADDR`,
 apply its bank-number and write-bank lists (`img7fix.inc`), and for the game's image zero
@@ -960,8 +965,8 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 (run once per machine with `TARGET` and `BD` set), `GAME_MUSIC` (once, first), `DISC_TITLE`,
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
-`MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR ALLLEVELS`, and
-`MAXSPR=n`.
+`MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
+ALLLEVELS`, and `MAXSPR=n`.
 `GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` on the Model B needs `RINGARITH` (`cpu.inc` errors).
 `SKIP_ASSETS=1` skips the music and asset steps.
 
@@ -978,7 +983,8 @@ The passes, in order:
    pinned, `ld65` with `-Ln labels.txt --dbgfile game.dbg`; `defs_ld.inc` from `labels.txt`
    and `game.dbg` (the `want` list, `SOLIDF`, the hooks, the images' addresses and lengths,
    `GAME_BSS*`); `IMG7`; `img7fix.inc`; `ldconst.s` assembled for its printed constants;
-   LDPROG; BANKS with its asserts and printed line; then the header equality check,
+   (`GAMELDINIT`) `gamesyms.inc` from `game.dbg`; LDPROG (with `GAMELDINIT`, `GAME_SRC` on its
+   include path for the game's `ldgame.s`); BANKS with its asserts and printed line; then the header equality check,
    `gamename.inc`, LOADER.
 6. `mkdfs.py build` -> the disc; `assets.inc` compared; `layoutcheck.py`; `ls -l`.
 

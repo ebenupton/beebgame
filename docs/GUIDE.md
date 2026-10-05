@@ -274,6 +274,7 @@ assembled into the engine's own code.
 | `hook_play` | `disc.s` `game_in` (`jmp`), straight after `hook_image` | the same | as `hook_image` left it | never returns: it ends in `go_menu`.  Its first act must be a level load (`load_level_b`), which with `ld_open` set goes straight on and ends in `ld_resume`: only then do the vsyncs count and the flips land |
 | `hook_hud` | `frame.s` `render_frame` (`jsr`), after its wait for the last flip | once a rendered frame when `bar_dirty` is non-zero; `render_frame` then clears it (`stz01`: set it to 1 and no other value) | bank 7 paged (the game's image); the bar at `BARADDR` is on display and single buffered: the digits must be finished before the CRTC reaches it, (`QROWS`-`QVSYNC`)*8 scanlines after the vsync | returns; A, X, Y free |
 | `hook_sound` | `kernel.s`, the vsync's step of the interrupt, after `scan_keys` -- only with `GAMESOUND=1`, in place of the engine's `sound_tick` | every vsync, whichever image is in bank 7 | the interrupt's: A, X, Y saved by the handler (`irq_x`, `irq_y`, `MOS_IRQA`); the engine still copies `mus_on` to `mus_tick` after it | returns; it must store into no sideways bank (the interrupt's rule, `vars.s`) and so must live outside both images: HAZEL (`GAMEHAZEL`) or the kernel's segments |
+| `ld_game` (only with `GAMELDINIT=1`) | `ldprog.s` `ld_entry` (`jsr`), after `lv_load` | every level load, before the load ends | the level in the banks, `LV_HDR` and `LV_OBJS` in place; bank 7 paged and write-selected; interrupts off; your `ldgame.s`, assembled into LDPROG (Step 11) | returns with bank 7 paged and write-selected; A, X, Y free; then `ld_resume` and `load_level_b`'s return |
 
 Two facts about the image hooks: the stack is reset to `STACKTOP` before each, so
 "nothing the other image called is returned to" (`disc.s`), and `hook_image` and
@@ -750,10 +751,13 @@ both machines.
 | `TIGHTBSS=1` | the engine's bank 7 variables packed: 9-byte sprite records as arrays (`RECSZ`), `ENGBSS` not page aligned (the driver edits the cfg) | `engine/defs.s`, `build.sh` |
 | `DIRSPLIT=1` | the directory's resident part out of bank 7: your packer numbers the ids every level draws alike first (`0` .. `RES_N`-1), writes their entries (`levelfile.directory()` of them: `RES_N` low bytes, `RES_N` high) into `SPRC` at `RESDIR` in bank `RESDIR_BANK`, and the level files' `dir` and `DIR_TABLE` keep the ids from `RES_N` (2 bytes each).  `draw_sprite` reads a resident id's entry through low RAM's `dir_res`, which pages the bank in and bank 7 back: 28 cycles a resident sprite, 5 a level one, for `2*RES_N` bytes of bank 7 | `banks.s`, `frame.s`, `lowram.s`, `ldprog.s`, `levelfile.py` |
 | `MAXSPR=n` | the sprite slots, over your `MAXSPRDEF`; 28 when neither sets it | `engine/defs.s` |
+| `GAMELDINIT=1` | your level start in the load-time program, out of bank 7: your `ldgame.s` (in `GAME_SRC`), whose entry `ld_game` the loader calls at the end of every level load, after `lv_load` and before the load ends (`ld_resume`).  It is assembled into `LDPROG` (segment `LDGAME`, after the loader's code: `cfg/ldprog.cfg`) for the 6502, inside the scope `ldg` with `gamesyms.inc` -- every global label and constant of your link, from its debug file (`build.sh`) -- so it names your variables and the engine's as your game does, and the loader's own (`src`, `dst`, `cnt`, `bcopy`, `pgbank`, `PB_MAP` ...) with `::`.  It runs with interrupts off, bank 7 paged and write-selected (a Model B's board included), the Master's ACCCON as your game runs it (`GAMEHAZEL`: HAZEL in), the level in place (`LV_HDR`, `LV_OBJS`, the map); it may write your zero page and your bank 7 and HAZEL variables, page another bank only through the loader's `bcopy`/`pgbank` (which leave bank 7 paged and write-selected again), call code of your image's (bank 7 is paged), and must return with bank 7 paged and write-selected.  Your game then goes on from `load_level_b`'s return.  `LDPROG`'s room is shared with it (`$0E00` bytes) | `ldprog.s` `ld_game`, `cfg/ldprog.cfg`, `build.sh` |
 | `ALLLEVELS=1` | a test build: the engine passes the flag and your game acts on it (Cleo: every main level on the chooser, every bonus level taken; its `build.sh` then skips the copy to `../cleo.ssd`) | `cpu.inc`, Cleo's `menu.s`, `game.s` |
 
 Commando (github.com/ebenupton/commando) is the second game on the engine, built with
-`MASTERONLY`, `GAMEHAZEL`, `GAMESOUND`, `DRAWFLAGS`, `TALLMAP` and `TIGHTBSS`.
+`MASTERONLY`, `GAMEHAZEL`, `GAMESOUND`, `DRAWFLAGS`, `TALLMAP`, `TIGHTBSS` and `GAMELDINIT`
+(its `ldgame.s`: the map's shape, `lv_reset`, the state cleared, the objects built, the
+missions copied to bank 5, the player placed -- 725 bytes out of bank 7).
 
 ## Limits to design within
 
@@ -775,6 +779,6 @@ values on the day of writing.
 | banks 4 and 5 | `B4_DATA_END` - `B4_CODE_END` and `MAP5` - `B5_CODE_END`, for the resident sprites and the level's own | 14,452 and 6,117 bytes |
 | `SPRX` | 16K (the stage); 12K to stay resident on the Master (`SPRX_PAGES <= $30`) | 8,483 bytes |
 | sprites a frame | `MAXSPR` (the list); `DIRTYMAX` (20) dirty tiles a buffer before it is redrawn whole | `MAXSPRDEF` 24 |
-| the load-time program | `LDPROG`'s area is `$0E00` bytes (`banks.cfg` `LDP`); it grows with `img_tab.bin` and the bake tables | 2,538 / 2,678 bytes |
+| the load-time program | `LDPROG`'s area is `$0E00` bytes (`banks.cfg` `LDP`); it grows with `img_tab.bin`, the bake tables and `GAMELDINIT`'s `ldgame.s` (the link fails past it) | 2,538 / 2,678 bytes |
 | the disc | 80 tracks of 10 sectors (`NTRACKS`, `SECTRK`); used to the last file's `F_<name>_SEC` + `_N` | 708 of 800 sectors |
 | the window | `WINPX` 160 by `VISLINES`/2 game pixels: 84 (Model B) or 120 (Master) | -- |
