@@ -33,7 +33,11 @@
 #   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound effects
 #                (kernel.s)
 #   TILEMIRROR=1 mirrored full tiles: the tile blitter draws a stored tile right to left
-#                (tiles.s @mir) where the Master's LV_PAGE0 gives kind 3; the Master alone
+#                (tiles.s @mir) where the gather gives kind GL_MIRROR -- the Master's
+#                LV_PAGE0, the Model B's gather5 for the ids from mir0 (after the halves:
+#                MIRTAB, bank 5, the source's id by id - mir0, from the level file's mir
+#                section); the baker (ldprog.s) draws them too.  The game's assets.inc
+#                gives MAXMIR, MIRTAB's length
 #   NOPADS=1     no placement pads (pads.inc through PAD, and B6PACK's on the Master): every
 #                byte to code and data, the hot code's page crossings (SAMEPAGE's warnings)
 #                costing cycles instead; the Model B's draw_rect chains, which must lie in a
@@ -196,7 +200,7 @@ for pass in 1 2 3; do
 import re
 want = ['boot','dsk_type','dsk_drv','read_sectors','ld_sec','ld_n','ld_dst',
         'LV_HDR','LV_OBJS','LV_ATTR0','LV_ALTCLS','TILES','DIR_TABLE','map_shr','map_stride','FLATTAB',
-        'half0','halfhi5','half_sub','HLOW','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
+        'half0','halfhi5','half_sub','HLOW','MIRTAB','MIRCMP','MIRBASE','sprc_ok','sprx_ok','HPAIR0','HPAIR1',
         'MAP5','LDZP','STAGE','STAGE_LVL','LDPROG','PBANK','pboard','DSK_BANKS','dsk_board',
         'ld_img','ld_open','load_req','game_in']
 addr = {}

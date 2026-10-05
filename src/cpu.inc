@@ -57,11 +57,8 @@ GAMEHAZEL = 0                      ; the game's code in HAZEL too (the Master al
 GAMESOUND = 0                      ; the game's own sound player (hook_sound)
   .endif
   .ifndef TILEMIRROR
-TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): the Master's gather alone
-  .endif
-  .if TILEMIRROR && BHW
-        .error "TILEMIRROR needs the Master's gather (LV_PAGE0's kind bits); the Model B's has none"
-  .endif
+TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): kind GL_MIRROR from the
+  .endif                           ;  Master's LV_PAGE0, the Model B's gather from MIRTAB
   .ifndef NOPADS
 NOPADS = 0                         ; no placement pads (pads.inc's, through PAD; B6PACK's on the
   .endif                           ;  Master): the hot code's page crossings cost cycles instead

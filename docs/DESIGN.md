@@ -912,7 +912,8 @@ lands at `LV_HDR + HDR_LEN`, where the game keeps memory for it (Cleo's `RNGTAB`
 `GAMELVL`).  Objects are `OBJ_BYTES` = 6 each, `OBJ_MAX` = 149.  The map's RLE: a control
 byte c < 128 means c+1 literals follow, c >= 128 the next byte c-126 times.  A placement
 entry is `PLACE_LEN` = 6 bytes (item, bank, address, extra) ending in `PL_END` ($FF).
-Section `mir` is empty (the slot the removed mirrored tiles had).  `page0` is `PAGE0_LEN` =
+Section `mir` is `MIRTAB` under `TILEMIRROR` (`nmir` bytes: for each mirrored id, `mir0 + i`,
+the id of the full tile it draws reversed; `mir0 = half0 + nhalf`), else empty.  `page0` is `PAGE0_LEN` =
 512 bytes, sector aligned and last, so the Model B's loader reads the file short of it.
 Limits: without `page0` a file must fit the Model B's stage (`STAGE_LVL_B`, 8K) unless
 `MASTERONLY`, and whole the Master's (`STAGE_M`, 20K).  `levelfile.py check <assets.inc>
@@ -959,7 +960,8 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 (run once per machine with `TARGET` and `BD` set), `GAME_MUSIC` (once, first), `DISC_TITLE`,
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
-`MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT ALLLEVELS`, and `MAXSPR=n`.
+`MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR ALLLEVELS`, and
+`MAXSPR=n`.
 `GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` is the Master's alone (`cpu.inc` errors).
 `SKIP_ASSETS=1` skips the music and asset steps.
 

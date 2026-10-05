@@ -20,13 +20,17 @@
 ; Options: BAKEITEM0 (the game's packer defines it: items made here from the
 ; level's tiles and an overlay, bake); SPRXKEEP (the Master without GAMEHAZEL
 ; keeps SPRX in HAZEL and ANDY across loads); GAMEHAZEL (the game's code in
-; HAZEL: cpu.inc).
+; HAZEL: cpu.inc); TILEMIRROR (mirrored full tiles, cpu.inc: the Model B's
+; gather reads MIRTAB, the baker draws them reversed).
 ; ============================================================================
   .ifndef BHW                      ; cpu.inc's flags, again: it is the game's (its
 BHW = 1                            ;  65C02 spellings and link imports), not this
   .endif                           ;  program's
   .ifndef GAMEHAZEL
 GAMEHAZEL = 0
+  .endif
+  .ifndef TILEMIRROR
+TILEMIRROR = 0
   .endif
 ; SPRXKEEP: the Master (without GAMEHAZEL) keeps SPRX in HAZEL and ANDY
 SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)
@@ -597,6 +601,16 @@ lv_load:
         sta cnt                    ; (cnt+1 is 0 still)
         ldx PB_MAP
         jsr bcopy
+    .if TILEMIRROR
+        ; ---- the mirrored tiles' sources, by id - mir0, into bank 5's MIRTAB
+        lda #SEC_MIR
+        jsr section
+        setw dst, MIRTAB
+        lda LV_HDR+HDR_NMIR
+        sta cnt                    ; (cnt+1 is 0 still: bcopy's exit)
+        ldx PB_MAP
+        jsr bcopy
+    .endif
   .endif
         ; ---- the tile shape, into banks 5 and 6 (read here, with bank 7 in)
         lda LV_HDR+HDR_HALFPAGE
@@ -610,9 +624,17 @@ lv_load:
   .if BHW || .defined(BAKEITEM0)   ; placement: the gather's shape (the Master's is
         lda LV_HDR+HDR_HALF0       ;  LV_PAGE0); the baker decodes a tile as the
         sta sv_half0               ;  Model B's gather does
+    .if TILEMIRROR
+        clc                        ; half0 - HALFOFF - 1 (gather5 subtracts it with
+    .else                          ;  C clear, after its mirror test)
         sec                        ; half0 - HALFOFF (gather5 subtracts it with C
-        sbc LV_HDR+HDR_HALFOFF     ;  set)
+    .endif                         ;  set)
+        sbc LV_HDR+HDR_HALFOFF
         sta sv_halfsub
+    .if TILEMIRROR
+        lda LV_HDR+HDR_MIR0        ; the mirrored tiles' first id
+        sta sv_mir0
+    .endif
         lda LV_HDR+HDR_HALF1
         sta sv_half1
         lda LV_HDR+HDR_HALF2
@@ -638,6 +660,17 @@ lv_load:
         sta halfhi5
         lda sv_halfsub
         sta half_sub
+    .if TILEMIRROR
+        lda sv_mir0                ; the gather's mirror test (its cmp's operand)
+        sta MIRCMP                 ;  and MIRTAB's base less mir0 (its lda's)
+        lda #<MIRTAB
+        sec
+        sbc sv_mir0
+        sta MIRBASE
+        lda #>MIRTAB
+        sbc #0
+        sta MIRBASE+1
+    .endif
   .endif
         lda PB_LVL
         jsr pgbank
@@ -868,6 +901,11 @@ bk_step:    .res 1                 ;  the bottom row's offset from the top's
 bk_pa:      .res 1                 ;  the fill pair
 bk_pb:      .res 1
 bk_fp:      .res 2                 ;  the flats' pairs, in the level's file
+    .if TILEMIRROR
+bk_mp:      .res 2                 ;  MIRTAB, in the level's file
+bk_cx:      .res 1                 ; bk_tile: the full tile's column (bk_bx, or
+bk_md:      .res 1                 ;  a mirror's 24 - bk_bx) and its rows' mode
+    .endif
 BK_BG:      .res BK_LINES_MAX      ; the column's backdrop, a byte a line
   .endif
 sv_hplo:    .res 1                 ; the HPAIR section in the staged file (the
@@ -878,6 +916,9 @@ sv_half0:   .res 1                 ; the half tiles' first id, the two range
 sv_half1:   .res 1                 ;  boundaries, and half0 - HALFOFF
 sv_half2:   .res 1
 sv_halfsub: .res 1
+    .if TILEMIRROR
+sv_mir0:    .res 1                 ; the mirrored tiles' first id
+    .endif
   .endif
 
 ; ----------------------------------------------------------------------------
@@ -961,6 +1002,14 @@ bake:   lda #SEC_FLAT              ; the flats' pairs, in the level's file (main
         sta bk_fp
         lda src+1
         sta bk_fp+1
+    .if TILEMIRROR
+        lda #SEC_MIR               ; the mirrored tiles' sources, there too
+        jsr section
+        lda src
+        sta bk_mp
+        lda src+1
+        sta bk_mp+1
+    .endif
         ldx item                   ; the slot: item - BAKEITEM0
         lda bake_kind-BAKEITEM0,x
         asl
@@ -1114,7 +1163,9 @@ bake:   lda #SEC_FLAT              ; the flats' pairs, in the level's file (main
 ; palette by its colour (the HPAIR section's low bits, HPAIR_LEN + i on), the
 ; fill row by the id's range -- below half1 the top, below half2 the bottom,
 ; from half2 neither: the row twice (bk_step = 0); a full tile, both rows from
-; its slot in TILES.
+; its slot in TILES; with TILEMIRROR a mirrored one (from mir0), its source's
+; (MIRTAB, in the level's file) column 3 - c with each byte's pixels swapped
+; (mode $80).
 ; ----------------------------------------------------------------------------
 bk_tile:
         lda #0                     ; the map: MAP5 + (ty << lw) + tx, in bank 5
@@ -1161,6 +1212,32 @@ bk_tile:
         jsr @pair
 @emitj: jmp @emit
 @notflat:
+    .if TILEMIRROR
+        ; ---- a mirrored full tile (from mir0): its source's id from MIRTAB,
+        ;      drawn as that full tile's column 3 - c, each byte's pixels swapped
+        ;      (mode $80)
+        ldx bk_bx                  ; (a plain full tile: its own column, its rows
+        ldy #0                     ;  stored)
+        cmp sv_mir0
+        bcc @plain
+        sbc sv_mir0                ; (C = 1) the source, MIRTAB[id - mir0]
+        clc
+        adc bk_mp
+        sta cnt
+        lda bk_mp+1
+        adc #0
+        sta cnt+1
+        ldy #0
+        lda (cnt),y
+        pha
+        lda bk_bx
+        eor #(TILECHARS-1)*CHARBYTES   ; (0, 8, 16, 24: 24 less it)
+        tax
+        ldy #$80
+        pla
+@plain: stx bk_cx
+        sty bk_md
+    .endif
         cmp sv_half0
         bcs @half
         clc                        ; ---- a full tile: TILES + (id + TOFF) *
@@ -1174,15 +1251,25 @@ bk_tile:
         dey
         bne :-
         lda ent
+    .if TILEMIRROR
+        ora bk_cx
+    .else
         ora bk_bx
+    .endif
         sta ent
         lda ent+1
         clc
         adc #>TILES
         sta ent+1
         .assert <TILES = 0, error, "bk_tile: TILES's low byte"
+    .if TILEMIRROR
+        lda bk_md                  ; both rows stored: 0, or $80 swapped
+        sta bk_mt
+        sta bk_mb
+    .else
         sty bk_mt                  ; (Y = 0) both rows stored
         sty bk_mb
+    .endif
         lda #HALFBYTES             ; the bottom char row, HALFBYTES on
         sta bk_step
         bne @emit                  ; (always)
@@ -1274,6 +1361,9 @@ bk_tile:
 ;   Uses:  A X Y
 ; ----------------------------------------------------------------------------
 bk_row: tay                        ; Y = 0 for the row (its byte), 1 for the pair
+    .if TILEMIRROR
+        bmi @swap                  ; ($80: the row, each byte's pixels swapped)
+    .endif
         bne @pair                  ;  (which counts its four pairs from 1)
 @row:   lda (ent),y
         sta BK_BG,x
@@ -1300,6 +1390,28 @@ bk_row: tay                        ; Y = 0 for the row (its byte), 1 for the pai
         bcc @pair
         clc
         rts
+    .if TILEMIRROR
+@swap:  ldy #0                     ; a mirror's row: each byte's two game pixels
+@sw:    lda (ent),y                ;  swapped, ((b & $33) << 2) | ((b & $CC) >> 2),
+        lsr                        ;  as a delta swap (tiles.s @mir)
+        lsr
+        eor (ent),y
+        and #$33
+        sta tmp
+        asl
+        asl
+        eor tmp
+        eor (ent),y
+        sta BK_BG,x
+        inx
+        cpx bk_lines
+        bcs @out
+        iny
+        cpy #CHARLINES
+        bcc @sw
+        clc
+        rts
+    .endif
   .endif
 
 ; ----------------------------------------------------------------------------

@@ -16,7 +16,7 @@ Model B's loader reads the file short of it.  The whole file is whole sectors.
     data = lf.encode(lf.Level(lw=5, lh=5, game_header={2: x, ...}, shape=lf.Shape(...),
                               objects=b'...', tile_tables=(attr, altcls), tiles=b'...',
                               placement=lf.placement([(item, bank, img, extra), ...]),
-                              map=b'...', flat=b'...', halves=b'...', hpair=b'...', mir=b'',
+                              map=b'...', flat=b'...', halves=b'...', hpair=b'...', mir=b'...',
                               directory=lf.directory([None | (addr, bank), ...]),
                               page0=b'...', boxid0=103, boxn=15))
     lf.decode(data, 103, 15)    # the sections back, the map unpacked: for checks
@@ -57,9 +57,10 @@ HDR = {'HDR_' + f.upper(): HDR_SHAPE + i for i, f in enumerate(SHAPE_FIELDS) if 
 class Shape:
     """The tile set as the blitter and the loader take it: the stored tile count, the map's
     row shift (8 - lw), the half tiles (count, the three range boundaries half0..half2, the
-    page they are in and HALFOFF), two bytes the format keeps from the removed mirrored tiles
-    (mir0: the id the halves end at; nmir: 0), and the solid's fill byte (id 0).  encode()
-    gives the 12 header bytes: a zero, then the fields in SHAPE_FIELDS order."""
+    page they are in and HALFOFF), the mirrored full tiles (mir0: their first id, where the
+    halves end, half0 + nhalf; nmir: their count, MIRTAB's length -- 0 but under the engine's
+    TILEMIRROR), and the solid's fill byte (id 0).  encode() gives the 12 header bytes: a
+    zero, then the fields in SHAPE_FIELDS order."""
     ntiles: int
     map_shr: int
     nhalf: int = 0
@@ -199,7 +200,8 @@ class Level:
     # the halves' fill palette (8 first bytes, 8 second), then each half's low bits (fill
     # row, colour)
     hpair: bytes
-    # section 10, empty: the format keeps the removed mirrored tiles' slot
+    # MIRTAB (TILEMIRROR): for each mirrored id, mir0 + i, the id of the full tile it draws
+    # reversed (1 .. ntiles: its slot less TOFF); empty without mirrored tiles
     mir: bytes
     # directory()
     directory: bytes
@@ -316,6 +318,7 @@ def check(data, boxid0, boxn, res_n=0):
     assert len(sec['attr']) == 256 and len(sec['altcls']) == 256, 'the tile tables'
     assert len(sec['halves']) == 2 * f['nhalf'], 'the half tiles'
     assert len(sec['mir']) == f['nmir'], 'MIRTAB'
+    assert f['nmir'] == 0 or (f['mir0'] == f['half0'] + f['nhalf'] and all(1 <= s <= f['ntiles'] for s in sec['mir'])), 'MIRTAB: the mirrors after the halves, each of a full tile'
     assert len(sec['dir']) == dir_len(boxid0, boxn, res_n), 'the directory'
     assert not any(sec['pad']) and len(sec['pad']) < 256, 'the padding before LV_PAGE0'
     p = sec['place']
@@ -332,9 +335,14 @@ if __name__ == '__main__':
         if os.environ.get('DIRSPLIT') == '1' and 'RES_N' not in consts:
             sys.exit('levelfile: DIRSPLIT=1 needs the game\'s RES_N (assets.inc): its packer numbers the resident ids first')
         res_n = int(consts['RES_N']) if os.environ.get('DIRSPLIT') == '1' else 0
+        # TILEMIRROR: the Model B's MIRTAB holds the game's MAXMIR (assets.inc)
+        maxmir = int(consts['MAXMIR']) if os.environ.get('TILEMIRROR') == '1' and not MASTERONLY else 255
         for fn in sys.argv[3:]:
             try:
-                check(open(fn, 'rb').read(), boxid0, boxn, res_n)
+                sec = check(open(fn, 'rb').read(), boxid0, boxn, res_n)
+                assert sec['fields']['nmir'] <= maxmir, 'MIRTAB: more mirrored tiles than MAXMIR'
+                assert sec['fields']['nmir'] == 0 or os.environ.get('TILEMIRROR') == '1', 'mirrored tiles need TILEMIRROR'
+                assert 'FLAT0' not in consts or sec['fields']['mir0'] + sec['fields']['nmir'] <= int(consts['FLAT0']), 'MIRTAB: the mirrors run into the flats'
             except AssertionError as e:
                 sys.exit('%s: %s' % (fn, e))
         print('levelfile: %d level files check' % (len(sys.argv) - 3))

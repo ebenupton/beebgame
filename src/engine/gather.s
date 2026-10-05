@@ -13,7 +13,9 @@
 ; which the loader reads from the level file (blessed placement 2: it has the
 ; main RAM for it).  The Model B's is arithmetic on the level's tile shape, the
 ; loader's too (ldprog.s): the half tiles' shape in zero page (vars.s half0,
-; half_sub, halfhi5) and each half's low bits here (HLOW).
+; half_sub, halfhi5) and each half's low bits here (HLOW); with TILEMIRROR the
+; mirrored tiles' sources here too (MIRTAB) and mir0 in the code (MIRCMP,
+; MIRBASE).
 ;
 ; Segments: MAP5CODE, MAP5BSS (bank 5).  The bank's code ends at B5_CODE_END
 ; (the game's assets.inc), where its sprites start -- exactly there on the Model
@@ -59,12 +61,29 @@ HLOW_LEN = 64                      ; the halves' slots a level may have: k = 0..
 ;                     other row a fill (a pair from the level's palette,
 ;                     HPAIR0/HPAIR1) or the same row again.  Their fill row and
 ;                     colour are HLOW's, by k
+;   mir0 .. FLAT0-1   (TILEMIRROR) mirrored full tiles: MIRTAB[id - mir0] is
+;                     the id of the full tile drawn reversed (its slot less
+;                     TOFF), gathered as that tile with GL_MIRROR in GATHERL's
+;                     low bits -- the pair the Master's LV_PAGE0 holds for it
 ;   FLAT0 .. 255      flat tiles: a pair alternating down every char, in
 ;                     FLATTAB (the two solids are its last two entries, for a
 ;                     level's other solid)
+; With TILEMIRROR the half path tests for a mirror first, against mir0 in its
+; cmp's operand (MIRCMP, the loader's), and the mirror case reads MIRTAB through
+; its lda's operand (MIRBASE = MIRTAB - mir0, the loader's).  The two symbols end
+; the @ scope (as a label would), so the paths after them loop to g5tile, a
+; symbol, not @tile (G5LOOP).
 ; ----------------------------------------------------------------------------
+  .if BHW && TILEMIRROR            ; blessed placement: the Model B's gather (the
+        .define G5LOOP g5tile      ;  Master's is LV_PAGE0)
+  .else
+        .define G5LOOP @tile
+  .endif
 gather5:
         ldy rc_nt
+  .if BHW && TILEMIRROR            ; blessed placement: the Model B's gather
+g5tile:                            ; (the loop head as a symbol: below)
+  .endif
 @tile:
   .if .not BHW                     ; blessed placement: LV_PAGE0 in main RAM
         ; ---- the Master: the id, read in place, indexes the table -- which
@@ -117,7 +136,15 @@ gather5:
         bpl @tile
         rts
         ; ---- a half tile: k = its slot from the halves' page
-@half:  sbc half_sub               ; C = 1 from the cmp: id - (half0 - HALFOFF)
+@half:
+    .if TILEMIRROR
+        ; (or a mirrored full tile: from mir0, above the halves)
+MIRCMP := * + 1                    ; (the loader's: mir0)
+        cmp #$FF
+        bcs @mir
+        ; C = 0 from the cmp: the loader's half_sub is half0 - HALFOFF - 1
+    .endif
+        sbc half_sub               ; C = 1 from the cmp: id - (half0 - HALFOFF)
         tax
         lsr
         lsr
@@ -134,8 +161,31 @@ gather5:
         ora HLOW,x                 ; its fill row and colour
         sta GATHERL,y
         dey
-        bpl @tile
+        bpl G5LOOP
         rts
+    .if TILEMIRROR
+        ; ---- a mirrored full tile: its source's id from MIRTAB, then the full
+        ; tile's arithmetic on it, and the kind in the low byte's low bits
+@mir:   tax                        ; (C = 1 from the cmp)
+MIRBASE := * + 1                   ; (the loader's: MIRTAB - mir0)
+        lda $FFFF,x                ; the source's id
+        adc #TOFF+TILES_PER_PAGE*(>TILES-GH_TILE)-1   ; (C = 1: the slot + ...)
+        tax
+        and #TILES_PER_PAGE-1
+        lsr
+        ror
+        ror                        ; (slot & 3) << 6
+        ora #GL_MIRROR
+        sta GATHERL,y
+        txa
+        lsr
+        sec
+        ror                        ; slot >> 2 + >TILES, bit 7 set
+        sta GATHERH,y
+        dey
+        bpl g5tile
+        rts
+    .endif
   .endif
   .if .not BHW                     ; (each Model B path ends in its own rts)
         rts
@@ -149,6 +199,14 @@ gather5:
         .segment "MAP5BSS"
   .if BHW                          ; blessed placement: the Master's shape is LV_PAGE0
 HLOW:     .res HLOW_LEN
+    .if TILEMIRROR
+; MIRTAB: the level's mirrored tiles' sources, by id - mir0 (the loader's, from the
+; level file's mir section: nmir bytes); MAXMIR is the game's (assets.inc)
+      .ifndef MAXMIR
+        .error "TILEMIRROR: the game's assets.inc must give MAXMIR, MIRTAB's length"
+      .endif
+MIRTAB:   .res MAXMIR
+    .endif
   .endif
 
 ; ---- bank 5's code (with MAP5BSS, its last) against where its sprites start

@@ -102,13 +102,15 @@ TILES_PER_PAGE = 256/TILEBYTES
 ; solid (GATHERL its pair in FLATTAB), else a half tile's page less GH_TILE, with
 ; GATHERL its row's offset (GL_ROWMASK), which char row is its fill (GL_FILLTOP,
 ; GL_FILLBOT; neither: both stored) and the fill's colour in the level's palette
-; (GL_COLMASK)
+; (GL_COLMASK).  A full tile's GATHERL has its low six bits clear, but for its kind
+; with TILEMIRROR (cpu.inc): GL_MIRROR, drawn reversed (tiles.s @mir)
 GH_TILE    = $80
 GH_FLAT    = $40
 GL_FILLTOP = 8
 GL_FILLBOT = 16
 GL_ROWMASK = $E0
 GL_COLMASK = 7
+GL_MIRROR  = 3                     ; (TILEMIRROR) a mirrored full tile's kind
 HPAIR_LEN  = 16                    ; the halves' fill palette: 8 first bytes, then
                                    ;  8 second
 FLATTAB_LEN = 2*(NFLAT+2)          ; the flat tiles' pairs, and the two solids'

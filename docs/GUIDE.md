@@ -612,7 +612,7 @@ page0`), then the sections:
 
 | Section | Content |
 |---|---|
-| `hdr` | `HDR_LEN` (32) bytes: `HDR_LW`, `HDR_LH` (log2 of the map in tiles), `HDR_NOBJ`, the game's fields at `HDR_GAME` (offsets 2-5 and 7-19), and the tile set's `Shape` at `HDR_SHAPE` (20): `ntiles`, `map_shr` (8 - lw), `nhalf`, `half0..2`, `halfpage` (high byte), `halfoff`, `mir0`, `nmir` (0), `solidfill`.  Then your **header tail** (`Level.header_tail`), under a page in all: the loader copies the whole section to `LV_HDR` |
+| `hdr` | `HDR_LEN` (32) bytes: `HDR_LW`, `HDR_LH` (log2 of the map in tiles), `HDR_NOBJ`, the game's fields at `HDR_GAME` (offsets 2-5 and 7-19), and the tile set's `Shape` at `HDR_SHAPE` (20): `ntiles`, `map_shr` (8 - lw), `nhalf`, `half0..2`, `halfpage` (high byte), `halfoff`, `mir0` (`half0 + nhalf`), `nmir` (0 without `TILEMIRROR`), `solidfill`.  Then your **header tail** (`Level.header_tail`), under a page in all: the loader copies the whole section to `LV_HDR` |
 | `objs` | `OBJ_BYTES` (6) a record, `OBJ_MAX` (149) at most: yours, copied to `LV_OBJS` |
 | `attr`, `altcls` | two 256-byte tables by tile id: yours (`LV_ATTR0`, `LV_ALTCLS`) |
 | `tiles` | the tile list: the files this level uses (count, then each file's number and its full tiles), then each full tile's index in its file (`convert.py` `_tilelist`) |
@@ -621,7 +621,7 @@ page0`), then the sections:
 | `flat` | `FLATTAB`'s pairs, `FLATTAB_LEN` = 2*(`NFLAT`+2) |
 | `halves` | two bytes a half tile: its index in its file, and its stored row with the file's place in the level's list << 1 |
 | `hpair` | the halves' fill palette, `HPAIR_LEN` (16: 8 first bytes, 8 second), then each half's low bits (fill row and colour) |
-| `mir` | empty (the removed mirrored tiles' slot; `nmir` = 0) |
+| `mir` | `TILEMIRROR`: `MIRTAB`, `nmir` bytes -- for each mirrored id `mir0 + i`, the id (1..`ntiles`) of the full tile it draws reversed; else empty |
 | `dir` | `levelfile.directory()`: `2*(BOXID0+BOXN)` bytes (above); `DIRSPLIT`: the ids from `RES_N`, `2*(BOXID0+BOXN-RES_N)` bytes (`Level(res_n=RES_N)`) |
 | `page0` | `PAGE0_LEN` (512): the Master's gather table, a pair per id, 256 low then 256 high, in whole sectors at the end -- the Model B's loader reads the file short of them |
 
@@ -745,6 +745,7 @@ both machines.
 | `GAMEHAZEL=1` | your code in HAZEL as well: segments `HAZCODE`, `HAZDATA`, `HAZBSS`, a piece of `BANKS` the boot loader copies once (`PIECE_HAZEL`).  Needs `MASTERONLY`; `SPRX` is then read at every level load (nothing is kept in HAZEL/ANDY) | `build.sh`, `banks.cfg`, `ldprog.s` `SPRXKEEP` |
 | `GAMESOUND=1` | the vsync calls your `hook_sound` in place of `sound_tick`; the tune's step is still raised | `kernel.s` |
 | `TALLMAP=1` | maps up to 256 tiles tall: the window's character row keeps its high bits (`wcyh`) for the tile blitter's map row.  The Master alone (`cpu.inc` errors with `BHW`) | `cpu.inc`, `vars.s`, `frame.s` |
+| `TILEMIRROR=1` | mirrored full tiles: an id drawn as a stored full tile reversed (chars right to left, each byte's two game pixels swapped; `tiles.s` `@mir`).  Your packer gives them the ids from `mir0`, after the halves (before the flats), and the level file's `mir` section (`MIRTAB`) each one's source's id; `LV_PAGE0` gives them kind `GL_MIRROR` (3) in the low byte.  The Model B's gather reads `MIRTAB` (bank 5, `MAXMIR` bytes from your `assets.inc`; 32 bytes of code more), the baker draws them, and the blitter costs 7 cycles more a full-tile run | `gather.s`, `tiles.s`, `ldprog.s`, `levelfile.py` |
 | `DRAWFLAGS=1` | the sprite list's x high byte carries draw flags: bit 7 mirrors the image, so one image is drawn either way round from the list | `frame.s` `draw_sprites`, `draw_sprite` |
 | `TIGHTBSS=1` | the engine's bank 7 variables packed: 9-byte sprite records as arrays (`RECSZ`), `ENGBSS` not page aligned (the driver edits the cfg) | `engine/defs.s`, `build.sh` |
 | `DIRSPLIT=1` | the directory's resident part out of bank 7: your packer numbers the ids every level draws alike first (`0` .. `RES_N`-1), writes their entries (`levelfile.directory()` of them: `RES_N` low bytes, `RES_N` high) into `SPRC` at `RESDIR` in bank `RESDIR_BANK`, and the level files' `dir` and `DIR_TABLE` keep the ids from `RES_N` (2 bytes each).  `draw_sprite` reads a resident id's entry through low RAM's `dir_res`, which pages the bank in and bank 7 back: 28 cycles a resident sprite, 5 a level one, for `2*RES_N` bytes of bank 7 | `banks.s`, `frame.s`, `lowram.s`, `ldprog.s`, `levelfile.py` |

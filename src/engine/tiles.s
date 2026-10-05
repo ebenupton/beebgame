@@ -735,8 +735,8 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
 
   .if TILEMIRROR
 ; ----------------------------------------------------------------------------
-; @mir: case T for a mirrored tile (TILEMIRROR: the Master's gather alone, its
-; LV_PAGE0 giving kind 3 in GATHERL's low bits).  The stored tile's chars right
+; @mir: case T for a mirrored tile (TILEMIRROR: kind GL_MIRROR in GATHERL's low
+; bits, from the Master's LV_PAGE0 or the Model B's gather5).  The stored tile's chars right
 ; to left, each byte's two game pixels swapped -- ((b & $33) << 2) | ((b & $CC)
 ; >> 2), as a delta swap: the dither is per game pixel, so its dots move as one.
 ;   In:    X = rc_gi; tp+1 = the source's page (@tile); C = 0 (as at @run)
