@@ -174,10 +174,10 @@ The asserts there: both ring ends are page aligned (so the fold test is a high-b
 bar.  `QBLANK` on the Model B is `BARADDR + 45*8`: the bar's own bytes (section 5).
 
 While a level loads, the display is the loader's scratch, black: the driver's NMI stub runs
-at `NMIPAGE = $0D00` and the load-time program at `LDPROG = $0E00` (both machines), `STAGE
-= $1C00` holds a shared file (16K at most), `STAGE_LVL = $5C00` the level's own file (8K at
-most without its last two sectors), and the level's objects go to `LV_OBJS = $7C00`
-(`defs.inc`).
+at `NMIPAGE = $0D00` and the load-time program at `LDPROG = $0E00` (both machines; 2.5K on
+the Model B, to `STAGE`, which `ldprog.s` asserts), `STAGE = $1800` holds a shared file (16K
+at most), `STAGE_LVL = $5800` the level's own file (9K at most without its last two
+sectors), and the level's objects go to `LV_OBJS = $7C00` (`defs.inc`).
 
 ### The Master's main RAM
 
@@ -923,7 +923,7 @@ entry is `PLACE_LEN` = 6 bytes (item, bank, address, extra) ending in `PL_END` (
 Section `mir` is `MIRTAB` under `TILEMIRROR` (`nmir` bytes: for each mirrored id, `mir0 + i`,
 the id of the full tile it draws reversed; `mir0 = half0 + nhalf`), else empty.  `page0` is `PAGE0_LEN` =
 512 bytes, sector aligned and last, so the Model B's loader reads the file short of it.
-Limits: without `page0` a file must fit the Model B's stage (`STAGE_LVL_B`, 8K) unless
+Limits: without `page0` a file must fit the Model B's stage (`STAGE_LVL_B`, 9K) unless
 `MASTERONLY`, and whole the Master's (`STAGE_M`, 20K).  `levelfile.py check <assets.inc>
 <level>...` verifies every invariant the loader relies on; `build.sh` runs it on all 16.
 

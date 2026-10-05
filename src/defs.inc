@@ -170,15 +170,19 @@ PIECE_HAZEL = 1                    ; the piece goes to HAZEL (GAMEHAZEL: ACCCON 
 
 ; ---------------------------------------------------------------- the loader
 NMIPAGE    = $0D00                 ; the disc transfer routine, while a load runs
-LDPROG     = $0E00                 ; the load-time program (ldprog.s), read there
+LDPROG     = $0E00                 ; the load-time program (ldprog.s), read there: up
+                                   ;  to STAGE on the Model B (2.5K), $1BFF on the
+                                   ;  Master (3.5K: LV_OBJS after it)
         .import __NMI8271_START__: absolute, __NMI1770_START__: absolute, __LDP_START__: absolute
         .assert NMIPAGE = __NMI8271_START__ && NMIPAGE = __NMI1770_START__, error, "NMIPAGE: the cfg's NMI8271 and NMI1770, where the stubs run"
         .assert LDPROG = __LDP_START__, error, "LDPROG: the cfg's LDP (and ldprog.cfg's LD)"
 SECTRK     = 10                    ; the disc: 80 tracks of 10 256-byte sectors
 NTRACKS    = 80
   .if BHW                          ; hardware: the display is the staging area
-STAGE      = $1C00                 ; a shared file staged here, 16K at most ($5BFF)
-STAGE_LVL  = $5C00                 ; the level's own file, 8K at most (the game's
+STAGE      = $1800                 ; a shared file staged here, 16K at most ($57FF):
+                                   ;  above LDPROG's 2.5K (ldprog.s asserts it ends
+                                   ;  by STAGE)
+STAGE_LVL  = $5800                 ; the level's own file, 9K at most (the game's
                                    ;  packer asserts it): the objects go to LV_OBJS
                                    ;  ($7C00) while it is still being read
   .else                            ; hardware: shadow RAM

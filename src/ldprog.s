@@ -7,7 +7,7 @@
 ; and their addresses are the layout.  Both machines.
 ;
 ; The display is black and the screen is the program's scratch (defs.inc STAGE,
-; STAGE_LVL: $1C00-$7FFF on the Model B; on the Master $3000-$7FFF of shadow
+; STAGE_LVL: $1800-$7FFF on the Model B; on the Master $3000-$7FFF of shadow
 ; RAM, ACCCON X, for the shared files and of main RAM for the level's).  A level
 ; is gathered from the shared files -- the tile set's three, SPRC, SPRX, the
 ; level's own -- by the lists the game's packer put in the level file
@@ -47,7 +47,7 @@ SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)
         .include "defs_ld.inc"     ; the game's addresses and constants (build.sh)
         .include "files.inc"       ; the disc's sector table (mkdfs.py)
         .include "levelfmt.inc"    ; the level file's sections and header (levelfile.py)
-        .import __LD_START__: absolute
+        .import __LD_START__: absolute, __LD_LAST__: absolute
 ; The physical banks: the boot loader found RAM in whatever sockets and left
 ; their numbers in PBANK (low BSS, a byte per bank 4..7).  This program comes
 ; off the disc at every load, so the loader cannot patch it as it does the
@@ -1782,6 +1782,9 @@ ld_game = ldg::ld_game
 
 ; ---- the layout
         .assert LDPROG = __LD_START__, error, "LDPROG (defs.inc) is where ldprog.cfg links this program"
+  .if BHW                          ; hardware: the Model B's stage follows it
+        .assert __LD_LAST__ <= STAGE, error, "LDPROG runs into STAGE: the Model B gives it 2.5K"
+  .endif
         .assert <STAGE_LVL = 0, error, "section: STAGE_LVL page-aligned"
         .assert <BARADDR = 0 && <STAGE = 0 && <GAME_BSS = 0, error, "image_load: page-aligned"
         .assert IMG_MENU = 1, error, "image_load's tables: the game's, then the menus'"

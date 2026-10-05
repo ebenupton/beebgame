@@ -83,7 +83,7 @@ class Shape:
 # LV_OBJS: OBJ_BYTES * OBJ_MAX = 894 bytes of main RAM (levelfmt.inc carries both)
 OBJ_BYTES, OBJ_MAX = 6, 149
 # the Model B's level stage, LV_OBJS - STAGE_LVL (the file short of LV_PAGE0)
-STAGE_LVL_B = 0x7C00 - 0x5C00
+STAGE_LVL_B = 0x7C00 - 0x5800
 # the Master's stage, its STAGE_LVL to the banks (the whole file)
 STAGE_M = 0x8000 - 0x3000
 # the build's: no Model B, so no limit of its
