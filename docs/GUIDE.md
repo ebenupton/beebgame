@@ -150,7 +150,10 @@ The **directory** that turns an id into an image is split:
   `spy`), `sprg_ln` (stored rows: scanlines for a box, game-pixel rows otherwise) and,
   when `assets.inc` defines `SPRGFL`, `sprg_fl` (`SPF_MIRROR` 1, `SPF_FULLRES` 2,
   `SPF_COPY` 8: `engine/defs.s`).  Cleo includes it in `GAMEDATA` (`gamedata.s`); it must
-  be somewhere in the game's image, where `draw_sprite` runs.
+  be somewhere in the game's image, where `draw_sprite` runs.  The game may read it too:
+  a frame's drawn box is `[-sprg_rx, 2*sprg_w - sprg_rx)` across and `[-sprg_ry, sprg_ln -
+  sprg_ry)` down about its reference point (`sprg_ln` in game pixels for a shape without
+  `SPF_FULLRES`), which is how Cleo's `body_hit` tests two bodies.
 
 ### The two images of bank 7
 
@@ -520,7 +523,12 @@ step with a macro:
 
 ```ca65
 .macro SFX ch, lo4, hi, att, dur
-        .byte SN_LATCH | (ch << SN_CHSHIFT) | lo4, hi, SN_LATCH | SN_VOL | (ch << SN_CHSHIFT) | att, dur
+  .if ch = SN_NOISE                ; a data byte replaces the noise control: repeat it
+        .byte SN_LATCH | (ch << SN_CHSHIFT) | lo4, lo4
+  .else
+        .byte SN_LATCH | (ch << SN_CHSHIFT) | lo4, hi
+  .endif
+        .byte SN_LATCH | SN_VOL | (ch << SN_CHSHIFT) | att, dur
 .endmacro
 SFX_CH = 2
 sfx_tab: .word sfx_jump, sfx_star, sfx_throw, sfx_hit, sfx_kill, sfx_power, sfx_die

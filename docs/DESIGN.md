@@ -919,7 +919,9 @@ The game sets `sfx_req` (zero page) to a 1-based index; the vsync's `sound_tick`
 from `sfx_tab` (the game's table of word pointers; `sfx_tab-2,x` with X = 2 x index).  An
 effect is steps of `SFXSTEP_LEN` = 4 bytes -- three bytes written to the chip, then the
 frames to hold them -- ending in `SFX_END` ($FF), which written to the chip is the noise
-channel's silence (asserted); the end also silences channel 2.  `sfx_ptr`, `sfx_dur` are the
+channel's silence (asserted); the end also silences channel 2.  On the noise channel (3) the
+second byte, a data byte, replaces the noise control (`hw.inc`: bit 2 `SN_WHITE`, bits 0-1
+the rate) just as the latch's low bits set it, so an effect there repeats the control in it.  `sfx_ptr`, `sfx_dur` are the
 player's state; `sfx_ptr+1 = 0` means none playing.  `sound_tick` is a step of the vsync
 handler on both machines (inlined; the effects themselves sit with it under `PLACEH`).  With
 `GAMESOUND` the vsync calls the game's `hook_sound` instead.

@@ -133,7 +133,7 @@ SN_CHSHIFT = 5                     ; the channel's place
 SN_DATAMASK = $0F                  ; the 4 data bits
 SN_ATT_OFF = $0F                   ; attenuation 15: silent
 SN_NOISE   = 3
-SN_WHITE   = $04                  ; the noise control's white-noise bit
+SN_WHITE   = $04                   ; the noise control's white-noise bit
 
 ; ---------------------------------------------------------------- the disc controllers
 ; the Intel 8271 (the Model B's)
