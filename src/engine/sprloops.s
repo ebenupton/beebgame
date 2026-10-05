@@ -336,7 +336,10 @@ pl:     lda (ptr),y
 ; and sprrow_tab: see the file header.  Anonymous labels: three in the row loop,
 ; each a skip of one instruction.
 ; ----------------------------------------------------------------------------
-.macro NIB_LOOPS bank
+.macro NIB_LOOPS bank, withmirror
+                                   ; (withmirror = 0: spr_fm and spr_retm left out -- a
+                                   ;  bank the game fills with images never drawn
+                                   ;  mirrored; its mirrored entries draw plain)
         ; ---- ds_entry: open the write window, to ds_done -- each row patches the
         ; column loop's jump in this bank (cpu.inc).  Master: the jmp alone.
 ds_entry:                          ; BANKENTRY
@@ -373,6 +376,7 @@ spr_pinc:
         bcc spr_next               ; always
 spr_scold:
         jmp spr_scold2             ; (out of the bcs's reach)
+  .if withmirror
 spr_mdec:
         dec ptr+1                  ; C = 0 (spr_retm's borrow), kept
         bcc spr_next               ; always: ahead of spr_retm, so in reach
@@ -385,6 +389,7 @@ spr_retm:                          ; next column, mirrored: the source pointer -
         lda sp                     ; C = 1: + 7 is + CHARBYTES
         adc #CHARBYTES-1
         bra spr_ssta
+  .endif
         ; ---- the row's end: the next row's source (+ sp_rinc) and screen
         ; (+ ROWBYTES, folded at the ring's end)
 ds_rowdone:
@@ -452,11 +457,17 @@ spr_scold2:
         spcold spr_sback
         ; ---- the other blitters: spr_fm's cells (pads.inc's PADB_FM and PADM_FM
         ; place them: they straddle a page), the partial loops, the copy blitter
+  .if withmirror
         PAD ::PADB_FM, ::PADM_FM
         NIBCELLS spr_fm, 1, spr_retm
+  .endif
         NIBPART spr_fn, 0, spr_retp
+  .if withmirror
         NIBPART spr_fm, 1, spr_retm
-        NIBCOPY spr_fc, spr_retp
+  .endif
+  .ifdef ::SPRGFL                   ; (the copy blitter: only the game's shape flags,
+        NIBCOPY spr_fc, spr_retp   ;  SPF_COPY, reach it)
+  .endif
         ; ---- the entries a row takes, by sp_disp + 2 x (its first line, or
         ; SPRTAB_N-1 for the partial loop): the prologue's sp_disp is SPRDISP_FN
         ; (spr_fn), SPRDISP_FM (spr_fm, mirrored: SPF_MIRROR) or SPRDISP_FC (spr_fc,
@@ -465,12 +476,20 @@ spr_scold2:
 sprrow_tab:
         .word spr_fn_0, spr_fn_0, spr_fn_1, spr_fn_1, spr_fn_2, spr_fn_2, spr_fn_3
         .word spr_fn_3, spr_fn_pt
+  .if withmirror
         .word spr_fm_0, spr_fm_0, spr_fm_1, spr_fm_1, spr_fm_2, spr_fm_2, spr_fm_3
         .word spr_fm_3, spr_fm_pt
+  .else
+        .word spr_fn_0, spr_fn_0, spr_fn_1, spr_fn_1, spr_fn_2, spr_fn_2, spr_fn_3
+        .word spr_fn_3, spr_fn_pt
+  .endif
+  .ifdef ::SPRGFL
         .word spr_fc_0, spr_fc_1, spr_fc_2, spr_fc_3, spr_fc_4, spr_fc_5, spr_fc_6
         .word spr_fc_7, spr_fc_pt
-        .assert * - sprrow_tab = 3*2*SPRTAB_N && SPRDISP_FM = 2*SPRTAB_N && SPRDISP_FC = 4*SPRTAB_N, error, "sprrow_tab: SPRTAB_N entries a blitter, in sp_disp's order"
-        .assert >sprrow_tab = >(sprrow_tab+3*2*SPRTAB_N-1), warning, "sprrow_tab straddles a page (+1 cycle a row)"
+        .assert * - sprrow_tab = 3*2*SPRTAB_N, error, "sprrow_tab: SPRTAB_N entries a blitter"
+  .endif
+        .assert SPRDISP_FM = 2*SPRTAB_N && SPRDISP_FC = 4*SPRTAB_N, error, "sprrow_tab: SPRTAB_N entries a blitter, in sp_disp's order"
+        .assert >sprrow_tab = >(*-1), warning, "sprrow_tab straddles a page (+1 cycle a row)"
 .endmacro
 
 ; ============================================================================
@@ -479,9 +498,12 @@ sprrow_tab:
 ; Each in a scope of its own (spr4, spr5), so the two copies' labels do not clash.
 ; Both must start their bank: ds_entry is BANKENTRY, where call_bank enters.
 ; ============================================================================
+  .ifndef SPR5_MIRROR               ; (the game's assets.inc may set it 0: its bank 5
+SPR5_MIRROR = 1                    ;  holds no image drawn mirrored)
+  .endif
         .segment "SPR4CODE"
         .scope spr4
-        NIB_LOOPS ::BANK_SPR
+        NIB_LOOPS ::BANK_SPR, 1
         .endscope
         .assert spr4::ds_entry = BANKENTRY, error, "bank 4's row loop must start the bank"
         ; Bank 4's code must end where its sprites start (B4_CODE_END, the game's
@@ -497,6 +519,6 @@ sprrow_tab:
 
         .segment "SPR5CODE"
         .scope spr5
-        NIB_LOOPS ::BANK_TIL1
+        NIB_LOOPS ::BANK_TIL1, ::SPR5_MIRROR
         .endscope
         .assert spr5::ds_entry = BANKENTRY, error, "bank 5's row loop must start the bank"

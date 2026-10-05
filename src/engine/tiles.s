@@ -530,6 +530,12 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         ; @tpsta.
 @tile:  sta tp+1                   ; the tile's page
         lda GATHERL,x
+  .if TILEMIRROR
+        lsr                        ; GATHERL's kind (bits 0-1): 3 a mirror, 0 a
+        bcc @full                  ;  stored tile, whose low bits are clear, so the
+        jmp @mir                   ;  asl gives GATHERL back
+@full:  asl
+  .endif
         ora row_off                ; a full tile's low byte is (slot & 3) << 6: its
 @tpsta: sta tp                     ;  bits 0-5 are clear for the row and char offset
 @trun:  runn                       ; X = the run's chars (x RUNXS), C = 0
@@ -678,6 +684,60 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
 @f15:   PCHAR 1
 @f7:    PCHAR 0
         jmp @advsp                 ; (case T's @t7 falls into it instead)
+
+  .if TILEMIRROR
+; ----------------------------------------------------------------------------
+; @mir: case T for a mirrored tile (TILEMIRROR: the Master's gather alone, its
+; LV_PAGE0 giving kind 3 in GATHERL's low bits).  The stored tile's chars right
+; to left, each byte's two game pixels swapped -- ((b & $33) << 2) | ((b & $CC)
+; >> 2), as a delta swap: the dither is per game pixel, so its dots move as one.
+;   In:    X = rc_gi; tp+1 = the source's page (@tile); C = 0 (as at @run)
+;   Out:   @advsp, with X = n x RUNXS and C = 0
+;   Uses:  A X Y, tp, tmp
+; Dest char k (Y = 8k + line) reads the source's char rc_lim - 1 - k: tp starts at
+; that char 0's and steps back 16 a char, so (tp),y reads the right byte.
+; ----------------------------------------------------------------------------
+@mir:   lda GATHERL,x
+        and #$C0                   ; the source tile's offset in its page
+        ora rc_sub                 ; its char row
+        sta tp
+        runn                       ; X = the run's chars (x RUNXS), C = 0
+        lda rc_lim                 ; the first char drawn is the source's rc_lim - 1
+        asl
+        asl
+        asl                        ; (rc_lim <= 4: C = 0)
+        sbc #CHARBYTES-1           ; C = 0: - CHARBYTES
+        ora tp
+        sta tp
+        ldy #0
+@mc:    lda (tp),y
+        lsr
+        lsr
+        eor (tp),y
+        and #$33
+        sta tmp
+        asl
+        asl
+        eor tmp
+        eor (tp),y
+        sta (sp),y
+        iny
+        tya
+        and #CHARLINES-1
+        bne @mc
+        tya                        ; a char done: the run's last?
+        cmp @run8-RUNXS,x
+        beq @mend
+        lda tp                     ; the source back two chars (Y is on one)
+        sec
+        sbc #2*CHARBYTES
+        sta tp
+        bcs @mc
+        dec tp+1
+        bcc @mc                    ; always (the borrow)
+@mend:  clc
+        jmp @advsp
+  .endif
 
 ; ---------------------------------------------------------------- dispatch
 ; Each group's entries by the run's chars, n = 1..TILECHARS: case S @sto/@st,

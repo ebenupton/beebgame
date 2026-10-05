@@ -32,6 +32,8 @@
 #                HAZEL and ANDY)
 #   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound effects
 #                (kernel.s)
+#   TILEMIRROR=1 mirrored full tiles: the tile blitter draws a stored tile right to left
+#                (tiles.s @mir) where the Master's LV_PAGE0 gives kind 3; the Master alone
 #   TALLMAP=1    maps taller than 128 tiles (tiles.s: the map row keeps the window row's
 #                high bits); the Master alone, its 32-row ring
 #   DRAWFLAGS=1  the sprite list carries draw flags in the high byte of its x (bit 7: mirror
@@ -51,7 +53,7 @@ set -e
 mkdir -p build
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o

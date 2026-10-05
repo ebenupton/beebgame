@@ -56,6 +56,12 @@ GAMEHAZEL = 0                      ; the game's code in HAZEL too (the Master al
   .ifndef GAMESOUND
 GAMESOUND = 0                      ; the game's own sound player (hook_sound)
   .endif
+  .ifndef TILEMIRROR
+TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): the Master's gather alone
+  .endif
+  .if TILEMIRROR && BHW
+        .error "TILEMIRROR needs the Master's gather (LV_PAGE0's kind bits); the Model B's has none"
+  .endif
   .ifndef TALLMAP
 TALLMAP = 0                        ; maps taller than 128 tiles (the Master alone)
   .endif

@@ -13,6 +13,9 @@
 ; ============================================================================
         .include "cpu.inc"
         .include "defs.inc"
+        .global SPRREC, recp, rp   ; (TIGHTBSS's record aliases in engine/defs.s name
+                                   ;  vars.s's variables, not assembled here: imports
+                                   ;  of an object never linked)
         .include "engine/defs.s"
 
 .macro OUTC name

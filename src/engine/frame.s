@@ -125,8 +125,10 @@ draw_sprites:
         rol
         sta sp_dfl
         lda SPR_XH,x
-        and #$7F                   ; the flag bit off
-        sta spx+1
+        asl                        ; x is 15 bits, signed (a sprite just left of the
+        cmp #$80                   ;  map's edge is drawn clipped): bit 7 the mirror's,
+        ror                        ;  bit 6 the sign -- the high byte from bits 6..0,
+        sta spx+1                  ;  sign extended (C = bit 6, back into bit 7)
     .else
         sta spx+1
         sta REC_XH,y
@@ -192,8 +194,10 @@ draw_sprites:
         rol
         sta sp_dfl
         lda SPR_XH,x
-        and #$7F                   ; the flag bit off
-        sta spx+1
+        asl                        ; x is 15 bits, signed (a sprite just left of the
+        cmp #$80                   ;  map's edge is drawn clipped): bit 7 the mirror's,
+        ror                        ;  bit 6 the sign -- the high byte from bits 6..0,
+        sta spx+1                  ;  sign extended (C = bit 6, back into bit 7)
     .else
         sta spx+1
         sta (rp),y
