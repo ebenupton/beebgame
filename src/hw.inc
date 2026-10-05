@@ -124,13 +124,16 @@ SOLIDISK_BITS  = $0F
 ; ---------------------------------------------------------------- the SN76489
 ; A latch byte: %1 cc t dddd -- channel cc, t = 1 the volume (attenuation dddd, 15
 ; silent), 0 a tone's low 4 bits (its high 6 follow as a data byte, bit 7 clear).
-; Channel 3 is the noise.
+; Channel 3 is the noise: its 3 data bits are the control, written by a latch or a
+; data byte alike (a data byte replaces them all): bit 2 white (else periodic),
+; bits 0-1 the shift rate.
 SN_LATCH   = $80
 SN_VOL     = $10
 SN_CHSHIFT = 5                     ; the channel's place
 SN_DATAMASK = $0F                  ; the 4 data bits
 SN_ATT_OFF = $0F                   ; attenuation 15: silent
 SN_NOISE   = 3
+SN_WHITE   = $04                  ; the noise control's white-noise bit
 
 ; ---------------------------------------------------------------- the disc controllers
 ; the Intel 8271 (the Model B's)
