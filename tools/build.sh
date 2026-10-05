@@ -50,7 +50,9 @@
 #                arithmetic (a row is $280 bytes), not ringmod_tab and the slot tables
 #                (bank 6, ~170 bytes); ring_addr7 constant time, not a subtraction loop
 #   TALLMAP=1    maps taller than 128 tiles (tiles.s: the map row keeps the window row's
-#                high bits); the Master alone, its 32-row ring
+#                high bits).  The Model B needs RINGARITH with it (cpu.inc errors without):
+#                its 23 rows do not divide 256, so calc_ring takes the window's slot from
+#                the full row, wcyh:wcy, and every other slot is relative to it
 #   DRAWFLAGS=1  the sprite list carries draw flags in the high byte of its x (bit 7: mirror
 #                the image), so one image is drawn either way round (frame.s)
 #   TIGHTBSS=1   the engine's bank 7 variables packed: 9-byte sprite records stored as

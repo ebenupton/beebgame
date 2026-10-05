@@ -69,10 +69,10 @@ B6PACK = 0                         ; bank 6: scroll_validate before draw_rect, i
 RINGARITH = 0                      ; the Model B's ring slot (row mod 23) and its address by
   .endif                           ;  arithmetic from the window's own slot, not tables
   .ifndef TALLMAP
-TALLMAP = 0                        ; maps taller than 128 tiles (the Master alone)
+TALLMAP = 0                        ; maps taller than 128 tiles (the Model B: with RINGARITH)
   .endif
-  .if TALLMAP && BHW
-        .error "TALLMAP needs the Master's 32-row ring (the Model B's ring is 23 rows)"
+  .if TALLMAP && BHW && (.not RINGARITH) ; (hardware: the ring)
+        .error "TALLMAP on the Model B needs RINGARITH (its 23-row ring: a byte row's slot from its table is wrong past row 255)"
   .endif
   .ifndef DRAWFLAGS
 DRAWFLAGS = 0                      ; draw flags in the sprite list's x high byte

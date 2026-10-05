@@ -611,7 +611,7 @@ load_begin:
 
 ; ----------------------------------------------------------------------------
 ; calc_ring: where the window sits in the ring
-;   In:    wcx (16 bits), wcy
+;   In:    wcx (16 bits), wcy;  TALLMAP: wcyh (the Model B's slot is the full row's)
 ;   Out:   ring_s = ((wcy mod RINGROWS) * 80 + wcx) mod RINGCHARS;  barq =
 ;          ring_s / 80, the window's slot;  Model B: wcxm = ring_s mod 80 (where
 ;          the window starts in its slot) and mrow = wcy + RINGROWS-1 - barq
@@ -625,7 +625,21 @@ load_begin:
 ; Called once a frame (frame.s) and by the menus.
 ; ----------------------------------------------------------------------------
 calc_ring:
+  .if BHW && TALLMAP               ; hardware: the ring.  The Model B's 23 rows do not
+        ; divide 256 (the Master's 32 do): the slot is the FULL row's, wcyh:wcy mod
+        ; RINGROWS, so a row keeps its slot as the window crosses row 256.  256 =
+        ; 11*23 + 3: wcy + 3*wcyh, folded once past 255 by + 3 again
+        .assert 256 .mod RINGROWS = 3, error, "calc_ring: 256 mod RINGROWS is 3"
+        lda wcyh                   ; (wy >> 10: under 64)
+        asl                        ; C = 0
+        adc wcyh                   ; 3 x wcyh: at most 189, C = 0
+        adc wcy
+        bcc :+
+        adc #3-1                   ; past 255: 256 = 3 mod RINGROWS (C = 1): at most 191
+:
+  .else
         lda wcy
+  .endif
         ringmod7
   .if BHW && RINGARITH
         sta wrow                   ; the window's top row's slot (ringwin, draw_rect)

@@ -962,7 +962,7 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
 `MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR ALLLEVELS`, and
 `MAXSPR=n`.
-`GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` is the Master's alone (`cpu.inc` errors).
+`GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` on the Model B needs `RINGARITH` (`cpu.inc` errors).
 `SKIP_ASSETS=1` skips the music and asset steps.
 
 The passes, in order:

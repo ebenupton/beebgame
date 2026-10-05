@@ -351,8 +351,8 @@ BUF_CXH:   .res 2                  ;  BUF_INVALID in the high byte (lv_reset,
 PBANK:     .res 4
 pboard:    .res 1
   .if RINGARITH                     ; (both machines: their LOWBSS lie alike)
-wrow:      .res 1                  ; wcy mod RINGROWS: the window's top row's slot (calc_ring,
-  .endif                           ;  the Model B's)
+wrow:      .res 1                  ; wcy mod RINGROWS (TALLMAP: wcyh:wcy's): the window's
+  .endif                           ;  top row's slot (calc_ring, the Model B's)
 
 ; ---------------------------------------------------------------- the rupture chain
 ; The chain's tables sit with the interrupt that reads them (cpu.inc PLACEH): the
