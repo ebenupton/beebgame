@@ -969,7 +969,7 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
 `MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
-UDATA5 ALLLEVELS`, and `MAXSPR=n`.
+UDATA5 KRNTOP ALLLEVELS`, and `MAXSPR=n`.
 `GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` on the Model B needs `RINGARITH` (`cpu.inc` errors).
 `SKIP_ASSETS=1` skips the music and asset steps.
 
