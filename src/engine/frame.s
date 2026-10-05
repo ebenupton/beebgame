@@ -367,8 +367,8 @@ erase_old:
 ; rectangle lies in the rows and columns the old window and the new both hold:
 ; krlo <= row and row + height + 1 < krhi2, and the columns alike with kclo, kchi2
 ; (all relative to this window).  The rest of the buffer is this frame's strips, or
-; ring slots reused while they were out of view.  (TIGHTBSS has the id and place
-; tests, and the clip test, alone.)
+; ring slots reused while they were out of view.  (TIGHTBSS too: its records are
+; arrays, the tests the same.)
 ; An invalid buffer (BUF_CXH = BUF_INVALID: a level start, or a dirty list that
 ; overflowed) is about to be redrawn whole: nothing in it is kept and nothing needs
 ; erasing, so its records go (RECCNT = 0).
@@ -430,12 +430,54 @@ match_sprites:
         lda REC_H,y                ; not if it was cut at the window's edge and the
         and clip_mask              ;  window has moved since (select_backbuf): its
         bne @next                  ;  new part is the scroll's tiles
-        lda tmp3
+        lda clip_mask              ; kept if the window has not moved since the
+        beq @keep                  ;  buffer drew (select_backbuf), else if it fits
+        jmp @moved                 ;  both windows
+@keep:  lda tmp3
         sta KEEP,x                 ; the same pixels in the same place
 @next:  iny
         inx
         bne @l                     ; always: i + 1 <= MAXSPR < 256
 @done:  rts
+        ; ---- the window has moved: kept only if inside the rows and columns both
+        ; windows hold (the rest of the buffer is the scroll's tiles, or slots reused
+        ; since), as the RECSZ path's @moved.  tmp = the height, then the column's
+        ; high bits
+@moved:
+        lda REC_H,y
+.repeat REC_HSHIFT
+        lsr
+.endrepeat
+        and #REC_HMASK             ; (the clipped bit is clear: tested above)
+        sta tmp
+        lda REC_CY,y
+        sec
+        sbc wcy                    ; its row in this window
+        cmp krlo
+        bcc @no                    ; above the shared rows
+        adc tmp                    ; C = 1: row + height + 1
+        bcs @no                    ; (past 255)
+        cmp krhi2
+        bcs @no                    ; below them
+        lda REC_H,y
+        and #REC_CXMASK
+        sta tmp                    ; the column's high bits
+        lda REC_CX,y
+        cmp wcx                    ; C = no borrow from the low bytes
+        lda tmp
+        sbc wcx+1
+        bne @no                    ; its column in this window not 0..255: outside
+        lda REC_CX,y
+        sec
+        sbc wcx                    ; its column in this window, low byte
+        cmp kclo
+        bcc @no                    ; left of the shared columns
+        adc REC_W,y                ; C = 1: column + width + 1
+        bcs @no                    ; (past 255)
+        cmp kchi2
+        bcs @no                    ; right of them
+        jmp @keep
+@no:    jmp @next
   .else
         ; ---- the RECSZ-byte records, walked through rp; X = i throughout
         ldx #0
