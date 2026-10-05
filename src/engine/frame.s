@@ -814,6 +814,8 @@ draw_sprite:
         ror w16                    ; c0's low byte
         cmp #$FF
         bne @out0                  ; c0 < -128 or >= 256: off the window
+        bit w16                    ; c0 = -256..-129 (its low byte's bit 7 clear) is off it
+        bpl @out0                  ;  too: the arm below would take it as cut at the left
         ; ---- c0 negative (-128..-1): cut at the left.  sp_c0 = 0; visible if
         ; c0 + W > 0, and then sp_c1 = c0 + W - 1, sp_c = -c0
         lda w16
