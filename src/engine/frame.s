@@ -288,14 +288,14 @@ erase_old:
         beq @next                  ; width 0: nothing was drawn
         sta rc_w
         lda REC_H,y
-        and #REC_HMASK             ; bits 0-4: the height
-        sta rc_h
-        lda REC_H,y                ; bits 5-6: the column's high bits
-.repeat REC_CXSHIFT
+        and #REC_CXMASK            ; bits 0-1: the column's high bits
+        sta rc_x+1
+        lda REC_H,y                ; bits 2-6: the height
+.repeat REC_HSHIFT
         lsr
 .endrepeat
-        and #3                     ; (the two bits)
-        sta rc_x+1
+        and #REC_HMASK             ; (the clipped bit off)
+        sta rc_h
         lda REC_CX,y
         sta rc_x
         lda REC_CY,y
@@ -533,6 +533,7 @@ match_sprites:
 ;   Cost:  386 cycles a frame on the Model B, 448 on the Master (measured)
 ; The game's call, once a sprite a frame.
 ; ----------------------------------------------------------------------------
+  .if .not GAMESPRLIST             ; (GAMESPRLIST: the game writes the list itself)
         .segment "ENGCODE"
 add_sprite:
         ldx nspr
@@ -549,6 +550,7 @@ add_sprite:
         sta SPR_YH,x
         inc nspr
 @full:  rts
+  .endif
 
 ; ----------------------------------------------------------------------------
 ; copy_partial: compose the ring row above the window from the fine-scrolled row
@@ -960,13 +962,12 @@ draw_sprite:
         lda sp_r1
         sbc sp_r0                  ; C = 1 still (sp_c1 >= sp_c0; incax keeps C)
         adc #0                     ; and C = 1 from this one (sp_r1 >= sp_r0): + 1
-        sta tmp3                   ; (free here)
-        ; the column's high bits (< 4: a map is 1024 chars wide at most) to bits 5-6
-        lda w16+1
-.repeat REC_CXSHIFT
+        ; the height to bits 2-6 (under 32: nothing shifts out) and the column's high
+        ; bits (< 4: a map is 1024 chars wide at most) to bits 0-1
+.repeat REC_HSHIFT
         asl
 .endrepeat
-        ora tmp3
+        ora w16+1
         ldx sp_clip
         beq :+
         ora #REC_CLIP              ; clipped
@@ -1122,7 +1123,7 @@ draw_sprite:
 ;   Uses:  A X Y, tmp, tmp2
 ;   Cost:  cold (the game's call when a tile changes)
 ; Each buffer's list is DIRTYLIST's (x, y) pairs: buffer 0's DIRTYMAX pairs, then
-; buffer 1's (TIGHTBSS: DIRTYX and DIRTYY, DIRTYMAX bytes each a buffer).
+; buffer 1's (TIGHTBSS: DIRTYX and DIRTYY, buffer b's entry n at 2n + b).
 ; ----------------------------------------------------------------------------
         .segment "ENGCODE"
 mark_dirty:
@@ -1133,10 +1134,9 @@ mark_dirty:
         cmp #DIRTYMAX
         bcs @over
   .if TIGHTBSS
-        cpx #1                     ; (C = 0: cnt < DIRTYMAX)
-        bcc @b0                    ; buffer 0: its list is at 0
-        adc #DIRTYMAX-1            ; buffer 1: C = 1, so this adds DIRTYMAX
-@b0:    tay
+        cpx #1                     ; C = the buffer (X is 1 or 0)
+        rol                        ; cnt*2 + the buffer: the two buffers' entries
+        tay                        ;  interleave (cnt < DIRTYMAX: no bit lost)
         lda tmp
         sta DIRTYX,y
         lda tmp2
@@ -1181,17 +1181,15 @@ draw_dirty:
         sta lcnt
         ; ---- lidx = the buffer's list
   .if TIGHTBSS
-        lda #0                     ; the buffer's list: 0, or DIRTYMAX for buffer 1
-        cpx #1
-        bcc @d0
-        lda #DIRTYMAX
+        stx lidx                   ; the buffer's first entry: entry n is at 2n + the
+                                   ;  buffer (mark_dirty), so entry 0 is X = cur_buf
   .else
         lda #0                     ; the buffer's list: 0, or 2*DIRTYMAX for buffer 1
         cpx #1
         bcc @d0
         lda #2*DIRTYMAX
-  .endif
 @d0:    sta lidx
+  .endif
         ; ---- rc_x = tx * 4 (16 bit)
 @l:     stz rc_x+1                 ; (A is dead: loaded just below)
         ldy lidx
@@ -1209,7 +1207,8 @@ draw_dirty:
         ; ---- rc_y = ty * 2
   .if TIGHTBSS
         lda DIRTYY,y
-        iny                        ; Y is dead from here: the index stepped in it
+        iny                        ; Y is dead from here: the index stepped in it,
+        iny                        ;  two on (the buffers' entries interleave)
   .else
         lda DIRTYLIST+1,y
         iny                        ; Y is dead from here: the index stepped in it

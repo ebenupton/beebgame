@@ -34,6 +34,13 @@
 #                (kernel.s)
 #   TILEMIRROR=1 mirrored full tiles: the tile blitter draws a stored tile right to left
 #                (tiles.s @mir) where the Master's LV_PAGE0 gives kind 3; the Master alone
+#   B6PACK=1     bank 6: scroll_validate placed before draw_rect, in the room draw_rect's
+#                placement pad (pads.inc PADB_T6/PADM_T6) holds, so the pad shrinks by its
+#                length and the tiles may start that much lower (the game's TILES/TOFF)
+#   RINGARITH=1  the Model B: a row's ring slot from the window's (wrow + row - wcy, one
+#                fold: every caller's row is in the window) and the slot's address by
+#                arithmetic (a row is $280 bytes), not ringmod_tab and the slot tables
+#                (bank 6, ~170 bytes); ring_addr7 constant time, not a subtraction loop
 #   TALLMAP=1    maps taller than 128 tiles (tiles.s: the map row keeps the window row's
 #                high bits); the Master alone, its 32-row ring
 #   DRAWFLAGS=1  the sprite list carries draw flags in the high byte of its x (bit 7: mirror
@@ -53,7 +60,7 @@ set -e
 mkdir -p build
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o

@@ -62,6 +62,12 @@ TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): the Mas
   .if TILEMIRROR && BHW
         .error "TILEMIRROR needs the Master's gather (LV_PAGE0's kind bits); the Model B's has none"
   .endif
+  .ifndef B6PACK
+B6PACK = 0                         ; bank 6: scroll_validate before draw_rect, in the room its
+  .endif                           ;  placement pad holds (pads.inc), not after it
+  .ifndef RINGARITH
+RINGARITH = 0                      ; the Model B's ring slot (row mod 23) and its address by
+  .endif                           ;  arithmetic from the window's own slot, not tables
   .ifndef TALLMAP
 TALLMAP = 0                        ; maps taller than 128 tiles (the Master alone)
   .endif
@@ -74,6 +80,9 @@ DRAWFLAGS = 0                      ; draw flags in the sprite list's x high byte
   .ifndef TIGHTBSS
 TIGHTBSS = 0                       ; 9-byte sprite records, ENGBSS not page aligned
   .endif
+  .ifndef GAMESPRLIST
+GAMESPRLIST = 0                    ; the game writes the sprite list (SPR_*, nspr) itself:
+  .endif                           ;  no add_sprite (Commando's main.s sets it)
   .ifndef ALLLEVELS
 ALLLEVELS = 0                      ; a test build: every level on the chooser, every
   .endif                           ;  bonus level taken (the game's)

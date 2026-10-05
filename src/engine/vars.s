@@ -311,7 +311,8 @@ FLATTAB:   .res FLATTAB_LEN
 ; (mark_dirty writes both lists; draw_dirty reads the back buffer's)
 DIRTYLIST: .res 2*2*DIRTYMAX
   .if TIGHTBSS
-; TIGHTBSS: as two arrays, x then y, each buffer 0's DIRTYMAX then buffer 1's.
+; TIGHTBSS: as two arrays, x then y, the buffers' entries interleaved: buffer b's
+; entry n at 2n + b (mark_dirty, draw_dirty).
 DIRTYX     = DIRTYLIST
 DIRTYY     = DIRTYLIST+2*DIRTYMAX
   .endif
@@ -349,6 +350,9 @@ BUF_CXH:   .res 2                  ;  BUF_INVALID in the high byte (lv_reset,
 ; BOARD_SOLIDISK (defs.inc), right after PBANK: boot copies the five together.
 PBANK:     .res 4
 pboard:    .res 1
+  .if RINGARITH                     ; (both machines: their LOWBSS lie alike)
+wrow:      .res 1                  ; wcy mod RINGROWS: the window's top row's slot (calc_ring,
+  .endif                           ;  the Model B's)
 
 ; ---------------------------------------------------------------- the rupture chain
 ; The chain's tables sit with the interrupt that reads them (cpu.inc PLACEH): the

@@ -627,6 +627,9 @@ load_begin:
 calc_ring:
         lda wcy
         ringmod7
+  .if BHW && RINGARITH
+        sta wrow                   ; the window's top row's slot (ringwin, draw_rect)
+  .endif
         tax
         lda mul_rowlo,x
   .if .not BHW                     ; hardware: the Master's ringmod keeps C (the
@@ -1188,7 +1191,11 @@ blank_palette:
 ; mul_rowlo/hi, x 8, the ring's base, folded at its end.
 ; ----------------------------------------------------------------------------
 ring_addr7:
+  .if BHW && RINGARITH
+        ringwin                    ; (the row is in the window: every caller's is)
+  .else
         ringmod7
+  .endif
         tax
         lda mul_rowlo,x            ; slot * 80 + the column
         adc w16

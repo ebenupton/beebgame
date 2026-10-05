@@ -66,6 +66,22 @@ n2:     tax
 ;   Anonymous labels: two on the Model B, none on the Master -- the counts differ,
 ;   so do not branch over it with :+ / :-.
 ; ----------------------------------------------------------------------------
+.macro ringwin
+        ; (RINGARITH, the Model B) A = a map char row IN THE WINDOW (wcy .. wcy +
+        ; BUFROWS-1, mod 256) -> A = its ring slot, (wrow + row - wcy) mod RINGROWS: one
+        ; fold, the sum being under 2*RINGROWS.  C = 0 out; X, Y kept
+        .local n1
+        .assert BUFROWS <= RINGROWS, error, "ringwin: one fold needs BUFROWS <= RINGROWS"
+        sec
+        sbc wcy
+        clc
+        adc wrow
+        cmp #RINGROWS
+        bcc n1
+        sbc #RINGROWS              ; (C = 1 from the cmp)
+        clc
+n1:
+.endmacro
 .macro ringmod7
   .if ::BHW                        ; Model B: by repeated subtraction
 :       cmp #RINGROWS

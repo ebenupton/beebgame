@@ -207,7 +207,7 @@ MAXREC     = MAXSPR
 ;     is 2*MAXREC bytes, buffer 0's MAXREC then buffer 1's.  recb (recp's byte) is the
 ;     buffer's first record, rq (rp's) the record's index.  The column's high bits
 ;     (a map is 1024 chars wide at most: 2 bits) are packed into the height's byte,
-;     bits 5-6 (the height is BUFROWS at most).
+;     bits 0-1, the height above them in bits 2-6 (it is BUFROWS at most).
   .if TIGHTBSS
 RECSZ      = 9
 REC_ID     = SPRREC
@@ -218,7 +218,7 @@ REC_YH     = SPRREC+8*MAXREC
 REC_CX     = SPRREC+10*MAXREC      ; the column's low byte
 REC_CY     = SPRREC+12*MAXREC
 REC_W      = SPRREC+14*MAXREC
-REC_H      = SPRREC+16*MAXREC      ; height | column high << 5 | clipped << 7
+REC_H      = SPRREC+16*MAXREC      ; height << 2 | column high | clipped << 7
 recb       = recp                  ; the buffer's first record
 rq         = rp                    ; the current record
         .assert BUFROWS < 32, error, "TIGHTBSS: a record's height is 5 bits"
@@ -231,8 +231,9 @@ REC_W      = 8
 REC_H      = 9                     ; height | clipped << 7
   .endif
 REC_CLIP   = $80                   ; REC_H bit 7: cut at a window edge
-REC_HMASK  = $1F                   ; (TIGHTBSS) REC_H bits 0-4: the height,
-REC_CXSHIFT = 5                    ;  bits 5-6 the column's high bits
+REC_HSHIFT = 2                     ; (TIGHTBSS) REC_H bits 2-6: the height (>> REC_HSHIFT,
+REC_HMASK  = $1F                   ;  & REC_HMASK), bits 0-1 the column's high bits
+REC_CXMASK = 3                     ;  (& REC_CXMASK)
 ; match_sprites' verdict on a record (KEEP, vars.s): neither, a box star where one
 ; was, the same sprite in the same place
 KEEP_BOX   = 1

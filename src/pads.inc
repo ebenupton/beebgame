@@ -24,16 +24,37 @@ PADM_FM = 1
 ; the driver slot's size sets it), so they are re-found when it moves.  So is the
 ; order of ENGCODE's blocks in engine/frame.s (Cleo's test/blockopt.py, first).
 PADB_MS = 0                        ; before match_sprites
-PADM_MS = 15
 PADB_SP = 26                       ; before draw_sprites
-PADM_SP = 26
 PADB_EO = 15                       ; before erase_old
-PADM_EO = 0
 PADB_DS = 0                        ; before draw_sprite
-PADM_DS = 64
 PADB_CP = 0                        ; before copy_partial
+  .if MASTERONLY
+; MASTERONLY: the Master linked unpinned (tools/build.sh), its image placed down from
+; the kernel, so ENGCODE ENDS at the kernel and a pad moves only the code before it
+; (the first, before draw_sprites, moves no engine code at all); the pinned link's
+; values below place nothing they were found for.  None: copy_partial's hot loop
+; and draw_sprite lie after every one of them and do not move.
+PADM_MS = 0
+PADM_SP = 0
+PADM_EO = 0
+PADM_DS = 0
+PADM_CP = 0
+  .else
+PADM_MS = 15
+PADM_SP = 26
+PADM_EO = 0
+PADM_DS = 64
 PADM_CP = 61
+  .endif
+  .if RINGARITH                     ; (no ring tables before draw_rect: its own value)
+    .ifdef PADB_T6R
+PADB_T6 = PADB_T6R
+    .else
+PADB_T6 = 168                      ; (the first that places draw_rect's chains: 168-204, 212-220)
+    .endif
+  .else
 PADB_T6 = 14                       ; bank 6, the Model B: after ringmod_tab, before
+  .endif
                                    ;  draw_rect
 PADM_T6 = 228                      ; bank 6, the Master: before draw_rect (tiles.s: its
                                    ;  hot stretches each in a page; SAMEPAGE asserts
