@@ -189,9 +189,9 @@ t6_sve:                            ;  routine's length, mod 256 (pads.inc's valu
       .else
         .res ::PADB_T6 - (t6_sve - t6_svs)
       .endif
-    .elseif BHW
+    .elseif BHW                    ; (the Model B's chains must lie in a page: kept)
         .res (::PADB_T6 - (t6_sve - t6_svs)) & $FF
-    .else
+    .elseif .not ::NOPADS
         .res (::PADM_T6 - (t6_sve - t6_svs)) & $FF
     .endif
   .else

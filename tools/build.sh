@@ -34,6 +34,10 @@
 #                (kernel.s)
 #   TILEMIRROR=1 mirrored full tiles: the tile blitter draws a stored tile right to left
 #                (tiles.s @mir) where the Master's LV_PAGE0 gives kind 3; the Master alone
+#   NOPADS=1     no placement pads (pads.inc through PAD, and B6PACK's on the Master): every
+#                byte to code and data, the hot code's page crossings (SAMEPAGE's warnings)
+#                costing cycles instead; the Model B's draw_rect chains, which must lie in a
+#                page, keep theirs
 #   B6PACK=1     bank 6: scroll_validate placed before draw_rect, in the room draw_rect's
 #                placement pad (pads.inc PADB_T6/PADM_T6) holds, so the pad shrinks by its
 #                length and the tiles may start that much lower (the game's TILES/TOFF)
@@ -60,7 +64,7 @@ set -e
 mkdir -p build
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o

@@ -62,6 +62,9 @@ TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): the Mas
   .if TILEMIRROR && BHW
         .error "TILEMIRROR needs the Master's gather (LV_PAGE0's kind bits); the Model B's has none"
   .endif
+  .ifndef NOPADS
+NOPADS = 0                         ; no placement pads (pads.inc's, through PAD; B6PACK's on the
+  .endif                           ;  Master): the hot code's page crossings cost cycles instead
   .ifndef B6PACK
 B6PACK = 0                         ; bank 6: scroll_validate before draw_rect, in the room its
   .endif                           ;  placement pad holds (pads.inc), not after it
@@ -237,8 +240,9 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
         .assert >(from) = >(to), warning, "a hot branch crosses a page (+1 cycle when taken)"
 .endmacro
 .macro PAD b, m
-  .if ::BHW                        ; CPU spelling: the code lengths differ
-        .res b
+  .if ::NOPADS                     ; (NOPADS: no placement pads -- they buy cycles, not
+  .elseif ::BHW                    ;  correctness; SAMEPAGE says what each then costs)
+        .res b                     ; CPU spelling: the code lengths differ
   .else
         .res m
   .endif
