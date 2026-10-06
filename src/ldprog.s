@@ -341,11 +341,11 @@ bcopy:  txa
         bne @page
 @tail:  ldx cnt
         beq @done
-:       lda (src),y
+@loop:  lda (src),y
         sta (dst),y
         iny
         dex
-        bne :-
+        bne @loop
 @done:  lda PB_LVL
 
 ; ----------------------------------------------------------------------------
@@ -472,10 +472,10 @@ lv_load:
         stx map_stride+1           ; (X = 0: copy256 ends in bcopy)
         ldx LV_HDR                 ; lw: stride = 1 << lw
         lda #1
-:       asl
+@loop:  asl
         rol map_stride+1
         dex
-        bne :-
+        bne @loop
         sta map_stride
         ; ---- the map, run-length coded, into bank 5: exactly its 1 << (lw +
         ;      lh) bytes (the stream is not terminated: the next section follows
@@ -486,9 +486,9 @@ lv_load:
         stx fnum                   ; (X = 0 from the stride's loop: the tiles'
         tax                        ;  first file)
         lda #1
-:       asl
+@loop2: asl
         dex
-        bne :-
+        bne @loop2
         adc #>MAP5                 ; (C = 0 from the asl: fewer than 128 pages) the
         sta map_end                ;  page after the map
         lda #SEC_MAP
@@ -543,12 +543,12 @@ lv_load:
         clc
         adc #TILEBYTES
         sta tbase
-        bcc :+
+        bcc @skip
         inc tbase+1
-:       inc lp
-        bne :+
+@skip:  inc lp
+        bne @skip2
         inc lp+1
-:       dec nt
+@skip2: dec nt
         jmp @tile
 @halves:                           ; this file's half tiles, to their slots
         lda LV_HDR+HDR_HALFOFF     ; HALFOFF slots of HALFBYTES (32) into the halves'
@@ -582,9 +582,9 @@ lv_load:
         clc
         adc #HALFBYTES
         sta dst
-        bcc :+
+        bcc @skip3
         inc dst+1
-:       inc item
+@skip3: inc item
         bne @half                  ; (always: item < NHALF <= 255 before the inc)
 @nextfile:
         inc fnum
@@ -619,9 +619,9 @@ lv_load:
         clc
         adc #HPAIR_LEN
         sta src
-        bcc :+
+        bcc @skip4
         inc src+1
-:       lda #<HLOW
+@skip4: lda #<HLOW
         clc
         adc LV_HDR+HDR_HALFOFF
         sta dst
@@ -1132,13 +1132,13 @@ bake:   lda #SEC_FLAT              ; the flats' pairs, in the level's file (main
         .setcpu "6502"
     .endif
         ldy #0
-:       lda BK_BG,y
+@loop:  lda BK_BG,y
         and (cnt),y
         ora (src),y
         sta (dst),y
         iny
         dex                        ; (X = lines, from @seg: pgbank keeps it)
-        bne :-
+        bne @loop
     .if .not BHW                   ; hardware: shadow RAM
         lda ACCCON
         and #<~ACC_X
@@ -1150,22 +1150,22 @@ bake:   lda #SEC_FLAT              ; the flats' pairs, in the level's file (main
         clc
         adc dst
         sta dst
-        bcc :+
+        bcc @skip
         inc dst+1
-:       tya
+@skip:  tya
         asl                        ; (C = 0 from the asl: lines < 128)
         adc src
         sta src
-        bcc :+
+        bcc @skip2
         inc src+1
-:       inc bk_x                   ; X + 2: X is even (8x + an even dx), so the one
+@skip2: inc bk_x                   ; X + 2: X is even (8x + an even dx), so the one
         inc bk_x                   ;  test catches the wrap
-        bne :+
+        bne @skip3
         inc bk_x+1
-:       dec bk_col
-        beq :+
+@skip3: dec bk_col
+        beq @skip4
         jmp @col
-:       lda PB_LVL                 ; bank 7 back, once (bk_tile pages its own banks
+@skip4: lda PB_LVL                 ; bank 7 back, once (bk_tile pages its own banks
         jmp pgbank                 ;  and leaves bank 7 paged; nothing reads it in
                                    ;  between)
 
@@ -1268,10 +1268,10 @@ bk_tile:
         lda #0
         sta ent+1
         ldy #TILESHIFT
-:       asl ent
+@loop:  asl ent
         rol ent+1
         dey
-        bne :-
+        bne @loop
         lda ent
     .if TILEMIRROR
         ora bk_cx
@@ -1334,16 +1334,16 @@ bk_tile:
         sta bk_pb
         lda bk_t                   ; below half1 the top row fills, below half2 the
         cmp sv_half1               ;  bottom, from it neither (the row twice)
-        bcs :+
+        bcs @skip
         lda #0
         sta bk_mb
         beq @emit                  ; (top: the pair, bottom: the row)
-:       cmp sv_half2
-        bcs :+
+@skip:  cmp sv_half2
+        bcs @skip2
         lda #0
         sta bk_mt
         beq @emit                  ; (top: the row, bottom: the pair)
-:       lda #0
+@skip2: lda #0
         sta bk_mt
         sta bk_mb
         beq @emit                  ; (always)
@@ -1368,9 +1368,9 @@ bk_tile:
         clc
         adc bk_step
         sta ent
-        bcc :+
+        bcc @skip3
         inc ent+1
-:       lda bk_mb
+@skip3: lda bk_mb
         jsr bk_row
 @done:  lda PB_LVL
         jmp pgbank                 ; (X kept)
@@ -1504,10 +1504,10 @@ img_ent:
         asl
         rol ent+1                  ; * 4 (C = 0)
         adc item                   ; * 5
-        bcc :+
+        bcc @skip
         inc ent+1
         clc
-:       adc #<img_tab
+@skip:  adc #<img_tab
         sta ent
         lda ent+1
         adc #>img_tab
@@ -1568,14 +1568,14 @@ unrle:  lda PB_MAP
         bcc @rd                    ; literals: the next byte
 @next:  lda (src),y                ; (Y = 0) A = the next byte
         inc src
-        bne :+
+        bne @skip
         inc src+1
-:       rts
+@skip:  rts
 @dnext: sta (dst),y
         inc dst
-        bne :+
+        bne @skip2
         inc dst+1
-:       rts
+@skip2: rts
 @end:   lda PB_LVL
         jmp pgbank
 

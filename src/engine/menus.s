@@ -102,9 +102,9 @@ music_tick:
 mus_byte:
         ldaz mus_ptr
         inc mus_ptr
-        bne :+
+        bne @skip
         inc mus_ptr+1
-:       tay
+@skip:  tay
         rts
 
 ; each voice's attenuation while it plays (0 the loudest): the melody (voice 0) over

@@ -43,21 +43,21 @@ mirror_copy:
         sta MIRHI,x
         sta MIRDTY,x               ; (non-zero)
 @chk:   lda MIRDTY,x
-        bne :+
+        bne @skip
         rts                        ; nothing has touched the row since the last copy
-:       lda wcxm
-        bne :+
+@skip:  lda wcxm
+        bne @skip2
         rts                        ; slot aligned: no row straddles, so the mirror is
                                    ;  not read -- the flag stays up for when it is
-:       lda #0
+@skip2: lda #0
         sta MIRDTY,x
         ldy MIRHI,x                ; Y = the last written char
         sta MIRHI,x                ; the written range is empty again (MIRLO below)
         lda MIRLO,x                ; the copy starts at the first written char, or at
         cmp wcxm                   ;  wcxm if the writing started left of it
-        bcs :+
+        bcs @skip3
         lda wcxm
-:       sta tmp4                   ; tmp4 = the first char to copy
+@skip3: sta tmp4                   ; tmp4 = the first char to copy
         lda #$FF
         sta MIRLO,x
         lda wcxm
@@ -67,9 +67,9 @@ mirror_copy:
         tya                        ; the chars from the first to the last
         sec
         sbc tmp4
-        bcs :+
+        bcs @skip4
         rts                        ; none of it is at wcxm or beyond
-:       adc #0                     ; C = 1 from the bcs: + 1
+@skip4: adc #0                     ; C = 1 from the bcs: + 1
         tax                        ; X = the chars to copy, 1..80: the loop's count
         ; ---- the source: the last slot row, base + (RINGROWS-1)*ROWBYTES + tmp4*8,
         ; whose page is ringe3 (select_backbuf: >RINGEND - 3); the mirror is one
@@ -102,10 +102,10 @@ mirror_copy:
         ; + $80, its carry taken above: Y0
         eor #<(RING_A + (RINGROWS-1)*ROWBYTES)
         tay
-        bpl :+
+        bpl @skip5
         dec w16b+1                 ; L < $80
         .assert <(RING_A << 1) = 0, error, "the base's low byte doubled is 0"
-:       lda #<RING_A               ; the base's low byte, $80 (asserted above)
+@skip5: lda #<RING_A               ; the base's low byte, $80 (asserted above)
         sta w16b
         asl                        ; $80 << 1 = 0: the source's low byte
         sta w16

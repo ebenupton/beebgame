@@ -653,9 +653,9 @@ calc_ring:
         asl                        ; C = 0
         adc wcyh                   ; 3 x wcyh: at most 189, C = 0
         adc wcy
-        bcc :+
+        bcc @skip
         adc #3-1                   ; past 255: 256 = 3 mod RINGROWS (C = 1): at most 191
-:
+@skip:
   .else
         lda wcy
   .endif

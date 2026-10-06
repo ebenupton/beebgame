@@ -1076,10 +1076,13 @@ Inside `.if .not BHW` the Master's code is written natively (`stz`, `inc a`, `ld
   scope at `draw_rect`'s head and on the first `:=` after the row loop ending it again
   (`HPAIR0`, `HPAIR1`), and `build.sh` looks `@s0f` up in `game.dbg` under `draw_rect` *or*
   `RINGHIOP` for that reason.  Hence the `@bf_`/`@wr_` site labels of section 4.
-- A line starting with `:` is an anonymous label; adding or removing one retargets every
-  `:+`/`:-` that crosses it.  The ring macros contain some (`macros.s` gives each one's
-  count; `ringmod7` has two on the Model B and none on the Master, so nothing may branch
-  over it with `:+`), and a few sources keep unreferenced `:` lines to hold a count
-  (`ldprog.s`, `tiles.s`, `kernel.s`).
+- No anonymous labels (`:`, referenced as `:+`/`:-`), in the engine or a game: they count
+  across the whole assembly unit, macro expansions and conditional arms included, so one
+  added or removed silently retargets branches elsewhere, and a cold path escapes every
+  test.  `tools/build.sh` rejects them (`tools/noanon.py`).  A macro's own labels are
+  cheap ones (a `.local` name is a normal symbol and would end the caller's `@` scope):
+  a fixed name prefixed with the macro's where it expands at most once in a scope, else
+  passed in by the caller (`pagestep`'s and `runn`'s `done`, `print`'s `loop` and
+  `done`).
 - `.segment` blocks are layout: the order of `ENGCODE`'s blocks in `frame.s` and the pads
   before them are the measured placement (section 1).

@@ -75,9 +75,9 @@
 ;
 ; ---------------------------------------------------------------- editing
 ; - Labels: a normal label or an equate ends ca65's cheap-local (@) scope, so one
-;   added inside a routine breaks its @ references; an anonymous `:` label added or
-;   removed retargets every :+/:- that crosses it.  Some ring macros contain them
-;   (macros.s gives each one's count).
+;   added inside a routine breaks its @ references.  No anonymous (`:`) labels: they
+;   count across the whole assembly, so one added or removed retargets branches
+;   anywhere (tools/build.sh rejects them); macros.s says how a macro names its own.
 ; - Page crossings: SAMEPAGE asserts a hot branch at link time; PAD (pads.inc) moves
 ;   code off a boundary.  A size change in a bank moves what follows it: re-find
 ;   bank 7's pads with the Cleo repo's test/padopt.py.

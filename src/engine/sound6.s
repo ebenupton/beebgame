@@ -158,9 +158,9 @@ sfx_voice:
         ; the next segment: its head, shape << 4 | the frames' index
         ldy SV_PTR,x
         lda sfx_scr,y
-        bne :+
+        bne @skip
         jmp sfx_voff               ; 0: the end (A = 0)
-:       iny
+@skip:  iny
         stx isr_t2                  ; X for the tables, the voice back from isr_t2
         pha
         and #15
@@ -193,9 +193,9 @@ sfx_voice:
         ldx isr_t2
         tya
         plp
-        bcc :+
+        bcc @skip2
         lda #0                      ; the last: the end (sfx_scr+0) next
-:       sta SV_PTR,x
+@skip2: sta SV_PTR,x
         jsr sfx_wper
         jmp sfx_wvol
 @rts:   rts
@@ -225,9 +225,9 @@ sfx_voice:
         beq @lvl
         lda sfx_rnd                  ; random bits into the period's low byte
         asl
-        bcc :+
+        bcc @skip3
         eor #$1D
-:       sta sfx_rnd
+@skip3: sta sfx_rnd
         eor SV_PLO,x                 ; per ^ ((per ^ rnd) & jit): rnd where jit is set
         and SV_JIT,x
         eor SV_PLO,x

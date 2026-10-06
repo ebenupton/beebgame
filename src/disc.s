@@ -146,9 +146,9 @@ n8271:  pha
 n8271_sta:
         sta $FFFF                  ; (the operand: r8271's)
         inc n8271_sta+1
-        bne :+
+        bne @skip
         inc n8271_sta+2
-:       pla
+@skip:  pla
         rti
 n8271_x: lda FDC8271_PAR
         sta LD_RES
@@ -209,8 +209,8 @@ r8271:  lda ld_dst                 ; the transfer address, into the stub
         lda ld_cnt
         ora #I8271_SEC256
         jsr i_param
-:       lda LD_DONE                ; the stub's completion
-        beq :-
+@loop:  lda LD_DONE                ; the stub's completion
+        beq @loop
         lda LD_RES
         and #I8271_RES_MASK        ; the completion code: C = 1 unless 0
         cmp #1
@@ -234,9 +234,9 @@ i_idle: lda FDC8271_CMD
 ; ----------------------------------------------------------------------------
 i_param:
         tay
-:       lda FDC8271_CMD
+@loop:  lda FDC8271_CMD
         and #I8271_ST_PARFULL
-        bne :-
+        bne @loop
         sty FDC8271_PAR
         rts
 
@@ -266,19 +266,19 @@ n1770:  pha
 n1770_sta:
         sta $FFFF                  ; (the operand: r1770's)
         inc n1770_sta+1
-        bne :+
+        bne @skip
         inc n1770_sta+2            ; a page on: a whole sector done
         dec LD_SECS
-        bne :+
+        bne @skip
         lda #WD_CMD_FORCEINT       ; the last: stop the read
         sta FDC1770_CMD
         inc LD_DONE
-:       pla
+@skip:  pla
         rti
 n1770_x: and #WD_ST_BUSY
-        bne :+
+        bne @skip
         inc LD_DONE
-:       pla
+@skip:  pla
         rti
 n1770_end:
         .assert n1770_end - n1770 <= NMISTUB_MAX, error, "the 1770's stub runs into its state bytes"
@@ -316,13 +316,13 @@ r1770:  lda ld_dst                 ; the transfer address, into the stub
         lda #WD_CMD_READM          ; read multiple with a head settle
         sta FDC1770_CMD
         ldx #WD_SETTLE
-:       dex
-        bne :-
-:       lda LD_DONE
+@loop:  dex
+        bne @loop
+@loop2: lda LD_DONE
         bne w_wait                 ; done: the force interrupt's busy drops shortly
         lda FDC1770_CMD            ; or the command ended with no completion NMI:
         lsr                        ;  busy (bit 0) into C
-        bcs :-
+        bcs @loop2
 
 ; ----------------------------------------------------------------------------
 ; w_wait: WD_SETTLE turns of a delay, then wait until the 1770 is not busy
@@ -331,12 +331,12 @@ r1770:  lda ld_dst                 ; the transfer address, into the stub
 ;   Keeps: Y
 ; ----------------------------------------------------------------------------
 w_wait: ldx #WD_SETTLE
-:       dex
-        bne :-
-:       lda FDC1770_CMD
+@loop:  dex
+        bne @loop
+@loop2: lda FDC1770_CMD
         lsr
         .assert WD_ST_BUSY = 1, error, "w_wait shifts the busy bit into C"
-        bcs :-
+        bcs @loop2
         rts
 
 ; ----------------------------------------------------------------------------
@@ -408,10 +408,10 @@ ld_go:  pha                        ; A and X across the load, on the stack
         jsr load_begin
         sei
         ldx DRV_NMILEN             ; the driver's NMI stub to its page
-:       lda DRV_NMI-1,x
+@loop:  lda DRV_NMI-1,x
         sta NMIPAGE-1,x
         dex
-        bne :-
+        bne @loop
         lda #<F_LDPROG_SEC         ; and LDPROG to its place
         sta ld_sec
         lda #F_LDPROG_N

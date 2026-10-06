@@ -157,12 +157,12 @@ dir_res:
         lda RESDIR+RES_N,x
         sty ROMSEL_CPY
         sty ROMSEL
-        bne :+
+        bne @skip
         rts                        ; no image
-:       bmi :+                     ; bit 7 set: bank 4, the address as it is
+@skip:  bmi @skip2                 ; bit 7 set: bank 4, the address as it is
         ora #$80                   ; bank 5: the address's bit 7 put back
         bankimm ldy, BANK_TIL1, 0, 2
         jmp ds_dirback
-:       bankimm ldy, BANK_SPR, 0, 2
+@skip2: bankimm ldy, BANK_SPR, 0, 2
         jmp ds_dirback
   .endif

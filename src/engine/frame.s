@@ -45,7 +45,7 @@
 ; recfirst: rp = recp, the back buffer's first record (select_backbuf's)
 ;   Uses:  A
 ; recnext: rp on to the next record, rp += RECSZ
-;   Uses:  A;  C clobbered;  one anonymous label
+;   Uses:  A;  C clobbered;  its label @recnext_done (one expansion a scope)
 ; erase_old and match_sprites walk the records with these; draw_sprites has its own
 ; step (its carry is known at every arrival).
 ; ----------------------------------------------------------------------------
@@ -60,9 +60,9 @@
         clc
         adc #RECSZ
         sta rp
-        bcc :+
+        bcc @recnext_done
         inc rp+1
-:
+@recnext_done:
 .endmacro
 
 ; ----------------------------------------------------------------------------
@@ -390,9 +390,9 @@ match_sprites:
         ; ---- cnt = the records to compare, min(RECCNT, nspr)
 @valid: lda RECCNT,x
         cmp nspr
-        bcc :+
+        bcc @skip
         lda nspr
-:       sta cnt
+@skip:  sta cnt
   .if TIGHTBSS
         ; ---- TIGHTBSS: Y = the record, X = the sprite
         ldy recb
@@ -622,9 +622,9 @@ add_sprite:
         PAD ::PADB_CP, ::PADM_CP
 copy_partial:
         lda wfine
-        bne :+
+        bne @skip
         rts                        ; fine scroll 0: nothing to compose
-:
+@skip:
         ; ---- the run: all ROWCHARS columns from column 0; w16 = its map column, wcx
         lda wcx
         sta w16
@@ -749,7 +749,7 @@ copy_partial:
 @back:  bcc @g4                    ; patched (@ftab); C = 1 falls into the page step
         SAMEPAGE *, @g4
         SAMEPAGE *, @g0
-        pagestep ptr, @back        ; ptr's page step (needs no C in)
+        pagestep ptr, @back, @ptrpage ; ptr's page step (needs no C in)
         bcc @back                  ; (C = 0: pagestep's)
 @done:  rts
         ; ---- sp's page step, out of line
@@ -800,9 +800,9 @@ draw_sprite:
   .if BOXN
         ; a still alias draws the same picture as the id BOXN below it
         cmp #BOXID0+BOXN
-        bcc :+
+        bcc @skip
         sbc #BOXN                  ; (C = 1: the bcc not taken)
-:
+@skip:
   .endif
         tax                        ; X = the id
         ; ---- the image's address and bank
@@ -811,25 +811,25 @@ draw_sprite:
         ; dir_res reads it and comes back to ds_dirback (or, for an entry of none,
         ; returns from here).  A level id: its entry here, the low byte first
         cpx #RES_N
-        bcs :+
+        bcs @skip2
         jmp dir_res
-:       lda DIRL,x
+@skip2: lda DIRL,x
         sta sp_ptr
   .endif
         bankimm ldy, BANK_SPR, BANK_LVL
         lda DIRH,x
-        bne :+
+        bne @skip3
         rts                        ; not in this level (@out0 is out of reach here)
-:       bmi :+                     ; bit 7 set: bank 4, the address as it is
+@skip3: bmi @skip4                 ; bit 7 set: bank 4, the address as it is
         ora #$80                   ; bank 5: the address's bit 7 put back
         bankimm ldy, BANK_TIL1, BANK_LVL
   .if DIRSPLIT
-:
+@skip4:
 ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way back
         sty sp_dbank
         sta sp_ptr+1
   .else
-:       sty sp_dbank
+@skip4: sty sp_dbank
         sta sp_ptr+1
         lda DIRL,x
         sta sp_ptr
@@ -859,9 +859,9 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
         sta sp_lines
         ; sp_ext = the height in scanlines: the lines stored when every scanline is
         ; (a box), else twice (two scanlines a stored row)
-        bcs :+
+        bcs @skip6
         asl
-:       sta sp_ext
+@skip6: sta sp_ext
         ; ---- horizontal: sx = spx - refx - wx; c0 = sx >> 1, the first window
         ; column (16 bit, signed).  X = the high byte of spx - refx: + 1 for a
         ; negative refx (its $FF sign extension taken off), - 1 on the low byte's
@@ -914,10 +914,10 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
         adc sp_w
         sbc #0                     ; C = 0 still (c0 + W < 256): c0 + W - 1
         cmp #ROWCHARS
-        bcc :+
+        bcc @skip7
         inc sp_clip                ; and at the right
         lda #(ROWCHARS-1)
-:       sta sp_c1
+@skip7: sta sp_c1
         ; falls into @vert
         ; ---- vertical: sy = spy - refy - wy; lb0 = 2*sy + wfine, the sprite's
         ; first scanline below the window's top (16 bit, signed)
@@ -974,13 +974,13 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
         bne @clampend              ; lb1 >= 256
         tya
         cmp row_lim
-        bcc :+
+        bcc @skip8
 @clampend:
         inc sp_clip                ; cut at the bottom
         ldx row_lim                ; the last line: row_lim - 1
         dex
         txa
-:       tax                        ; lend
+@skip8: tax                        ; lend
         cmp tmp
         bcc @out0                  ; lend < lstart: nothing left
         ; ---- the char rows sp_r0..sp_r1, and the lines within them sp_ra0, sp_ra1
@@ -1032,9 +1032,9 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
 .endrepeat
         ora w16+1
         ldx sp_clip
-        beq :+
+        beq @skip9
         ora #REC_CLIP              ; clipped
-:       sta REC_H,y
+@skip9: sta REC_H,y
   .else
         ; the RECSZ-byte record at rp
         ldy #REC_CX
@@ -1064,9 +1064,9 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
         sbc sp_r0                  ; C = 1 still (sp_c1 >= sp_c0; incax keeps C)
         adc #0                     ; and C = 1 from this one (sp_r1 >= sp_r0): + 1
         ldx sp_clip
-        beq :+
+        beq @skip10
         ora #REC_CLIP              ; clipped
-:       sta (rp),y
+@skip10: sta (rp),y
   .endif
   .if BHW                          ; hardware (the ring): the Model B's mirror row
         ; ---- the mirror's row (mrow), relative to the window: if the sprite covers
@@ -1138,12 +1138,12 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
         ldx #CHARLINES
         lda sp_flags
         and #SPF_FULLRES
-        bne :+                     ; every scanline stored: 8 bytes a row
+        bne @skip11                ; every scanline stored: 8 bytes a row
         lda w16+1                  ; w16 is -8 < w16 < 256, so its high byte is 0 or
         lsr                        ;  $FF and stays so after >> 1: only the bit the
         ror w16                    ;  lsr shifts into the low byte is needed
         ldx #CHARLINES/2
-:       stx sp_rinc
+@skip11: stx sp_rinc
         ; ---- the source row pointer sp_rp = sp_ptr + w16 + sp_c * sp_lines (the
         ; column base needs no copy of its own)
         lda sp_ptr
@@ -1158,10 +1158,10 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
         beq @mdone
         clc
 @mul:   adc sp_lines
-        bcc :+
+        bcc @skip12
         inc sp_rp+1
         clc
-:       dex
+@skip12: dex
         bne @mul
 @mdone: sta sp_rp
         ; ---- the columns (sp_ncol, set with the record's width), and away to the
@@ -1332,10 +1332,10 @@ wait_flip:
         ; what changes is drawn: the template comes with the game's image (the BAR
         ; file) and nothing erases it; the menus keep to the ring (menu_sections).
         lda bar_dirty
-        beq :+
+        beq @skip
         jsr hook_hud               ; the game's (docs/GUIDE.md)
         stz01 bar_dirty            ; only ever set to 1: 1 -> 0
-:
+@skip:
         ; ---- the char window: wcx = wx >> 1, wfine = (wy & 3) * 2, wcy = wy >> 2
         lda wx+1
         lsr
@@ -1368,9 +1368,9 @@ wait_flip:
   .if .not TALLMAP
         eor #$FF                   ; 255 - wcy
         cmp #BUFROWS
-        bcc :+                     ; 255 - wcy < BUFROWS: rows = 256 - wcy
+        bcc @skip2                 ; 255 - wcy < BUFROWS: rows = 256 - wcy
         lda #BUFROWS-1
-:       asl                        ; (rows - 1) * CHARLINES: at most 240, C = 0
+@skip2: asl                        ; (rows - 1) * CHARLINES: at most 240, C = 0
         asl
         asl
         adc #CHARLINES             ; rows * CHARLINES
@@ -1400,9 +1400,9 @@ wait_flip:
   .if .not BHW                     ; hardware (the ring): the Master's shadow-RAM
         sta next_buf               ;  display flag for the flip (-> disp_d)
   .endif
-        beq :+
+        beq @skip3
         lda #SECBYTES
-:       sta next_sect
+@skip3: sta next_sect
         lda #1
         sta flip_req
 render_done:

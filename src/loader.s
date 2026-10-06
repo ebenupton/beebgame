@@ -54,15 +54,15 @@ zdst    = $72
 ztab    = $74
 ztmp    = $76
 
-; print msg: the 0-terminated text at msg,X to the screen; X ends on the 0. (Two
-; anonymous labels.)
-.macro print msg
-:       lda msg,x
-        beq :+
+; print msg, loop, done: the 0-terminated text at msg,X to the screen; X ends on the
+; 0.  loop and done: the caller's labels (cheap ones: print runs several times a scope).
+.macro print msg, loop, done
+loop:   lda msg,x
+        beq done
         jsr OSWRCH
         inx
-        bne :-
-:
+        bne loop
+done:
 .endmacro
 
 ; ----------------------------------------------------------------------------
@@ -125,11 +125,11 @@ start:
         stx MOS_ROMSEL
         stx ROMSEL
         ldy #0
-:       lda ROMHDR_TITLE,y         ; the title's terminator
-        beq :+
+@loop:  lda ROMHDR_TITLE,y         ; the title's terminator
+        beq @skip
         iny
-        bne :-
-:       lda ROMHDR_TITLE+1,y       ; the version follows it
+        bne @loop
+@skip:  lda ROMHDR_TITLE+1,y       ; the version follows it
         cmp #'2'
         bne @nextrom
         lda ROMHDR_TITLE           ; only a DFS (the title's first two letters)
@@ -157,9 +157,9 @@ start:
         ; the palette: logical colour 15 down to 0, each to black
         lda #((PAL_N-1) << PAL_SHIFT) | (PCOL_BLACK ^ PAL_INV)
         sec
-:       sta ULA_PAL
+@loop2: sta ULA_PAL
         sbc #1 << PAL_SHIFT
-        bcs :-                     ; ($07 - $10 borrows: index 0 was the last)
+        bcs @loop2                 ; ($07 - $10 borrows: index 0 was the last)
         ; ---- the pieces (defs.inc PIECE_*): BANKS is a count, then (bank,
         ;      address, length) x count, then the pieces in that order, then the
         ;      patch lists.  A driver's bank byte has a controller flag
@@ -223,17 +223,17 @@ start:
         beq @cp                    ; a bank of 0 would page nothing (none is: build.sh
         jsr sel_bank               ;  files every piece under a bank); page it, and
 @cp:    lda plen                   ;  its write bank on a board.  (Y = 0 from the
-        bne :+                     ;  table read.)  The copy: plen counted down first
+        bne @skip2                 ;  table read.)  The copy: plen counted down first
         lda plen+1
         beq @cpdone
         dec plen+1
-:       dec plen
+@skip2: dec plen
         lda (zsrc),y
         sta (zdst),y
         inc zsrc
-        bne :+
+        bne @skip3
         inc zsrc+1
-:       inc zdst
+@skip3: inc zdst
         bne @cp
         inc zdst+1
         bne @cp                    ; (always: zdst never wraps)
@@ -332,10 +332,10 @@ start:
         dex
         bpl @hdr
         ldx #NBANKS-1
-:       lda BANKMAP,x
+@loop3: lda BANKMAP,x
         sta DSK_BANKS,x
         dex
-        bpl :-
+        bpl @loop3
         lda board
         sta dsk_board
         jmp boot                   ; the game's start-up, in main RAM (init.s)
@@ -552,28 +552,28 @@ find_ram:
 ;   Uses:  A X
 ; ----------------------------------------------------------------------------
 no_ram:
-        print msg1-NSOCK           ; (X = NSOCK) the name, and what the game needs
+        print msg1-NSOCK, @p1, @p1done ; (X = NSOCK) the name, and what the game needs
         ldx board                  ; how the writes were tried: the board found
         lda board_msg,x
         tax
-        print msgs
+        print msgs, @ps, @psdone
         ldx #0
-        print msg1b
+        print msg1b, @p1b, @p1bdone
         ldx #0
 @digit: lda SOCKCLASS,x            ; the writable sockets, as hex digits
         bmi @next
         txa
         cmp #10                    ; ten digits, then the letters
-        bcc :+
+        bcc @skip
         adc #'A'-'0'-10-1          ; (C = 1 from the cmp: + 'A' - '0' - 10 in all)
-:       adc #'0'
+@skip:  adc #'0'
         jsr OSWRCH
         lda #' '
         jsr OSWRCH
 @next:  inx
         cpx #NSOCK
         bne @digit
-        print msg2-NSOCK           ; (X = NSOCK from the loop)
+        print msg2-NSOCK, @p2, @p2done ; (X = NSOCK from the loop)
         rts
 
 

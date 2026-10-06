@@ -333,8 +333,9 @@ pl:     lda (ptr),y
 ; Emits ds_entry (which must be BANKENTRY), spr_fn's cells falling into the column
 ; step spr_retp, the column loop, the out-of-line steps, the mirrored step
 ; spr_retm, the row loop, then spr_fm's cells, the partial loops, the copy blitter
-; and sprrow_tab: see the file header.  Anonymous labels: three in the row loop,
-; each a skip of one instruction.
+; and sprrow_tab: see the file header.  The row loop's labels: @ds_rpdone,
+; ds_rowjoin (a normal label: ds_rowloop's branch reaches back across ds_rowloop to
+; it; each expansion is in its own scope, spr4 or spr5), @ds_lastset, @ds_index.
 ; ----------------------------------------------------------------------------
 .macro NIB_LOOPS bank, withmirror
                                    ; (withmirror = 0: spr_fm and spr_retm left out -- a
@@ -400,10 +401,10 @@ ds_rowdone:
         lda sp_rp                  ; C = 0: sp_row < sp_r1
         adc sp_rinc
         sta sp_rp
-        bcc :+
+        bcc @ds_rpdone
         inc sp_rp+1
         clc
-:       lda sp_rb
+@ds_rpdone: lda sp_rb
         adc #<ROWBYTES
         sta sp_rb
         lda sp_rb+1
@@ -419,7 +420,7 @@ ds_rowdone:
         lda sp_rb                  ;  ds_entry sp is sp_rb already: the prologue took
         sta sp                     ;  sp_rb from ring_addr7's sp)
         ldx #0                     ; a later row: from its line 0 (the first row
-:       lda sp_rp                  ;  joins here from ds_rowloop, X = sp_ra0)
+ds_rowjoin: lda sp_rp              ;  joins here from ds_rowloop, X = sp_ra0)
         sta ptr
         lda sp_rp+1
         sta ptr+1
@@ -427,14 +428,14 @@ ds_rowdone:
         ldy #CHARLINES-1
         lda sp_row
         cmp sp_r1
-        bne :+
+        bne @ds_lastset
         ldy sp_ra1
-:       sty tmp2                   ; the last line
+@ds_lastset: sty tmp2              ; the last line
         txa
         cpy #CHARLINES-1
-        bcs :+                     ; to line 7: the unrolled entry for line tmp
+        bcs @ds_index              ; to line 7: the unrolled entry for line tmp
         lda #SPRTAB_N-1            ; else the partial loop, the blitter's last entry
-:       asl                        ; C = 0 (A <= 8): the word's index
+@ds_index: asl                     ; C = 0 (A <= 8): the word's index
         adc sp_disp
         tax
         lda sprrow_tab,x
@@ -447,7 +448,7 @@ ds_rowdone:
         .assert <(ds_colloop+1) <> $FF, error, "ds_colloop's operand straddles a page (NMOS jmp (ind))"
 ds_rowloop:                        ; the first row (ds_entry's; the prologue set
         ldx sp_ra0                 ;  sp_row = sp_r0, and later rows are past it):
-        bpl :---                   ;  from line sp_ra0.  Always: sp_ra0 is 0..7
+        bpl ds_rowjoin             ;  from line sp_ra0.  Always: sp_ra0 is 0..7
 ds_done:
         wrback bank                ; the write window's end
         rts

@@ -263,9 +263,9 @@ t6_sve:                            ;  routine's length, mod 256 (pads.inc's valu
 ; ----------------------------------------------------------------------------
 draw_rect:
         lda rc_h
-        bne :+
+        bne @skip
         rts
-:
+@skip:
         ; ---- the first char row's screen address: rc_sp = sp = rc_x*8 + its
         ; ring slot's, folded at the ring end.  First, before any @ label: the
         ; Model B's RINGHIOP := below ends a cheap-label scope, so here it
@@ -349,7 +349,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
   .endif
   .if BHW                          ; hardware: the ring (ringup's fold, in line: the
         cmp ringehi                ;  low byte folds into rc_sp too, and X holds the
-        bcc :+                     ;  high byte -- free here, Y is not: the runs' index)
+        bcc @skip                  ;  high byte -- free here, Y is not: the runs' index)
         sbc #>RINGBYTES            ; C = 1 from the compare, and stays 1
         tax
         lda sp
@@ -358,7 +358,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         sta rc_sp
         txa
         sbc #0                     ; the low byte's borrow (C = 1: none)
-:
+@skip:
   .else
         ringup sp                  ; fold back into the ring (macros.s)
   .endif
@@ -424,9 +424,9 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         sbc wcy                    ; the offset, -128..127 (ldy, cmp, dey keep A)
         ldy #0
         cmp #$80
-        bcc :+
+        bcc @skip2
         dey                        ; Y = its sign
-:       clc
+@skip2: clc
         adc wcy                    ; (= rc_y: only the carry is wanted)
         tya
         adc wcyh
@@ -549,7 +549,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         bne @xkind
         ; ---- case S: id 0, the level's solid, the commonest run.  One byte,
         ; the loader's (SOLIDF), stored down every line of the run's chars.
-@srun:  runn                       ; X = the run's chars (x RUNXS), C = 0
+@srun:  runn @srunn                ; X = the run's chars (x RUNXS), C = 0
 @sdisp:
         ; ---- the chain that follows: TILECHARS*CHARLINES stores counting Y up,
         ; an iny between each, entered at a store with Y = 0 so that it stores
@@ -593,7 +593,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
   .endif
         ora row_off                ; a full tile's low byte is (slot & 3) << 6: its
 @tpsta: sta tp                     ;  bits 0-5 are clear for the row and char offset
-@trun:  runn                       ; X = the run's chars (x RUNXS), C = 0
+@trun:  runn @trunn                ; X = the run's chars (x RUNXS), C = 0
 @tdisp:
   .if BHW                          ; CPU spelling: the dispatch
         ; the entry's offset into the branch, which is taken (C = 0).  The
@@ -679,7 +679,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         ; pagestep branches to @runnext itself in the common case and falls to
         ; the jmp when it folds; the Master's always falls to it.
 @spcarry:
-        pagestep sp, @runnext
+        pagestep sp, @runnext, @sppage
         jmp @runnext
 
 ; ----------------------------------------------------------------------------
@@ -712,7 +712,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         bcc @frun                  ; C = 0 from @xkind's bcc @half (nothing between
         SAMEPAGE *, @frun          ;  touches it)
   .else
-        runn
+        runn @hrunn
         jmp (@ft-2,x)
   .endif
         ; ---- a flat tile or the other solid: the pair from FLATTAB, by GATHERL
@@ -721,7 +721,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         sta tp
         lda FLATTAB+1,y
         sta tp+1
-@frun:  runn                       ; X = the run's chars (x RUNXS), C = 0
+@frun:  runn @frunn                ; X = the run's chars (x RUNXS), C = 0
 @fdisp:
   .if BHW                          ; CPU spelling: the dispatch
         ; the entry's offset into the branch, taken as C = 0 (A is dead: every
@@ -756,7 +756,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         and #$C0                   ; the source tile's offset in its page
         ora rc_sub                 ; its char row
         sta tp
-        runn                       ; X = the run's chars (x RUNXS), C = 0
+        runn @runn                 ; X = the run's chars (x RUNXS), C = 0
         lda rc_lim                 ; the first char drawn is the source's rc_lim - 1
         asl
         asl
@@ -1019,7 +1019,7 @@ draw_rect_clip:
         lda rc_y
         sec
         sbc wcy
-        bpl :+
+        bpl @skip
         ; ---- it starts above the window: shrink to what is below the top
         clc
         adc rc_h                   ; rel + h = the rows left
@@ -1029,10 +1029,10 @@ draw_rect_clip:
         lda wcy
         sta rc_y
         lda #0                     ; clipped to the top: rel is now 0
-:       clc
+@skip:  clc
         adc rc_h                   ; rel + h, the row after its last
         cmp #BUFROWS+1
-        bcc :+
+        bcc @skip2
         sbc #BUFROWS               ; bcc not taken, C = 1: the excess e = end - BUFROWS
         eor #$FF                   ;  (C stays 1)
         adc rc_h                   ; h - e = BUFROWS - rel
@@ -1040,7 +1040,7 @@ draw_rect_clip:
         bmi @none
         sta rc_h
         ; ---- columns: rel = rc_x - wcx (16 bit signed), low byte in Y
-:       lda rc_x
+@skip2: lda rc_x
         sec
         sbc wcx
         tay
@@ -1065,9 +1065,9 @@ draw_rect_clip:
         ldx wcx+1
         stx rc_x+1
         cmp #ROWCHARS+1
-        bcc :+
+        bcc @skip3
         lda #ROWCHARS
-:       sta rc_w
+@skip3: sta rc_w
         jmp draw_rect
         ; ---- rel >= 0: off the right, or clip the right edge
 @right: bne @none                  ; Z from the sbc: rel >= 256, off the right
@@ -1076,10 +1076,10 @@ draw_rect_clip:
         bcs @none                  ; not taken: C = 0 for the adc
         adc rc_w                   ; rel + w, the column after its last
         cmp #ROWCHARS+1
-        bcc :+                     ; not taken: C = 1 for the sbc
+        bcc @skip4                 ; not taken: C = 1 for the sbc
         sbc #ROWCHARS              ; the excess e = rel + w - ROWCHARS (C stays 1)
         eor #$FF
         adc rc_w                   ; w - e = ROWCHARS - rel
         sta rc_w
-:       jmp draw_rect
+@skip4: jmp draw_rect
 @none:  rts

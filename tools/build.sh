@@ -11,7 +11,8 @@
 # debug file, the generated includes (files.inc, levelfmt.inc, defs_ld.inc, img7fix.inc,
 # gamename.inc) and the pieces.  The checks it runs: levelfile.py check on the level files,
 # the two machines' shared files and assets.inc compared, the boot header's addresses
-# compared, layoutcheck.py, and imagecheck.py (each machine's: the two bank 7 images apart).
+# compared, layoutcheck.py, imagecheck.py (each machine's: the two bank 7 images apart),
+# and first of all noanon.py (no anonymous labels in the engine's or the game's sources).
 #
 #   GAME_MAIN    the game's root source (it includes the engine's: see README.md)
 #   GAME_SRC     the game's include directory
@@ -91,6 +92,8 @@ DISC_OUT=${DISC_OUT:-build/game.ssd}
 GAME_NAME=${GAME_NAME:-$DISC_TITLE}
 set -e
 mkdir -p build
+# no anonymous labels, in the engine or the game (tools/noanon.py says why)
+python3 $BG/tools/noanon.py $BG/src "$GAME_SRC"
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
 for o in GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5; do
