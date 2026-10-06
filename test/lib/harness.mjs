@@ -36,16 +36,51 @@ import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-// jsbeeb as npx installs it: the newest ~/.npm/_npx/*/node_modules/jsbeeb with a
-// src/machine-session.js (the first directory found, not the newest)
-export function findJsbeeb() {
-  const npx = path.join(homedir(), ".npm", "_npx");
-  for (const d of readdirSync(npx)) {
-    const p = path.join(npx, d, "node_modules", "jsbeeb", "src", "machine-session.js");
-    if (existsSync(p)) return p;
+// jsbeeb as npx installs it, chosen by VERSION, and said: $JSBEEB_SRC (a jsbeeb src/
+// directory) if set, else the highest version among ./node_modules/jsbeeb and every
+// npx cache's */node_modules/jsbeeb (~/.npm/_npx; on Windows npm keeps it in
+// %LOCALAPPDATA%\npm-cache\_npx).  Taking the first directory found meant that with two
+// jsbeebs cached (every jsbeeb-mcp update leaves another) the emulator a measurement used
+// depended on directory order, and nothing said which it was; so the version goes to
+// stderr, once.  jsbeebInfo() gives {path, version}; findJsbeeb() the path, as before.
+let jsbeebFound = null;
+export function jsbeebInfo() {
+  if (jsbeebFound) return jsbeebFound;
+  const versionOf = (dir) => {
+    try { return JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")).version; }
+    catch { return null; }
+  };
+  const found = [];
+  const add = (dir, why) => {
+    const p = path.join(dir, "src", "machine-session.js");
+    if (existsSync(p)) found.push({ path: p, version: versionOf(dir) || "0.0.0", why });
+  };
+  if (process.env.JSBEEB_SRC) {
+    add(path.dirname(path.resolve(process.env.JSBEEB_SRC)), "JSBEEB_SRC");
+    if (!found.length) throw new Error(`JSBEEB_SRC=${process.env.JSBEEB_SRC}: no machine-session.js there`);
+  } else {
+    add(path.join(process.cwd(), "node_modules", "jsbeeb"), "node_modules");
+    const caches = [path.join(homedir(), ".npm", "_npx")];
+    if (process.env.LOCALAPPDATA) caches.push(path.join(process.env.LOCALAPPDATA, "npm-cache", "_npx"));
+    for (const npx of caches) {
+      if (!existsSync(npx)) continue;
+      for (const d of readdirSync(npx)) add(path.join(npx, d, "node_modules", "jsbeeb"), "npx");
+    }
   }
-  throw new Error("jsbeeb not found");
+  if (!found.length) throw new Error("jsbeeb not found: run `npx jsbeeb-mcp` once, or set JSBEEB_SRC");
+  const num = (v) => v.split(/[.+-]/).slice(0, 3).map((x) => parseInt(x, 10) || 0);
+  found.sort((a, b) => { const x = num(a.version), y = num(b.version);
+                         return y[0] - x[0] || y[1] - x[1] || y[2] - x[2]; });
+  jsbeebFound = found[0];
+  console.error(`[jsbeeb ${jsbeebFound.version}] ${path.dirname(jsbeebFound.path)}`);
+  return jsbeebFound;
 }
+export function findJsbeeb() { return jsbeebInfo().path; }
+// SHIFT for keyDown/keyUp in the jsbeeb found.  jsbeeb 2.0 changed the argument from a
+// numeric keyCode (16) to a KeyboardEvent.code string ("ShiftLeft").  2.0-2.3.0 ignored
+// the old number without a word - SHIFT+BREAK simply didn't boot the disc - and from
+// 2.3.1 it throws (mattgodbolt/jsbeeb#1172); either way the number fails in a 2.x.
+export function shiftKey() { return parseInt(jsbeebInfo().version, 10) >= 2 ? "ShiftLeft" : 16; }
 // the linker's debug file beside a build's labels (game.dbg; cleo.dbg in builds made
 // before the engine was its own project)
 export function dbgPath(labels) {
