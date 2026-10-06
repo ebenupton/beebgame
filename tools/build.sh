@@ -12,8 +12,7 @@
 # gamename.inc) and the pieces.  The checks it runs: levelfile.py check on the level files,
 # the two machines' shared files and assets.inc compared, the boot header's addresses
 # compared, layoutcheck.py, imagecheck.py (each machine's: the two bank 7 images apart),
-# and first of all noanon.py (no anonymous labels in the engine's sources, nor the game's
-# with GAME_NOANON=1).
+# and first of all noanon.py (no anonymous labels in the engine's code outside macros).
 #
 #   GAME_MAIN    the game's root source (it includes the engine's: see README.md)
 #   GAME_SRC     the game's include directory
@@ -21,8 +20,6 @@
 #                assets.inc, the level files, SPRC, SPRX, BAR, img_tab.bin and what the
 #                game's own sources .incbin -- and build/TILES0-2
 #   GAME_MUSIC   run once first (may be empty)
-#   GAME_NOANON=1 the game's sources checked for anonymous labels too (tools/noanon.py; the
-#                engine's always are)
 #   GAME_SFX     (SOUND6) the game's sound effects: a Python file setting EFFECTS
 #                (tools/sfx.py), packed into each machine's sfxdata.inc
 #   DISC_TITLE   the disc's title; DISC_OUT the disc image (build/game.ssd); GAME_NAME the
@@ -103,9 +100,8 @@ DISC_OUT=${DISC_OUT:-build/game.ssd}
 GAME_NAME=${GAME_NAME:-$DISC_TITLE}
 set -e
 mkdir -p build
-# no anonymous labels in the engine (tools/noanon.py says why), nor in the game's sources
-# when it asks (GAME_NOANON=1)
-python3 $BG/tools/noanon.py $BG/src $([ "$GAME_NOANON" = 1 ] && echo "$GAME_SRC")
+# no anonymous labels in the engine's code outside macros (tools/noanon.py says why)
+python3 $BG/tools/noanon.py $BG/src
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
 for o in GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5 LDBIG TUNEFX; do

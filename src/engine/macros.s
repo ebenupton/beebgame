@@ -21,13 +21,11 @@
 ;   runn           a run's char count, min(rc_lim, cnt), as X (x RUNXS); C = 0
 ;   MIRDIRTY_BODY  note a range of the mirror's row written (the Model B)
 ;
-; Labels.  No anonymous (':') labels, here or anywhere: their :+ / :- count across the
-; whole assembly, so one added or removed retargets branches far away (tools/build.sh
-; rejects them).  A macro's skips are cheap (@) labels -- a normal label, .local ones
-; included, would end the enclosing routine's cheap-local scope: a fixed name, prefixed
-; with the macro's, where the macro expands at most once in a scope (each header names
-; them), else the caller's, passed in (pagestep's done, runn's done).  ringmod and
-; ringwin use .local labels: their callers branch across neither.
+; Anonymous labels.  The macros spell their skips with ':' labels, because a named
+; label would end the enclosing routine's cheap-local (@) scope.  So a caller that
+; branches with :+ / :- over one of them has to count the labels it adds: each header
+; gives the count (spnext, which says :++ to jump over pagestep's, is the example).
+; ringmod uses .local labels instead and adds none.
 ;
 ; Every .if BHW here is hardware -- the ring -- but runn's, which is CPU spelling:
 ; the Master dispatches with jmp (abs,x), the Model B with a patched branch.
@@ -39,7 +37,7 @@
 ;   Out:   A = the slot, 0..RINGROWS-1
 ;   Uses:  Master (RINGROWS a power of two): an and; X, C kept
 ;          Model B: X; C clobbered
-;   Labels: the Model B's are .local (normal symbols).
+;   Anonymous labels: none (the Model B's are .local).
 ; The Model B's is a table lookup in bank 6 (tiles.s ringmod_tab), RINGMOD_SPAN =
 ; RINGROWS*5 entries long: two subtractions bring any row under it, 141 bytes short
 ; of a 256-entry table.  draw_rect's head open-codes the same with the slot into X.
@@ -65,7 +63,8 @@ n2:     tax
 ;   In:    A = the row
 ;   Out:   A = the slot
 ;   Keeps: X.  Model B: C = 0 out (it leaves by its bcc).  Master: C kept
-;   Labels: the Model B's @ringmod7_loop and @ringmod7_done (one expansion a scope).
+;   Anonymous labels: two on the Model B, none on the Master -- the counts differ,
+;   so do not branch over it with :+ / :-.
 ; ----------------------------------------------------------------------------
 .macro ringwin
         ; (RINGARITH, the Model B) A = a map char row IN THE WINDOW (wcy .. wcy +
@@ -85,11 +84,11 @@ n1:
 .endmacro
 .macro ringmod7
   .if ::BHW                        ; hardware: the ring (Model B: by repeated subtraction)
-@ringmod7_loop: cmp #RINGROWS
-        bcc @ringmod7_done
+:       cmp #RINGROWS
+        bcc :+
         sbc #RINGROWS              ; C = 1 from the cmp, and stays 1
-        bcs @ringmod7_loop
-@ringmod7_done:
+        bcs :-
+:
   .else                            ; Master: ringmod's and
         ringmod
   .endif
@@ -101,7 +100,7 @@ n1:
 ;   Out:   fell through: still in the ring, A kept (the common case); Model B C = 0
 ;          branched to cold: it has run off, for the caller to fold there (ringup's
 ;          fold, written out at tiles.s @rfold); Model B C = 1
-;   Labels: none.
+;   Anonymous labels: none.
 ; The ring's end is a page boundary, so the test is on the high byte alone.  On the
 ; Model B the cmp leaves C = 1 on the way to cold, so the fold there needs no sec of
 ; its own whatever the caller was holding.
@@ -122,7 +121,7 @@ n1:
 ;   Out:   A = the high byte, in the ring (the caller stores it)
 ;          Model B: p's low byte folded with it; C = 0 if no fold, 1 if folded
 ;          Master: C kept if no fold, 1 if folded
-;   Labels: @ringup_done (one expansion a scope).
+;   Anonymous labels: one.
 ; Model B: A >= ringehi (>RINGEND_A = $44) > >RINGBYTES ($39), so the first sbc
 ; leaves C = 1.  The low byte folds by <RINGBYTES = $80, which borrows from A when
 ; p's low byte is below $80 (the sbc #0).
@@ -132,7 +131,7 @@ n1:
 .macro ringup p
   .if ::BHW                        ; hardware: the ring (Model B)
         cmp ringehi                ; the buffer's ring end, high byte (select_backbuf)
-        bcc @ringup_done
+        bcc :+
         sbc #>RINGBYTES            ; C = 1 from the compare, and stays 1
         pha
         lda p
@@ -140,11 +139,11 @@ n1:
         sta p
         pla
         sbc #0                     ; the low byte's borrow (C = 1: none)
-@ringup_done:
+:
   .else                            ; Master
-        bpl @ringup_done           ; RINGEND = $8000: N from A
+        bpl :+                     ; RINGEND = $8000: N from A
         sbc #(>RINGBYTES)-1        ; C = 0 (see above): - >RINGBYTES
-@ringup_done:
+:
   .endif
 .endmacro
 
@@ -155,9 +154,9 @@ n1:
 ;   Out:   p updated; C = 0; A clobbered (the Master's only when it folds)
 ;          With back given, the Model B's common case (no fold) branches to back
 ;          with C = 0.
-;   Labels: done, the caller's (a cheap one): the Model B's without back, the
-;   Master's always (so the Master falls out at the end even given back: follow it
-;   with a branch to back -- tiles.s @advc does, with a jmp).
+;   Anonymous labels: Model B, one without back and none with it; Master, one
+;   always (so the Master falls out at the end even given back: follow it with a
+;   branch to back -- tiles.s @advc does, with a jmp).
 ; Model B: the fold takes a ring less the low byte's borrow from the high byte.  The
 ; low byte is below <RINGBYTES ($80), so the fold always borrows, and the low byte's
 ; share is +$80 (an eor).
@@ -165,13 +164,13 @@ n1:
 ; end is $80 exactly (the step is under a page): the high byte goes back to the
 ; base, the low byte unchanged (<RINGBYTES = 0).
 ; ----------------------------------------------------------------------------
-.macro pagestep p, back, done
+.macro pagestep p, back
   .if ::BHW                        ; hardware: the ring (Model B)
         inc p+1
         lda p+1
         cmp ringehi
     .ifblank back
-        bcc done
+        bcc :+
     .else
         bcc back
     .endif
@@ -183,26 +182,26 @@ n1:
         clc
         .assert <RINGBYTES = $80, error, "pagestep: the Model B's ring folds its low byte by $80"
     .ifblank back
-done:
+:
     .endif
   .else                            ; Master
         inc p+1                    ; N set: ran off the end
-        bpl done
+        bpl :+
         lda #>RINGBASE
         sta p+1
         .assert <RINGBYTES = 0 && RINGEND = $8000, error, "pagestep: the Master's ring"
-done:   clc
+:       clc
   .endif
 .endmacro
 
 ; ----------------------------------------------------------------------------
 ; spnext cold: sp on one char (CHARBYTES), folding at the ring's end
 ;   Out:   sp moved on; A clobbered; C = 0 on the fall-through
-;   Without cold: the page step (pagestep sp) is in line.  Labels: @spnext_done and
-;   pagestep's @spnext_page (one expansion a scope).
+;   Without cold: the page step (pagestep sp) is in line.  Anonymous labels: two
+;   (pagestep's and its own -- hence its bcc :++).
 ;   With cold: a carry out of the low byte branches to cold, which must be in branch
-;   reach and hold spcold (the caller's); the common case falls through.  Labels:
-;   none.
+;   reach and hold spcold (the caller's); the common case falls through.  Anonymous
+;   labels: none.
 ; ----------------------------------------------------------------------------
 .macro spnext cold
         lda sp
@@ -210,9 +209,9 @@ done:   clc
         adc #CHARBYTES
         sta sp
   .if .blank(cold)
-        bcc @spnext_done           ; past the fold
-        pagestep sp, , @spnext_page
-@spnext_done:
+        bcc :++                    ; past the fold's own anonymous label
+        pagestep sp
+:
   .else
         bcs cold
   .endif
@@ -221,10 +220,10 @@ done:   clc
 ; ----------------------------------------------------------------------------
 ; spcold back: spnext's page step, out of line
 ;   Out:   jumps to back with C = 0 (pagestep's)
-;   Labels: pagestep's @spcold_page (one expansion a scope).
+;   Anonymous labels: one (pagestep's).
 ; ----------------------------------------------------------------------------
 .macro spcold back
-        pagestep sp, , @spcold_page
+        pagestep sp
         jmp back
 .endmacro
 
@@ -234,7 +233,7 @@ done:   clc
 ;   Out:   X = n x RUNXS: the Model B's n (a table of branch offsets), the Master's
 ;          2n (jmp (abs,x)) -- the only copy: @advsp reads n and 8n back through X
 ;          from tables (tiles.s @run1, @run8); A = n (the Master: 2n); C = 0
-;   Labels: done, the caller's (a cheap one: runn expands several times a scope).
+;   Anonymous labels: one.
 ; C = 0 out is for the Model B's patched branch and for @advsp after the blocks
 ; (which keep X and C).  rc_lim < cnt, a run with more to follow, falls through the
 ; bcc with C = 0 already; the row's last run pays the Model B a clc, and the Master's
@@ -245,15 +244,15 @@ RUNXS = 1
   .else
 RUNXS = 2
   .endif
-.macro runn done
+.macro runn
         lda rc_lim
         cmp cnt
-        bcc done
+        bcc :+
         lda cnt
   .if BHW                          ; CPU spelling
         clc
   .endif
-done:
+:
   .if .not BHW                     ; CPU spelling
         asl                        ; n <= 4: C = 0
   .endif
@@ -268,7 +267,7 @@ done:
 ;   Out:   MIRDTY[cur_buf] = 1 and MIRLO/MIRHI[cur_buf] widened to the chars written,
 ;          in slot chars -- or nothing, when none of the range is in the last slot row
 ;   Uses:  A X Y
-;   Labels: @mirdirty_last, @mirdirty_hi, @mirdirty_done (one expansion a scope).
+;   Anonymous labels: three.
 ; Those chars sit in the last slot row at wcxm on; only the ones up to char 79 are in
 ; it (the rest wrapped to slot row 0), and only those from wcxm are ever read.
 ; Blank exit: a routine, ending in rts (bank 7's mir_dirty, banks.s); given one, in
@@ -287,21 +286,21 @@ done:
         txa                        ; C = 0: the bcs not taken
         adc wcxm
         cmp #ROWCHARS
-        bcc @mirdirty_last
+        bcc :+
         lda #ROWCHARS-1
-@mirdirty_last: tax
+:       tax
         ldy cur_buf
         lda #1
         sta MIRDTY,y
         pla
         cmp MIRLO,y
-        bcs @mirdirty_hi
+        bcs :+
         sta MIRLO,y
-@mirdirty_hi: txa
+:       txa
         cmp MIRHI,y
-        bcc @mirdirty_done
+        bcc :+
         sta MIRHI,y
-@mirdirty_done:
+:
   .ifblank exit
 @out:   rts
   .endif

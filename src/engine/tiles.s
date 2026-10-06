@@ -549,7 +549,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         bne @xkind
         ; ---- case S: id 0, the level's solid, the commonest run.  One byte,
         ; the loader's (SOLIDF), stored down every line of the run's chars.
-@srun:  runn @srunn                ; X = the run's chars (x RUNXS), C = 0
+@srun:  runn                       ; X = the run's chars (x RUNXS), C = 0
 @sdisp:
         ; ---- the chain that follows: TILECHARS*CHARLINES stores counting Y up,
         ; an iny between each, entered at a store with Y = 0 so that it stores
@@ -593,7 +593,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
   .endif
         ora row_off                ; a full tile's low byte is (slot & 3) << 6: its
 @tpsta: sta tp                     ;  bits 0-5 are clear for the row and char offset
-@trun:  runn @trunn                ; X = the run's chars (x RUNXS), C = 0
+@trun:  runn                       ; X = the run's chars (x RUNXS), C = 0
 @tdisp:
   .if BHW                          ; CPU spelling: the dispatch
         ; the entry's offset into the branch, which is taken (C = 0).  The
@@ -679,7 +679,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         ; pagestep branches to @runnext itself in the common case and falls to
         ; the jmp when it folds; the Master's always falls to it.
 @spcarry:
-        pagestep sp, @runnext, @sppage
+        pagestep sp, @runnext
         jmp @runnext
 
 ; ----------------------------------------------------------------------------
@@ -712,7 +712,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         bcc @frun                  ; C = 0 from @xkind's bcc @half (nothing between
         SAMEPAGE *, @frun          ;  touches it)
   .else
-        runn @hrunn
+        runn
         jmp (@ft-2,x)
   .endif
         ; ---- a flat tile or the other solid: the pair from FLATTAB, by GATHERL
@@ -721,7 +721,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         sta tp
         lda FLATTAB+1,y
         sta tp+1
-@frun:  runn @frunn                ; X = the run's chars (x RUNXS), C = 0
+@frun:  runn                       ; X = the run's chars (x RUNXS), C = 0
 @fdisp:
   .if BHW                          ; CPU spelling: the dispatch
         ; the entry's offset into the branch, taken as C = 0 (A is dead: every
@@ -756,7 +756,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         and #$C0                   ; the source tile's offset in its page
         ora rc_sub                 ; its char row
         sta tp
-        runn @runn                 ; X = the run's chars (x RUNXS), C = 0
+        runn                       ; X = the run's chars (x RUNXS), C = 0
         lda rc_lim                 ; the first char drawn is the source's rc_lim - 1
         asl
         asl

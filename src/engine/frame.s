@@ -45,7 +45,7 @@
 ; recfirst: rp = recp, the back buffer's first record (select_backbuf's)
 ;   Uses:  A
 ; recnext: rp on to the next record, rp += RECSZ
-;   Uses:  A;  C clobbered;  its label @recnext_done (one expansion a scope)
+;   Uses:  A;  C clobbered;  one anonymous label
 ; erase_old and match_sprites walk the records with these; draw_sprites has its own
 ; step (its carry is known at every arrival).
 ; ----------------------------------------------------------------------------
@@ -60,9 +60,9 @@
         clc
         adc #RECSZ
         sta rp
-        bcc @recnext_done
+        bcc :+
         inc rp+1
-@recnext_done:
+:
 .endmacro
 
 ; ----------------------------------------------------------------------------
@@ -749,7 +749,7 @@ copy_partial:
 @back:  bcc @g4                    ; patched (@ftab); C = 1 falls into the page step
         SAMEPAGE *, @g4
         SAMEPAGE *, @g0
-        pagestep ptr, @back, @ptrpage ; ptr's page step (needs no C in)
+        pagestep ptr, @back        ; ptr's page step (needs no C in)
         bcc @back                  ; (C = 0: pagestep's)
 @done:  rts
         ; ---- sp's page step, out of line

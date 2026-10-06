@@ -54,15 +54,15 @@ zdst    = $72
 ztab    = $74
 ztmp    = $76
 
-; print msg, loop, done: the 0-terminated text at msg,X to the screen; X ends on the
-; 0.  loop and done: the caller's labels (cheap ones: print runs several times a scope).
-.macro print msg, loop, done
-loop:   lda msg,x
-        beq done
+; print msg: the 0-terminated text at msg,X to the screen; X ends on the 0. (Two
+; anonymous labels.)
+.macro print msg
+:       lda msg,x
+        beq :+
         jsr OSWRCH
         inx
-        bne loop
-done:
+        bne :-
+:
 .endmacro
 
 ; ----------------------------------------------------------------------------
@@ -552,13 +552,13 @@ find_ram:
 ;   Uses:  A X
 ; ----------------------------------------------------------------------------
 no_ram:
-        print msg1-NSOCK, @p1, @p1done ; (X = NSOCK) the name, and what the game needs
+        print msg1-NSOCK           ; (X = NSOCK) the name, and what the game needs
         ldx board                  ; how the writes were tried: the board found
         lda board_msg,x
         tax
-        print msgs, @ps, @psdone
+        print msgs
         ldx #0
-        print msg1b, @p1b, @p1bdone
+        print msg1b
         ldx #0
 @digit: lda SOCKCLASS,x            ; the writable sockets, as hex digits
         bmi @next
@@ -573,7 +573,7 @@ no_ram:
 @next:  inx
         cpx #NSOCK
         bne @digit
-        print msg2-NSOCK, @p2, @p2done ; (X = NSOCK from the loop)
+        print msg2-NSOCK           ; (X = NSOCK from the loop)
         rts
 
 
