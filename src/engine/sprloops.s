@@ -418,18 +418,14 @@ ds_rowdone:
         sta sp+1                   ; sp = sp_rb: A = sp_rb+1, just stored (from
         lda sp_rb                  ;  ds_entry sp is sp_rb already: the prologue took
         sta sp                     ;  sp_rb from ring_addr7's sp)
-ds_rowloop:
-        lda sp_rp
+        ldx #0                     ; a later row: from its line 0 (the first row
+:       lda sp_rp                  ;  joins here from ds_rowloop, X = sp_ra0)
         sta ptr
         lda sp_rp+1
         sta ptr+1
-        ldx #0
-        lda sp_row
-        cmp sp_r0
-        bne :+
-        ldx sp_ra0
-:       stx tmp                    ; the first line
+        stx tmp                    ; the first line
         ldy #CHARLINES-1
+        lda sp_row
         cmp sp_r1
         bne :+
         ldy sp_ra1
@@ -449,6 +445,9 @@ ds_rowloop:
         sta sp_cnt                 ; columns - 1 (the countdown)
         jmp (ds_colloop+1)         ; straight to the row's entry (5 cycles, not 3+3)
         .assert <(ds_colloop+1) <> $FF, error, "ds_colloop's operand straddles a page (NMOS jmp (ind))"
+ds_rowloop:                        ; the first row (ds_entry's; the prologue set
+        ldx sp_ra0                 ;  sp_row = sp_r0, and later rows are past it):
+        bpl :---                   ;  from line sp_ra0.  Always: sp_ra0 is 0..7
 ds_done:
         wrback bank                ; the write window's end
         rts

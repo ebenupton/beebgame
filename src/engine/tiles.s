@@ -337,9 +337,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's base page
         adc ringlo,x               ; + the slot's address
   .endif
         sta sp
-  .if .not BHW                     ; hardware: the ring (the Master's ringup leaves
-        sta rc_sp                  ;  sp's low byte; the Model B's fold moves it)
-  .endif
+        sta rc_sp                  ; sp's low byte (the Model B's fold below moves both)
         lda sp+1
   .if BHW && RINGARITH             ; hardware: the ring
         adc ptr+1
@@ -349,13 +347,23 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
     .endif                         ;  ringhi or ringhi_b (select_backbuf patches it)
         adc ringhi,x
   .endif
+  .if BHW                          ; hardware: the ring (ringup's fold, in line: the
+        cmp ringehi                ;  low byte folds into rc_sp too, and X holds the
+        bcc :+                     ;  high byte -- free here, Y is not: the runs' index)
+        sbc #>RINGBYTES            ; C = 1 from the compare, and stays 1
+        tax
+        lda sp
+        sbc #<RINGBYTES            ; $80: borrows when sp is below it
+        sta sp
+        sta rc_sp
+        txa
+        sbc #0                     ; the low byte's borrow (C = 1: none)
+:
+  .else
         ringup sp                  ; fold back into the ring (macros.s)
+  .endif
         sta sp+1
         sta rc_sp+1
-  .if BHW                          ; hardware: the ring (the fold moved sp's low byte)
-        lda sp
-        sta rc_sp
-  .endif
   .if BHW                          ; hardware: the write-select boards
         ; ---- open the write window, to @done: the runs patch their dispatch
         ; branches (cpu.inc; the tags tell this site from the bank's others).

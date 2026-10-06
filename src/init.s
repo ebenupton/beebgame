@@ -65,14 +65,11 @@ boot:
         lda #0
         ldx #ZC_N
 @zero:  sta ZPX_WRAP,x             ; zero page $00-$EF (zp,x wraps)
+        sta ZC_N-1,x               ; and $F0-$FF (X = 1..16; the rest wrap onto $00-$DF again)
         sta IRQ1V-ZC_N-1,x         ; low RAM $0114-$0203, up to IRQ1V (take_over's):
         dex                        ;  the low BSS and the stack above $0113 (nothing
         bne @zero                  ;  is on it yet)
         .assert __TILBSS_RUN__ + __TILBSS_SIZE__ <= TILES + (TOFF+1)*TILEBYTES, error, "bank 6's code and variables run into the first tile: raise TOFF (the game's packer)"
-        ldy #$FF-ZC_N              ; (A = 0) and zero page $F0-$FF
-:       sta ZC_N,y
-        dey
-        bpl :-
         .assert __LOWCODE_SIZE__ < 256, error, "the low-RAM image is copied a byte at a time"
 @lc:    lda __LOWCODE_LOAD__,x     ; (X = 0) the low-RAM image, exactly its length
         sta __LOWCODE_RUN__,x
