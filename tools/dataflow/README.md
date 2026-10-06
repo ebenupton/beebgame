@@ -215,7 +215,9 @@ memory operand's range; `ty=` the object types possible (when not all); `never` 
 `in:` / `out:` the liveness (dataflow.py's).  summary.md lists the per-type record table,
 the assumptions made (unbounded pointer stores, indexes clamped to their arrays, the
 current-record pointer taken to stay in the records, code analysis.py calls self-modified
-but analysed as written), unresolved exits and what was not reached.
+but analysed as written), unresolved exits and what was not reached.  A run stops after 3,000,000 steps
+(`RANGES_BUDGET` sets another number); one that stops is not a fixpoint, and summary.md and
+every annotated file then say the annotations are NOT sound.
 
 ## Mechanical finds (patterns.py)
 `reload_via_test` (a load used only for its flags while A holds a value that is reloaded
