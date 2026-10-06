@@ -18,9 +18,8 @@
 ; Entry: LDPROG+0, ld_entry -- X = a level 0..15 (returns to load_level_b's
 ; caller) or an image load (defs.inc LDOP_: goes on to the game's hook).
 ; Options: BAKEITEM0 (the game's packer defines it: items made here from the
-; level's tiles and an overlay, bake); SPRXKEEP (the Master without GAMEHAZEL
-; keeps SPRX in HAZEL and ANDY across loads); GAMEHAZEL (the game's code in
-; HAZEL: cpu.inc); TILEMIRROR (mirrored full tiles, cpu.inc: the Model B's
+; level's tiles and an overlay, bake); SPRXKEEP (the Master keeps SPRX in
+; HAZEL and ANDY across loads); TILEMIRROR (mirrored full tiles, cpu.inc: the Model B's
 ; gather reads MIRTAB, the baker draws them reversed); GAMELDINIT (the game's
 ; level start, its ldgame.s, called at a level load's end: ld_game, below);
 ; UDATA5 (the objects section the game's bytes, copied on to bank 5 to end at
@@ -29,9 +28,6 @@
   .ifndef BHW                      ; cpu.inc's flags, again: it is the game's (its
 BHW = 1                            ;  65C02 spellings and link imports), not this
   .endif                           ;  program's
-  .ifndef GAMEHAZEL
-GAMEHAZEL = 0
-  .endif
   .ifndef TILEMIRROR
 TILEMIRROR = 0
   .endif
@@ -41,8 +37,8 @@ GAMELDINIT = 0
   .ifndef UDATA5
 UDATA5 = 0
   .endif
-; SPRXKEEP: the Master (without GAMEHAZEL) keeps SPRX in HAZEL and ANDY
-SPRXKEEP = (BHW = 0) && (GAMEHAZEL = 0)
+; SPRXKEEP: the Master keeps SPRX in HAZEL and ANDY (blessed placement)
+SPRXKEEP = (BHW = 0)
         .include "hw.inc"          ; the chips: ROMSEL, ACCCON, VIA_IFR; the opcodes
         .include "defs_ld.inc"     ; the game's addresses and constants (build.sh)
         .include "files.inc"       ; the disc's sector table (mkdfs.py)
@@ -84,7 +80,7 @@ SPRX_PAGES = (SPRX_LEN + 255) / 256
   .ifdef BAKEITEM0
 BK_LINES_MAX = 32                  ; a baked column's lines at most (assets.py
   .endif                           ;  asserts it)
-  .if BHW                          ; each machine's own bank 7 images (IMG7B, IMG7M)
+  .if BHW                          ; CPU spelling and the placements -- each machine's own bank 7 images (IMG7B, IMG7M)
 F_IMG7_SEC = F_IMG7B_SEC
 F_IMG7_N   = F_IMG7B_N
   .else
@@ -798,25 +794,16 @@ lv_load:
   .endif
 
 ; ---------------------------------------------------------------- the helpers
-  .if .not BHW                     ; hardware: shadow RAM, HAZEL and ANDY
+  .if SPRXKEEP                     ; blessed placement: SPRX kept in HAZEL and ANDY
+                                   ;  (the Master's; hardware: its shadow RAM too)
 ; ----------------------------------------------------------------------------
-; main_ram: the CPU on main RAM -- ACCCON X clear (and Y, unless the game's code
-; is in HAZEL: GAMEHAZEL games run with Y set throughout)
+; main_ram: the CPU on main RAM -- ACCCON X and Y clear
 ;   Uses:  A
 ;   Keeps: X Y
 ; Every load starts with it (lv_load, image_load): the game leaves ACCCON X on
-; the buffer it drew last, and the level's file is read into main RAM.  Without
-; GAMEHAZEL it is unkeep's tail, below.
+; the buffer it drew last, and the level's file is read into main RAM.  It is
+; unkeep's tail, below.
 ; ----------------------------------------------------------------------------
-    .if GAMEHAZEL
-main_ram:
-        lda ACCCON
-        and #<~ACC_X
-        sta ACCCON
-        rts
-    .endif
-  .endif
-  .if SPRXKEEP                     ; placement: SPRX kept in HAZEL and ANDY
 ; ----------------------------------------------------------------------------
 ; unkeep: SPRX's residency on the Master -- the stage (shadow RAM, $3000) to
 ; HAZEL ($C000, ACCCON Y) and ANDY ($8000, ROMSEL bit 7), or back
@@ -846,7 +833,7 @@ unkeep: php                        ; C, for kpart
         lda PB_LVL                 ; bank 7 back, ANDY out
         jsr pgbank
         plp
-; ---- main_ram: the box above (SPRXKEEP: GAMEHAZEL = 0; every load's start)
+; ---- main_ram: the box above (every load's start)
 main_ram:
         lda ACCCON
         and #<~(ACC_X|ACC_Y)
@@ -1755,8 +1742,7 @@ img_tab:    .incbin "img_tab.bin"
 ;          tail) in bank 7, the objects at LV_OBJS (main RAM), the map in bank 5;
 ;          bank 7 paged and its write bank (stores to bank 7 land on either
 ;          machine and on a Model B's write-select board); the Master: ACCCON X
-;          clear, Y as the game runs (GAMEHAZEL: set, so HAZEL's variables are
-;          in reach); the stage is not (the Master cleared it)
+;          and Y clear; the stage is not (the Master cleared it)
 ;   Out:   bank 7 paged and its write bank, as on entry (bcopy and pgbank leave
 ;          it so: another bank is paged through them, never by hand)
 ;   Uses:  A X Y; this program's zero page (LDZP: src dst cnt ...) and its

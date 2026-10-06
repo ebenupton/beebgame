@@ -58,7 +58,7 @@
 ;             restart
 ;   KENDWAIT  the Model B's two-line P2 step: the same loop before its palette
 ;             kill
-  .if BHW
+  .if BHW                          ; hardware: the CRTC timing
 BARLEAD  = 0
 BARLATE  = 0
 STEPLATE = 0
@@ -91,7 +91,7 @@ KENDWAIT = 4
 ; holds instead; 18 - 22 - 4 + 2 is the old account (the stub before page_logic
 ; was inlined, less the inlining, less two write-bank stores, plus the cld).  On
 ; the Master it is -BARLATE: the bar's step fires later.
-  .if BHW
+  .if BHW                          ; hardware: the CRTC timing
 STUBLAT  = 18 - 22 - 4 + 2
   .else
 STUBLAT  = -BARLATE
@@ -641,7 +641,7 @@ calc_ring:
         lda wcy
   .endif
         ringmod7
-  .if BHW && RINGARITH
+  .if BHW && RINGARITH             ; hardware: the ring
         sta wrow                   ; the window's top row's slot (ringwin, draw_rect)
   .endif
         tax
@@ -978,7 +978,7 @@ irq_handler:
         ; ---- the tune: its player, music_tick, is in the menus' image of bank
         ;      7 (menus.s), and mus_on is set only while that image is in
 @tune:  lda mus_on
-  .if BHW .or GAMESOUND .or SOUND6
+  .if BHW .or GAMESOUND .or SOUND6 ; blessed placement
         sta mus_tick               ; (the Model B's stub reads it: low.s)
   .endif
   .if BHW                          ; blessed placement: the stub steps the tune
@@ -1223,7 +1223,7 @@ blank_palette:
 ; mul_rowlo/hi, x 8, the ring's base, folded at its end.
 ; ----------------------------------------------------------------------------
 ring_addr7:
-  .if BHW && RINGARITH
+  .if BHW && RINGARITH             ; hardware: the ring
         ringwin                    ; (the row is in the window: every caller's is)
   .else
         ringmod7

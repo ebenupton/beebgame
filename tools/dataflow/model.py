@@ -157,8 +157,6 @@ def bank_of(oname):
     m = re.match(r'b(\d)', b)
     if m:
         return 'bank' + m.group(1)
-    if b in ('hazel.bin',):
-        return 'hazel'
     return b
 
 

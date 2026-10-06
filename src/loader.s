@@ -85,14 +85,7 @@ start:
         bcc @modelb
         lda #'M'
         sta fname_m
-  .if MASTERONLY
-        bne @master                ; (always: 'M')
 @modelb:
-        jmp no_master              ; a game built for the Master alone (build.sh)
-@master:
-  .else
-@modelb:
-  .endif
         lda MOS_ROMSEL
         sta old_bank
         jsr find_ram               ; the four banks into BANKMAP -- or C = 1, fewer
@@ -227,18 +220,6 @@ start:
 @mine:  lda (ztab),y
         and #PIECE_BANKMASK
 @sel:
-  .if GAMEHAZEL
-        php                        ; (the flags, for the beq below)
-        cmp #PIECE_HAZEL           ; HAZEL: ACCCON Y, left set for the game
-        bne @nothazel
-        plp
-        lda ACCCON
-        ora #ACC_Y
-        sta ACCCON
-        bne @cp                    ; (always: ACC_Y is in A)
-@nothazel:
-        plp
-  .endif
         beq @cp                    ; a bank of 0 would page nothing (none is: build.sh
         jsr sel_bank               ;  files every piece under a bank); page it, and
 @cp:    lda plen                   ;  its write bank on a board.  (Y = 0 from the
@@ -595,21 +576,6 @@ no_ram:
         print msg2-NSOCK           ; (X = NSOCK from the loop)
         rts
 
-  .if MASTERONLY
-; ----------------------------------------------------------------------------
-; no_master: a game built for the Master alone, on a Model B -- say so, back to
-; the MOS
-;   Out:   rts to the MOS
-;   Uses:  A X
-; ----------------------------------------------------------------------------
-no_master:
-        ldx #0
-        print msg1
-        ldx #0
-        print msgm
-        rts
-msgm:       .byte " needs a BBC Master 128", 13, 10, 0
-  .endif
 
 ; ---------------------------------------------------------------- the data
 old_bank:   .byte 0                ; ROMSEL at entry (the MOS's copy), paged again after
@@ -646,9 +612,6 @@ block:      .word fname
 ; no_ram's by board (board_msg indexes msgs), the found list's head and tail
 msg1:       .byte 13, 10
             .include "gamename.inc"
-  .if MASTERONLY
-            .byte 0                ; (no_master prints to here and goes on with its
-  .endif                           ;  own words; no_ram never runs on a Master)
             .byte " needs 64K of sideways RAM: four", 13, 10
             .byte "16K banks in any sockets, writable", 13, 10, 0
 board_msg:  .byte msg_std-msgs, msg_wat-msgs, msg_sol-msgs

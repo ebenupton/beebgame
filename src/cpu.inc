@@ -47,12 +47,6 @@
 BHW = 1
   .endif
 ; The build's options (tools/build.sh says what each does), 0 unless it sets them.
-  .ifndef MASTERONLY
-MASTERONLY = 0                     ; the Master alone: no Model B build
-  .endif
-  .ifndef GAMEHAZEL
-GAMEHAZEL = 0                      ; the game's code in HAZEL too (the Master alone)
-  .endif
   .ifndef GAMESOUND
 GAMESOUND = 0                      ; the game's own sound player (hook_sound)
   .endif
@@ -104,9 +98,6 @@ GAMELDINIT = 0                     ; the game's level start in the load-time pro
   .ifndef UDATA5
 UDATA5 = 0                         ; the level's objects section is the game's bytes, copied
   .endif                           ;  on to bank 5 to end at LV_MAP (lv_udata: their start)
-  .if GAMEHAZEL && (BHW <> 0 || MASTERONLY = 0)
-        .error "GAMEHAZEL is the Master's alone: build with MASTERONLY=1"
-  .endif
 
 ; ---------------------------------------------------------------- PLACEH
 ; PLACEH mseg, bseg: the segment by hardware for the interrupt handler's own work
@@ -206,7 +197,7 @@ UDATA5 = 0                         ; the level's objects section is the game's b
 WR_INX = $FE                       ; a record's kind for "the bank in X"
 WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches it
 .macro WRREC kind, b, name
-  .if ::BHW
+  .if ::BHW                        ; hardware: the write-select boards
         .ident(.concat("@wr_", name)):
         .pushseg
         .segment "WRFIX"
@@ -222,7 +213,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
   .endif
 .endmacro
 .macro wrsel n, b, tag
-  .if ::BHW
+  .if ::BHW                        ; hardware: the write-select boards
         sta ROMSEL
     .if .blank(tag)
         WRREC n, b, .sprintf("s_%d", n)
@@ -232,7 +223,8 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
   .endif
 .endmacro
 .macro wrback b, tag               ; A = bank 7's (Solidisk's store writes A), then a
-  .if ::BHW                        ;  store the boot loader makes the board's
+                                   ;  store the boot loader makes the board's
+  .if ::BHW                        ; hardware: the write-select boards
     .if .blank(tag)
         bankimm lda, ::BANK_LVL, b, ::WRBACK_TAG
         sta ::WRSEL_WATFORD
@@ -254,10 +246,10 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 .macro SAMEPAGE from, to
         .assert >(from) = >(to), warning, "a hot branch crosses a page (+1 cycle when taken)"
 .endmacro
-.macro PAD b, m
-  .if ::NOPADS                     ; (NOPADS: no placement pads -- they buy cycles, not
-  .elseif ::BHW                    ;  correctness; SAMEPAGE says what each then costs)
-        .res b                     ; CPU spelling: the code lengths differ
+.macro PAD b, m                    ; (NOPADS: no placement pads -- they buy cycles, not
+  .if ::NOPADS                     ;  correctness; SAMEPAGE says what each then costs)
+  .elseif ::BHW                    ; CPU spelling: the code lengths differ
+        .res b
   .else
         .res m
   .endif
@@ -268,7 +260,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 ; "kept" means the expansion leaves the flag as it found it.  The Master's
 ; definitions are one instruction each, so the notes sit with the Model B's.
 ; Every .if here is CPU spelling.
-  .if .not ::BHW
+  .if .not ::BHW                   ; CPU spelling
         .setcpu "65C02"
   .else
         .setcpu "6502"
@@ -277,7 +269,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 ; stz m [,x]: m = 0, A DEAD at the site.
 ;   Master   stz m  / stz m,x        N, Z, C kept
 ;   Model B  lda #0 / sta m[,x]      N = 0, Z = 1; C kept; A = 0
-  .if ::BHW
+  .if ::BHW                        ; CPU spelling
 .macro stz arg, ix
         lda #0
   .if .paramcount = 2
@@ -295,7 +287,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 ; zero m, ...: the same with A DEAD: the Model B loads the zero once.
 ;   Master   stz each                N, Z, C kept
 ;   Model B  lda #0 / sta each       N = 0, Z = 1; C kept; A = 0
-  .if ::BHW
+  .if ::BHW                        ; CPU spelling
 .macro sta0 a1, a2, a3, a4, a5, a6, a7, a8
         sta a1
   .ifnblank a2
@@ -321,7 +313,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 ; stzx m: m = 0 with A live and X DEAD.
 ;   Master   stz m                   N, Z, C kept
 ;   Model B  ldx #0 / stx m          N = 0, Z = 1; C kept; X = 0
-  .if ::BHW
+  .if ::BHW                        ; CPU spelling
 .macro stzx m
         ldx #0
         stx m
@@ -337,7 +329,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 ; them from the 0).
 ;   Master   stz m                   N, Z, C kept
 ;   Model B  dec m                   N = 0, Z = 1; C kept
-  .if ::BHW
+  .if ::BHW                        ; CPU spelling
 .macro stz01 m
         dec m
 .endmacro
@@ -355,7 +347,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 ; incax: A + 1 with X DEAD; the carry survives on both.
 ;   Master   inc a                   N, Z from A; C, V kept
 ;   Model B  tax / inx / txa         N, Z from A; C, V kept; X = A
-  .if ::BHW
+  .if ::BHW                        ; CPU spelling
 .macro inca
         clc
         adc #1
@@ -395,7 +387,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 ; ldy1: Y = 1 where Y is 0.
 ;   Master   ldy #1                  N = 0, Z = 0
 ;   Model B  iny                     N = 0, Z = 0
-  .if ::BHW
+  .if ::BHW                        ; CPU spelling
 .macro ldaz zp
         ldy #0
         lda (zp),y
@@ -444,7 +436,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 ;                                    Z only); A kept
 ;   Model B  sta mtmp / and #v / php / lda mtmp / plp
 ;                                    Z from A & v, N from it too; C, V kept; A kept
-  .if ::BHW
+  .if ::BHW                        ; CPU spelling
 .macro bitimm v
         sta mtmp
         and #v
@@ -460,7 +452,7 @@ WRBACK_TAG = 99                    ; wrback's own site tag: no caller's reaches 
 
 ; bra t: an unconditional branch.  The Master's instruction (2 bytes, 3 cycles); the
 ; Model B has none, so its jmp (3 bytes, 3 cycles).  No flags on either.
-  .if ::BHW
+  .if ::BHW                        ; CPU spelling
 .macro bra t
         jmp t
 .endmacro

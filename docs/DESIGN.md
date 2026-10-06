@@ -78,7 +78,7 @@ on both.  Two tools enforce it in the build:
   any `align`; the Master's shorter 65C02 code then leaves a gap rather than moving what
   follows it.  The segments it leaves free are `BOOT`, `BOOTHDR`, `BANKFIX`, `WRFIX`,
   `MRAMCODE`, `MRAMBSS`, `D8271N`, `D1770N` (its `FREE` set).  `build.sh` links the Master
-  with the pinned config unless `MASTERONLY`.
+  with the pinned config.
 - `tools/layoutcheck.py` compares the two `game.dbg`s at the end of the build: every segment
   both have must start at one address (start-up segments excepted), every data label in a
   non-code segment must sit at one address, and zero page has no exception at all.  Exit 1
@@ -200,7 +200,7 @@ both machines (asserted against the cfg's `NMI8271`/`NMI1770`/`LDP` areas).
 
 ### The staged sprites on the Master
 
-With `SPRXKEEP` (`BHW = 0` and not `GAMEHAZEL`) the Master reads the SPRX file once and keeps
+With `SPRXKEEP` (`BHW = 0`) the Master reads the SPRX file once and keeps
 it in HAZEL ($C000, 8K, ACCCON Y) and ANDY ($8000 with ROMSEL bit 7, 4K); every later load
 refills the stage from them with no disc read (`ldprog.s unkeep`, `kpart`).  `SPRX_PAGES <=
 HAZEL_PAGES + ANDY_PAGES` is asserted (12K).  `low.s sprx_ok` says the copy exists.
@@ -896,8 +896,8 @@ is in (the harness reads it).
 10. (Master) `LV_PAGE0` to $0400, and both screens cleared of what the load staged there.
 11. (`GAMELDINIT`) the game's `ld_game` (its `ldgame.s`, segment `LDGAME` of LDPROG): its level
     start, run here from main RAM rather than from bank 7 after `load_level_b` returns.  Bank 7
-    is paged and write-selected (`bcopy`'s exit), interrupts are off, the Master's ACCCON is the
-    game's (HAZEL in with `GAMEHAZEL`); it reads the game's names from `gamesyms.inc` (`build.sh`:
+    is paged and write-selected (`bcopy`'s exit), interrupts are off, the Master's ACCCON X and Y
+    clear; it reads the game's names from `gamesyms.inc` (`build.sh`:
     the game's link's global labels and constants, in the scope `ldg`) and the loader's with `::`.
 12. `ld_resume`: `ld_open = 0`, `load_req = LDR_RESUME`, stale flags cleared, `cli`.
 
@@ -925,8 +925,8 @@ entry is `PLACE_LEN` = 6 bytes (item, bank, address, extra) ending in `PL_END` (
 Section `mir` is `MIRTAB` under `TILEMIRROR` (`nmir` bytes: for each mirrored id, `mir0 + i`,
 the id of the full tile it draws reversed; `mir0 = half0 + nhalf`), else empty.  `page0` is `PAGE0_LEN` =
 512 bytes, sector aligned and last, so the Model B's loader reads the file short of it.
-Limits: without `page0` a file must fit the Model B's stage (`STAGE_LVL_B`, 9K) unless
-`MASTERONLY`, and whole the Master's (`STAGE_M`, 20K).  `levelfile.py check <assets.inc>
+Limits: without `page0` a file must fit the Model B's stage (`STAGE_LVL_B`, 9K), and whole
+the Master's (`STAGE_M`, 20K).  `levelfile.py check <assets.inc>
 <level>...` verifies every invariant the loader relies on; `build.sh` runs it on all 16.
 
 
@@ -973,9 +973,10 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 (run once per machine with `TARGET` and `BD` set), `GAME_MUSIC` (once, first), `DISC_TITLE`,
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
-`MASTERONLY GAMEHAZEL GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
+`GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
 UDATA5 ALLLEVELS`, and `MAXSPR=n`.
-`GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` on the Model B needs `RINGARITH` (`cpu.inc` errors).
+`TALLMAP` on the Model B needs `RINGARITH`; `SOUND6` excludes `GAMESOUND` (`cpu.inc` errors).
+Every build is both machines'.
 `SKIP_ASSETS=1` skips the music and asset steps.
 
 The passes, in order:

@@ -58,7 +58,7 @@ Notation: registers/flags as `AXYNZCV` (`-` = none).  Known values: `A=$00`,
 ## Input
 
 `build/master/game.dbg` (ld65 `--dbgfile`) and the output images its segments name
-(`hazel.bin`, `b7.bin`, `MENU`, ...).  An instruction starts exactly where a span
+(`b7.bin`, `b6x.bin`, `MENU`, ...).  An instruction starts exactly where a span
 whose innermost source line is a mnemonic starts (macro bodies are type-2 lines,
 so `mov16`, `stz`, `bge16i` ... are expanded); every other byte is data.  So data
 embedded in code, inline operands after a JSR and `.byte $2C` skips are never

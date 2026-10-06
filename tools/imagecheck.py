@@ -7,7 +7,7 @@ across them runs or reads the other image's bytes.  What both use belongs where 
 reach it -- the kernel (KRN*), GAMEHI, low RAM, zero page, the banks -- or is assembled
 into each.  Reads the build's ld65 debug file (assembled with -g: every symbol's
 referencing lines, every line's spans, every span's segment); prints each crossing and
-exits 1 on any.  HAZEL (GAMEHAZEL) is resident, so it is neither.
+exits 1 on any.
 
 Usage:
     python3 tools/imagecheck.py [game.dbg=build/master/game.dbg]

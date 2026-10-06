@@ -166,7 +166,6 @@ WR_LEN     = 4
 PIECE_8271 = $80                   ; the piece is the 8271's driver (the Model B)
 PIECE_1770 = $40                   ;  or the 1770's: only the machine's is copied
 PIECE_BANKMASK = $3F
-PIECE_HAZEL = 1                    ; the piece goes to HAZEL (GAMEHAZEL: ACCCON Y)
 
 ; ---------------------------------------------------------------- the loader
 NMIPAGE    = $0D00                 ; the disc transfer routine, while a load runs

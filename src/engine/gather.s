@@ -187,7 +187,7 @@ MIRBASE := * + 1                   ; (the loader's: MIRTAB - mir0)
         rts
     .endif
   .endif
-  .if .not BHW                     ; (each Model B path ends in its own rts)
+  .if .not BHW                     ; blessed placement (each Model B path ends in its own rts)
         rts
   .endif
 
@@ -210,7 +210,7 @@ MIRTAB:   .res MAXMIR
   .endif
 
 ; ---- bank 5's code (with MAP5BSS, its last) against where its sprites start
-  .if BHW                          ; (the Model B pins it: the Master's code is shorter)
+  .if BHW                          ; CPU spelling (the Model B pins it: the Master's code is shorter)
         .assert * = B5_CODE_END, error, "bank 5's code must end at B5_CODE_END (assets.inc)"
   .else
         .assert * <= B5_CODE_END, error, "bank 5's code runs past B5_CODE_END (assets.inc)"

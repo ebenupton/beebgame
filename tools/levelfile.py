@@ -86,8 +86,6 @@ OBJ_BYTES, OBJ_MAX = 6, 149
 STAGE_LVL_B = 0x7C00 - 0x5800
 # the Master's stage, its STAGE_LVL to the banks (the whole file)
 STAGE_M = 0x8000 - 0x3000
-# the build's: no Model B, so no limit of its
-MASTERONLY = os.environ.get('MASTERONLY') == '1'
 PAGE0_LEN = 512
 # UDATA5 (the build option): the objects section is the game's bytes, up to the objects' room
 UDATA5 = os.environ.get('UDATA5') == '1'
@@ -273,7 +271,7 @@ def encode(lv):
         data += body[name]
     out = bytes(table + data)
     assert len(out) % 256 == 0
-    assert len(out) - PAGE0_LEN <= STAGE_LVL_B or MASTERONLY, ('too big for the Model B\'s stage', len(out))
+    assert len(out) - PAGE0_LEN <= STAGE_LVL_B, ('too big for the Model B\'s stage', len(out))
     assert len(out) <= STAGE_M, ('too big for the Master\'s stage', len(out))
     return out
 
@@ -324,7 +322,7 @@ def check(data, boxid0, boxn, res_n=0):
     offs = [data[2 * i] | data[2 * i + 1] << 8 for i in range(len(SECTIONS))]
     assert offs[0] == 2 * len(SECTIONS) and offs == sorted(offs), 'the section table'
     assert offs[SEC['page0']] % 256 == 0 and len(data) - offs[SEC['page0']] == PAGE0_LEN, 'LV_PAGE0'
-    assert (len(data) - PAGE0_LEN <= STAGE_LVL_B or MASTERONLY) and len(data) <= STAGE_M, 'too big for a stage'
+    assert len(data) - PAGE0_LEN <= STAGE_LVL_B and len(data) <= STAGE_M, 'too big for a stage'
     sec = decode(data, boxid0, boxn, res_n)
     f = sec['fields']
     if UDATA5:
@@ -354,7 +352,7 @@ if __name__ == '__main__':
             sys.exit('levelfile: DIRSPLIT=1 needs the game\'s RES_N (assets.inc): its packer numbers the resident ids first')
         res_n = int(consts['RES_N']) if os.environ.get('DIRSPLIT') == '1' else 0
         # TILEMIRROR: the Model B's MIRTAB holds the game's MAXMIR (assets.inc)
-        maxmir = int(consts['MAXMIR']) if os.environ.get('TILEMIRROR') == '1' and not MASTERONLY else 255
+        maxmir = int(consts['MAXMIR']) if os.environ.get('TILEMIRROR') == '1' else 255
         for fn in sys.argv[3:]:
             try:
                 sec = check(open(fn, 'rb').read(), boxid0, boxn, res_n)

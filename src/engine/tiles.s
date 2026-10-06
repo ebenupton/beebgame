@@ -94,7 +94,7 @@ KHI_BIAS   = 2
 ; The alternative, the two loads alternating down a dey chain, is 8 x (3 + 6) +
 ; 8 x 2 = 88 a char.
 .macro PCHAR c
-  .if c <> 0 || ::BHW
+  .if c <> 0 || ::BHW              ; CPU spelling
         lda tp
         ldy #CHARBYTES*c+6
         sta (sp),y
@@ -183,13 +183,13 @@ ringmod_tab:
 t6_svs:                            ;  hold: draw_rect's placement is its address mod
         .include "engine/scrollv.s"  ;  256, so the pad is the old one less this
 t6_sve:                            ;  routine's length, mod 256 (pads.inc's values)
-    .if BHW && RINGARITH           ; (no ring tables before it: draw_rect's chains
+    .if BHW && RINGARITH           ; hardware: the ring (no ring tables before it: draw_rect's chains
       .if (t6_sve - t6_svs) > ::PADB_T6  ;  fit from offset 168 to 204, 212 to 220)
         .assert (t6_sve - t6_svs) <= 204, error, "B6PACK: scroll_validate pushes draw_rect past its placement"
       .else
         .res ::PADB_T6 - (t6_sve - t6_svs)
       .endif
-    .elseif BHW                    ; (the Model B's chains must lie in a page: kept)
+    .elseif BHW                    ; hardware: the ring (the Model B's chains must lie in a page: kept)
         .res (::PADB_T6 - (t6_sve - t6_svs)) & $FF
     .elseif .not ::NOPADS
         .res (::PADM_T6 - (t6_sve - t6_svs)) & $FF
@@ -331,7 +331,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's base page
         asl
         asl
         clc
-  .if BHW && RINGARITH
+  .if BHW && RINGARITH             ; hardware: the ring
         adc ptr                    ; + the slot's address
   .else
         adc ringlo,x               ; + the slot's address
@@ -341,7 +341,7 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's base page
         sta rc_sp                  ;  sp's low byte; the Model B's fold moves it)
   .endif
         lda sp+1
-  .if BHW && RINGARITH
+  .if BHW && RINGARITH             ; hardware: the ring
         adc ptr+1
   .else
     .if BHW                        ; hardware: the ring

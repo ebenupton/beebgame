@@ -113,7 +113,7 @@
         sta (sp)
         ldy #1
   .else
-    .if (k <> 0) .or mirror .or (.not ::BHW)
+    .if (k <> 0) .or mirror .or (.not ::BHW); CPU spelling
         ldy #k                     ; (Model B k = 0 unmirrored: Y = 0 from the ldaz)
     .endif
         and (sp),y                 ; A is still the mask
@@ -158,7 +158,7 @@ tail:   ldy #k+1                   ; (the masked line joins here, its byte in A)
         sta (sp)
         ldy #1
     .else
-      .if (k <> 0) .or (.not ::BHW)
+      .if (k <> 0) .or (.not ::BHW); CPU spelling
         ldy #k                     ; (Model B k = 0: Y = 0 from the ldaz)
       .endif
         lda L0TAB,x

@@ -44,7 +44,7 @@ with `GAMESOUND`); see `docs/GUIDE.md`.
 Start with `docs/GUIDE.md`.  The game's own `build.sh` sets `GAME_MAIN`, `GAME_SRC`,
 `GAME_ASSETS`, `GAME_MUSIC`, `DISC_TITLE`, `DISC_OUT` and `GAME_NAME` and runs
 `sh beebgame/tools/build.sh`, which writes `build/modelb/`, `build/master/` and the disc.
-Options, as environment variables: `MASTERONLY GAMEHAZEL GAMESOUND SOUND6 DRAWFLAGS TALLMAP
+Options, as environment variables: `GAMESOUND SOUND6 DRAWFLAGS TALLMAP
 TIGHTBSS ALLLEVELS` (each `=1`) and `MAXSPR=n`; `SKIP_ASSETS=1` skips the asset steps.
 `tools/build.sh`'s header says what each does.  Requirements: cc65 (`ca65`, `ld65`,
 `od65`) and Python 3; the tests need Node and jsbeeb in the npx cache.

@@ -83,7 +83,7 @@ n2:     tax
 n1:
 .endmacro
 .macro ringmod7
-  .if ::BHW                        ; Model B: by repeated subtraction
+  .if ::BHW                        ; hardware: the ring (Model B: by repeated subtraction)
 :       cmp #RINGROWS
         bcc :+
         sbc #RINGROWS              ; C = 1 from the cmp, and stays 1
@@ -106,7 +106,7 @@ n1:
 ; its own whatever the caller was holding.
 ; ----------------------------------------------------------------------------
 .macro ringtest cold
-  .if ::BHW                        ; Model B: the buffer's ring end
+  .if ::BHW                        ; hardware: the ring (Model B: the buffer's ring end)
         cmp ringehi
         bcs cold
   .else                            ; Master
@@ -129,7 +129,7 @@ n1:
 ; the sbc takes >RINGBYTES exactly.
 ; ----------------------------------------------------------------------------
 .macro ringup p
-  .if ::BHW                        ; Model B
+  .if ::BHW                        ; hardware: the ring (Model B)
         cmp ringehi                ; the buffer's ring end, high byte (select_backbuf)
         bcc :+
         sbc #>RINGBYTES            ; C = 1 from the compare, and stays 1
@@ -165,7 +165,7 @@ n1:
 ; base, the low byte unchanged (<RINGBYTES = 0).
 ; ----------------------------------------------------------------------------
 .macro pagestep p, back
-  .if ::BHW                        ; Model B
+  .if ::BHW                        ; hardware: the ring (Model B)
         inc p+1
         lda p+1
         cmp ringehi
@@ -249,11 +249,11 @@ RUNXS = 2
         cmp cnt
         bcc :+
         lda cnt
-  .if BHW
+  .if BHW                          ; CPU spelling
         clc
   .endif
 :
-  .if .not BHW
+  .if .not BHW                     ; CPU spelling
         asl                        ; n <= 4: C = 0
   .endif
         tax

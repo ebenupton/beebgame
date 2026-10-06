@@ -42,7 +42,6 @@
         OUTC PIECE_8271
         OUTC PIECE_1770
         OUTC PIECE_BANKMASK
-        OUTC PIECE_HAZEL
         OUTC WR_INX
         OUTC TILES
         OUTC IMGTAB_LEN

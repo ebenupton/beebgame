@@ -25,13 +25,6 @@
 #                game's name, for the boot loader's messages (DISC_TITLE by default)
 #   SKIP_ASSETS=1 skips GAME_MUSIC and GAME_ASSETS
 # The options, passed to the assembler as -D flags (cpu.inc defaults each to 0):
-#   MASTERONLY=1 builds the Master alone: no Model B assembly, link or files, the Master
-#                linked unpinned, its own layout the level files' (a game too big for the
-#                Model B; the boot loader says so on one)
-#   GAMEHAZEL=1  the game's own code in HAZEL (segments HAZCODE, HAZDATA, HAZBSS), a piece of
-#                BANKS the boot loader copies once; the Master only, and SPRX is then staged
-#                from the disc at every level load (ldprog.s SPRXKEEP: no copy is kept in
-#                HAZEL and ANDY)
 #   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound effects
 #                (kernel.s)
 #   SOUND6=1     the engine's sound effects player (engine/sound6.s) in place of sound_tick:
@@ -100,14 +93,13 @@ set -e
 mkdir -p build
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in MASTERONLY GAMEHAZEL GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5; do
+for o in GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o
 done
 [ -z "$MAXSPR" ] || OPTDEFS="$OPTDEFS -D MAXSPR=$MAXSPR"
-[ "$GAMEHAZEL" = 0 ] || [ "$MASTERONLY" = 1 ] || { echo "GAMEHAZEL=1 needs MASTERONLY=1: the Model B has no HAZEL"; exit 1; }
-if [ "$MASTERONLY" = 1 ]; then TARGETS=master; else TARGETS="modelb master"; fi
+TARGETS="modelb master"
 # settarget: $1 is modelb or master; sets TARGET, BD (its build directory), CPU, DEFS and CFG
 # (one linker map for both: the Master's own areas are empty on the Model B)
 settarget() {
@@ -154,24 +146,18 @@ done
 # what both machines read goes on the disc once (the Model B's copy): the packs must agree
 # (the files the engine's loader reads, by these names: ldprog.s)
 B=build/modelb M=build/master
-if [ "$MASTERONLY" = 1 ]; then REF=$M; else REF=$B
+REF=$B
 for f in SPRX SPRC BAR L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15; do
     cmp -s build/modelb/$f build/master/$f || { echo "build/modelb/$f and build/master/$f differ: the level layout is not one"; exit 1; }
 done
-fi
 python3 $BG/tools/levelfile.py check $REF/assets.inc $(for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do echo $REF/L$l; done)
 
 # the disc's file list, in disc order: the boot files, each machine's pieces, the shared
 # files together, the levels after them.  A game's start reads LDPROG, the game's image
 # (IMG7) and BAR in turn, so they are neighbours: the Model B's in that order, the Master's
 # around them
-if [ "$MASTERONLY" = 1 ]; then
-DISC="!BOOT:build/BOOT LOADER:build/LOADER BANKSM:$M/BANKS"
-DISC="$DISC IMG7M:$M/IMG7 LDPROGM:$M/LDPROG BAR:$REF/BAR"
-else
 DISC="!BOOT:build/BOOT LOADER:build/LOADER BANKSB:$B/BANKS BANKSM:$M/BANKS"
 DISC="$DISC IMG7M:$M/IMG7 LDPROGM:$M/LDPROG LDPROGB:$B/LDPROG IMG7B:$B/IMG7 BAR:$REF/BAR"
-fi
 DISC="$DISC SPRX:$REF/SPRX SPRC:$REF/SPRC TILES0:build/TILES0 TILES1:build/TILES1"
 for l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do DISC="$DISC L$l:$REF/L$l"; done
 DISC="$DISC TILES2:build/TILES2"
@@ -184,7 +170,7 @@ printf '*RUN LOADER\r' > build/BOOT
 for pass in 1 2 3; do
     [ $pass = 3 ] && cp $REF/files.inc $REF/files.prev
     python3 $BG/tools/mkdfs.py table $REF/files.inc $DISC
-    [ "$MASTERONLY" = 1 ] || cp $B/files.inc $M/files.inc
+    cp $B/files.inc $M/files.inc
     [ $pass = 3 ] && { cmp -s $REF/files.inc $REF/files.prev || { echo "files.inc did not settle"; exit 1; }; break; }
     for t in $TARGETS; do
         settarget $t
@@ -194,8 +180,8 @@ for pass in 1 2 3; do
         # as the larger driver: disc.s, the boot loader copies in the machine's one); then the
         # game's image, ending at the slot: the game's data and code, then the engine's.  From the Model B's sizes
         # (od65: the object's segments, before any link); the Master's, pinned to the Model
-        # B's, fall short (MASTERONLY: the Master's own, there is no Model B).
-        if [ $TARGET = modelb ] || [ "$MASTERONLY" = 1 ]; then
+        # B's, fall short.
+        if [ $TARGET = modelb ]; then
             SZ=$(od65 --dump-segsize $BD/main.o)
             # seg: the summed size of the segments matching the regex $1
             seg() { echo "$SZ" | awk -v p="^ +($1):" '$0 ~ p {s += $2} END {print s + 0}'; }
@@ -225,7 +211,7 @@ for pass in 1 2 3; do
         # the Master's segments at the Model B's addresses (linked just before): its shorter
         # 65C02 code leaves gaps, and the data lies alike on both (pincfg.py)
         LCFG=$BD/game.cfg
-        [ $TARGET = master ] && [ "$MASTERONLY" = 0 ] && { python3 $BG/tools/pincfg.py $BD/game.cfg $B/game.dbg > $BD/pinned.cfg; LCFG=$BD/pinned.cfg; }
+        [ $TARGET = master ] && { python3 $BG/tools/pincfg.py $BD/game.cfg $B/game.dbg > $BD/pinned.cfg; LCFG=$BD/pinned.cfg; }
         ld65 -C $LCFG -o $BD/unused.bin $BD/main.o -m $BD/map.txt -Ln $BD/labels.txt --dbgfile $BD/game.dbg
         # what the loaders need from the game: its addresses, as defs_ld.inc; and the bank 7
         # images and their patch lists
@@ -369,9 +355,6 @@ pieces = [(4, lab['__B4X_START__'], 'b4x.bin'), (4, lab['__B4T_START__'], 'b4t.b
 if os.environ.get('TARGET') == 'master':
     # main RAM: the Master's handler, chain, keys, sound
     pieces.append((7, lab['__MRAM_START__'], 'mcode.bin'))
-if os.environ.get('GAMEHAZEL') == '1':
-    # HAZEL (ACCCON Y), last
-    pieces.append((K['PIECE_HAZEL'], lab['__HAZ_START__'], 'hazel.bin'))
 assert K['PIECE_LEN'] == 5 and K['FIX_LEN'] == 3 and K['WR_LEN'] == 4, 'the record sizes written below'
 tab, body, img = bytearray([len(pieces)]), bytearray(), {}
 for bank, addr, fn in pieces:
@@ -412,11 +395,11 @@ EOF
     done
     # the boot loader, one for both machines: the start-up header it writes and the entry it
     # jumps to are at the same addresses on both (init.s)
-    [ "$MASTERONLY" = 1 ] || for n in boot dsk_type dsk_drv DSK_BANKS dsk_board; do
+    for n in boot dsk_type dsk_drv DSK_BANKS dsk_board; do
         [ "$(grep "^$n = " $B/defs_ld.inc)" = "$(grep "^$n = " $M/defs_ld.inc)" ] || { echo "$n differs between the machines"; exit 1; }
     done
     printf '          .byte "%s"\n' "$GAME_NAME" > build/gamename.inc
-    ca65 --cpu 6502 -D MASTERONLY=$MASTERONLY -D GAMEHAZEL=$GAMEHAZEL -I $REF -I build -I $BG/src -o build/loader.o $BG/src/loader.s
+    ca65 --cpu 6502 -I $REF -I build -I $BG/src -o build/loader.o $BG/src/loader.s
     ld65 -C $BG/cfg/loader.cfg -o build/LOADER build/loader.o
 done
 # the boot loader's load and run address (its cfg)
@@ -426,10 +409,6 @@ python3 $BG/tools/mkdfs.py build $DISC_OUT "$DISC_TITLE" \
     $(echo $DISC | tr ' ' '\n' | grep -v '^!BOOT\|^LOADER' | tr '\n' ' ')
 # neither bank 7 image reaches into the other (they are read from the disc over each other)
 for t in $TARGETS; do python3 $BG/tools/imagecheck.py build/$t/game.dbg > /dev/null || { python3 $BG/tools/imagecheck.py build/$t/game.dbg; exit 1; }; done
-if [ "$MASTERONLY" = 1 ]; then
-ls -l $M/BANKS $DISC_OUT
-else
 cmp -s $B/assets.inc $M/assets.inc || { echo "the machines' assets.inc differ"; exit 1; }
 python3 $BG/tools/layoutcheck.py $B $M
 ls -l $B/BANKS $M/BANKS $DISC_OUT
-fi
