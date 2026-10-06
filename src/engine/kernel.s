@@ -156,10 +156,26 @@ SFXTONE  = 2                       ; the tone channel the sound effects use
 ; (lda # 2, sta 4)
 ;   Out:   A = the last byte written
 ; A MODE 1 logical colour is index bits 3 and 1 (PALIDX_*); bits 2 and 0 are
-; don't cares, run through as i .mod 2 and (i / 2) * 4.  The order is the one
-; the Model B's palette kill needs: the colour that can first show on Q's line 0
-; first (defs.s QBLANK).
+; don't cares, run through as i .mod 2 and (i / 2) * 4.  (The palette kill's order
+; is the game's: palkill, above.)
 ; ----------------------------------------------------------------------------
+; palkill: the Model B's palette kill -- the three colours to black, four writes
+; each, in the game's order: PALKILL (its packer's assets.inc), the logical colours
+; first to blacken in bits 1-0, then 3-2, then 5-4.  That is the order they first
+; show along Q's line 0, which runs through the game's bar data (defs.s QBLANK), so
+; it is the game's to say; without one, yellow, magenta, cyan (palfill's).
+  .ifndef PALKILL
+PALKILL = LCOL_YELLOW | (LCOL_MAGENTA << 2) | (LCOL_CYAN << 4)
+  .endif
+        .assert ((PALKILL & 3) <> 0) && ((PALKILL >> 2 & 3) <> 0) && ((PALKILL >> 4 & 3) <> 0) && (PALKILL & 3) <> (PALKILL >> 2 & 3) && (PALKILL & 3) <> (PALKILL >> 4 & 3) && (PALKILL >> 2 & 3) <> (PALKILL >> 4 & 3), error, "PALKILL: the three colours, once each"
+.macro palkill
+        .repeat 3, k
+        .repeat 4, i
+        lda #(((((PALKILL >> (2*k)) & 3) & 2) / 2 * LCOL_IDX_B1 | (((PALKILL >> (2*k)) & 3) & 1) * LCOL_IDX_B0 + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (PCOL_BLACK ^ PAL_INV)
+        sta ULA_PAL
+        .endrepeat
+        .endrepeat
+.endmacro
 .macro palfill cy, cm, cc
         .repeat 4, i
         lda #((PALIDX_YELLOW + i .mod 2 + (i / 2) * 4) << PAL_SHIFT) | (cy ^ PAL_INV)
@@ -787,7 +803,7 @@ irq_handler:
         ; does it (@kend).  The vsync puts the colours back (palon).
         cpx qsect
         bne @shape
-        palfill PCOL_BLACK, PCOL_BLACK, PCOL_BLACK
+        palkill
 @shape:
   .endif
         ; ---- the shape, deadline order (the header)
@@ -1069,7 +1085,7 @@ irq_handler:
 @kend:  ldy #KENDWAIT
 @kwait: dey
         bne @kwait
-        palfill PCOL_BLACK, PCOL_BLACK, PCOL_BLACK
+        palkill
         crtcw R_MAXRAST, SECTAB+SECENT+SE_R9, x
         crtcw R_VTOT, SECTAB+SECENT+SE_R4, x
         crtcw R_VDISP, SECTAB+SECENT+SE_R6, x

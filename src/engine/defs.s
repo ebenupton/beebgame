@@ -123,9 +123,11 @@ BARADDR    = $0300
 ; whatever R6 says, so Q's line 0 shows under the picture.  The Model B has no spare
 ; black line, so Q starts in the bar, at char QBLANK_CHAR: its line 0 is bar row 0's
 ; line 0 from that char to char 79 and then row 1's from char 0 (the bar is one run
-; of memory).  Q's step blacks the palette for it (kernel.s killpal): yellow, then
-; magenta, then cyan, each colour's four writes landing before that colour first
-; shows along the line (test/crtctime.mjs checks the writes' timing).
+; of memory).  Q's step blacks the palette for it (kernel.s palkill), a colour at a
+; time in the order they first show along the line -- the game's bar data decides
+; it, so the game's packer gives it (assets.inc PALKILL; yellow, magenta, cyan
+; without) -- each colour's four writes landing before it first shows
+; (test/crtctime.mjs checks the writes' timing).
 QBLANK_CHAR = 45
 QBLANK     = BARADDR + QBLANK_CHAR*CHARBYTES
   .else                            ; hardware: the Master's display memory

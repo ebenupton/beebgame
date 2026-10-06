@@ -617,6 +617,7 @@ you may add yours the same way):
 | `BOXID0`, `BOXN` | the first box id and the box count | `frame.s`, `banks.s`, `ldprog.s` |
 | `SPRGFL` | define it (= 1) when `sprgeom.inc` carries `sprg_fl`; leave it out and the only flag is `DRAWFLAGS`'s mirror | `frame.s` |
 | `RES_N`, `RESDIR`, `RESDIR_BANK` | `DIRSPLIT` only: the resident ids (`0` .. `RES_N`-1, images all), and their directory's address in sprite bank `RESDIR_BANK` (4 or 5), inside `SPRC` | `banks.s`, `lowram.s`, `ldprog.s` (through `ldconst.s`), `levelfile.py check` |
+| `PALKILL` | optional: the Model B's palette kill's order, the logical colours (1 cyan, 2 magenta, 3 yellow) in bits 1-0, 3-2, 5-4 -- the order they first show along Q's line 0, which runs through your `BAR` from char `QBLANK_CHAR` (45) of row 0 on into row 1, line 0 of each char; yellow, magenta, cyan without it.  Derive it from your bar's bytes in the packer that writes `BAR` (Commando's `assets.py`), and mind what your HUD draws there | `kernel.s` (`palkill`) |
 | `MAXSPRDEF` | the sprite list's size, when the build's `MAXSPR` is not given; 28 without either | `engine/defs.s` |
 | `TOFF` | tile id k is at slot k + `TOFF` from `TILES`; bank 6's code must end before slot `TOFF`+1 (`init.s` asserts it) | `defs.inc`, `gather.s`, `ldprog.s`, `init.s` |
 | `TILES` | bank 6's tile origin, page aligned (Cleo's `$8600`) | `defs.inc`, `gather.s`, `ldprog.s` |
