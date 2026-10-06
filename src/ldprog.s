@@ -1769,7 +1769,7 @@ ld_game = ldg::ld_game
 ; ---- the layout
         .assert LDPROG = __LD_START__, error, "LDPROG (defs.inc) is where ldprog.cfg links this program"
   .if BHW                          ; hardware: the Model B's stage follows it
-        .assert __LD_LAST__ <= STAGE, error, "LDPROG runs into STAGE: the Model B gives it 2.5K"
+        .assert __LD_LAST__ <= STAGE, error, "LDPROG runs into STAGE: the Model B gives it 2.5K (LDBIG=1: 2.75K)"
   .endif
         .assert <STAGE_LVL = 0, error, "section: STAGE_LVL page-aligned"
         .assert <BARADDR = 0 && <STAGE = 0 && <GAME_BSS = 0, error, "image_load: page-aligned"

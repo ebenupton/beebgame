@@ -98,7 +98,15 @@ sound_reset:
 ; sfx_tick: the vsync's sound step (bank 6 paged, after the tune: low.s irq_vret on the
 ; Model B, the Master's handler; X and Y saved)
 ;   Out:   the effects asked for started; every voice stepped; A X Y clobbered
+; Idle -- nothing asked for, no voice playing -- it leaves at once: SFXBITS and SV_DUR
+; are seven bytes in a row, and every one 0 is the commonest vsync's case.
 sfx_tick:
+        lda SFXBITS
+        .repeat 6, i
+        ora SFXBITS+1+i
+        .endrepeat
+        beq @out
+        .assert SV_DUR = SFXBITS+3, error, "sfx_tick: the idle test reads SFXBITS and SV_DUR as seven bytes"
         ldx #2
 @rq:    lda SFXBITS,x
         beq @rn
@@ -144,15 +152,15 @@ sfx_tick:
 @rn:    dex
         bpl @rq
         ldx #3
-@vl:    jsr sfx_voice
-        dex
+@vl:    lda SV_DUR,x
+        beq @vn                     ; idle
+        jsr sfx_voice
+@vn:    dex
         bpl @vl
-        rts
+@out:   rts
 
-; sfx_voice: X = the voice
+; sfx_voice: X = the voice, one playing (SV_DUR,x not 0)
 sfx_voice:
-        lda SV_DUR,x
-        beq @rts                    ; idle
         dec SV_DUR,x
         bne @run
         ; the next segment: its head, shape << 4 | the frames' index

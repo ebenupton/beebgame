@@ -823,7 +823,11 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
 @run1:  .byte 1, 0, 2, 0, 3, 0, 4
 @run8:  .byte CHARBYTES, 0, 2*CHARBYTES, 0, 3*CHARBYTES, 0, 4*CHARBYTES
   .endif
+  .if NOPADS                       ; (no placement pads: the crossing costs a cycle)
+        .assert >@run1 = >(@run8+3*RUNXS), warning, "@run1/@run8 straddle a page (+1 cycle an @advsp)"
+  .else
         .assert >@run1 = >(@run8+3*RUNXS), error, "@run1/@run8 straddle a page"
+  .endif
 
 ; ---------------------------------------------------------------- patch points
 ; HPAIR0/HPAIR1: @hfill's two loads of a half's fill pair, by its colour.  The

@@ -178,9 +178,10 @@ LDPROG     = $0E00                 ; the load-time program (ldprog.s), read ther
 SECTRK     = 10                    ; the disc: 80 tracks of 10 256-byte sectors
 NTRACKS    = 80
   .if BHW                          ; hardware: the display is the staging area
-STAGE      = $1800                 ; a shared file staged here, 16K at most ($57FF):
-                                   ;  above LDPROG's 2.5K (ldprog.s asserts it ends
-                                   ;  by STAGE)
+STAGE      = $1800 + LDBIG*$100    ; a shared file staged here, to $57FF (16K, LDBIG
+                                   ;  15.75K: the game's packer keeps its files to it):
+                                   ;  above LDPROG's 2.5K (LDBIG 2.75K: ldprog.s
+                                   ;  asserts it ends by STAGE)
 STAGE_LVL  = $5800                 ; the level's own file, 9K at most (the game's
                                    ;  packer asserts it): the objects go to LV_OBJS
                                    ;  ($7C00) while it is still being read

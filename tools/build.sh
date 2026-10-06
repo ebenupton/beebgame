@@ -12,7 +12,8 @@
 # gamename.inc) and the pieces.  The checks it runs: levelfile.py check on the level files,
 # the two machines' shared files and assets.inc compared, the boot header's addresses
 # compared, layoutcheck.py, imagecheck.py (each machine's: the two bank 7 images apart),
-# and first of all noanon.py (no anonymous labels in the engine's or the game's sources).
+# and first of all noanon.py (no anonymous labels in the engine's sources, nor the game's
+# with GAME_NOANON=1).
 #
 #   GAME_MAIN    the game's root source (it includes the engine's: see README.md)
 #   GAME_SRC     the game's include directory
@@ -20,6 +21,8 @@
 #                assets.inc, the level files, SPRC, SPRX, BAR, img_tab.bin and what the
 #                game's own sources .incbin -- and build/TILES0-2
 #   GAME_MUSIC   run once first (may be empty)
+#   GAME_NOANON=1 the game's sources checked for anonymous labels too (tools/noanon.py; the
+#                engine's always are)
 #   GAME_SFX     (SOUND6) the game's sound effects: a Python file setting EFFECTS
 #                (tools/sfx.py), packed into each machine's sfxdata.inc
 #   DISC_TITLE   the disc's title; DISC_OUT the disc image (build/game.ssd); GAME_NAME the
@@ -44,6 +47,9 @@
 #                MIRTAB, bank 5, the source's id by id - mir0, from the level file's mir
 #                section); the baker (ldprog.s) draws them too.  The game's assets.inc
 #                gives MAXMIR, MIRTAB's length
+#   LDBIG=1      the Model B: the load-time program (LDPROG, from $0E00) up to 2.75K, not
+#                2.5K -- STAGE, the shared files' stage, starts a page later ($1900), so
+#                they are 15.75K at most (the game's packer must hold them to it)
 #   NOPADS=1     no placement pads (pads.inc through PAD, and B6PACK's on the Master): every
 #                byte to code and data, the hot code's page crossings (SAMEPAGE's warnings)
 #                costing cycles instead; the Model B's draw_rect chains, which must lie in a
@@ -92,11 +98,12 @@ DISC_OUT=${DISC_OUT:-build/game.ssd}
 GAME_NAME=${GAME_NAME:-$DISC_TITLE}
 set -e
 mkdir -p build
-# no anonymous labels, in the engine or the game (tools/noanon.py says why)
-python3 $BG/tools/noanon.py $BG/src "$GAME_SRC"
+# no anonymous labels in the engine (tools/noanon.py says why), nor in the game's sources
+# when it asks (GAME_NOANON=1)
+python3 $BG/tools/noanon.py $BG/src $([ "$GAME_NOANON" = 1 ] && echo "$GAME_SRC")
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5; do
+for o in GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5 LDBIG; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o

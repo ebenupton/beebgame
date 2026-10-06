@@ -62,6 +62,9 @@ GAMELOWCODE = 0                    ; the game has code in LOWCODE2 (low RAM, the
   .ifndef TILEMIRROR
 TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): kind GL_MIRROR from the
   .endif                           ;  Master's LV_PAGE0, the Model B's gather from MIRTAB
+  .ifndef LDBIG
+LDBIG = 0                          ; the Model B: the load-time program 2.75K, the shared files'
+  .endif                           ;  stage a page shorter (defs.inc STAGE)
   .ifndef NOPADS
 NOPADS = 0                         ; no placement pads (pads.inc's, through PAD; B6PACK's on the
   .endif                           ;  Master): the hot code's page crossings cost cycles instead

@@ -186,7 +186,7 @@ mygame/
 ```
 
 Cleo's `src/` is `main.s` (the root and the hooks), `logic.s` (the logic and the HUD),
-`game.s` (the level and frame loops, the sound effects), `menu.s` (the menus),
+`game.s` (the level and frame loops), `menu.s` (the menus),
 `gamedata.s` (its tables) and `keymap.inc`.
 
 ## Step 2: the build script
@@ -523,9 +523,9 @@ key_bits: .byte K_LEFT,K_LEFT, K_RIGHT,K_RIGHT, K_UP,K_UP,K_FIRE, K_DOWN,K_DOWN,
 steps of `SFXSTEP_LEN` (4) bytes -- three bytes written to the SN76489 in turn, then the
 frames to hold them -- ending in `SFX_END` (`$FF`, which written to the chip is also the
 noise channel's silence); the end also silences tone channel 2.  `sfx_tab` and the
-effects must be where `sound_tick` is: Cleo's `game.s` puts them under `PLACEH
+effects must be where `sound_tick` is: a game puts them under `PLACEH
 "MRAMCODE", "KRNCODE"` (bank 7 on the Model B, main RAM on the Master) and builds each
-step with a macro:
+step with a macro (Cleo's, before it moved to `SOUND6`):
 
 ```ca65
 .macro SFX ch, lo4, hi, att, dur
@@ -565,9 +565,15 @@ EFFECTS = [
 ]
 ```
 
-Ask for one with `lda #SFX_BLOB / jsr sfx_request` (any number in a frame; X and Y kept),
-silence everything with `sound_reset`: both are in the kernel, so the menus' image calls
-them as the game's does.  `tools/sfx.py check GAME_SFX [stream.json]` plays a fixed
+Ask for one with `lda #SFX_BLOB / jsr sfx_request` (any number in a frame; X and Y kept;
+C = bit 2 of the id, which a caller may branch on), silence everything with `sound_reset`:
+both are in the kernel, so the menus' image calls them as the game's does.  The player is
+not stepped through a disc load, and every load starts with `sound_reset` (disc.s `ld_go`):
+an effect that should be heard to its end before a load -- Cleo's exit fanfare -- needs the
+game to wait for it first.  An idle vsync (no request, no voice playing) costs the player a
+seven-byte test.  Cleo's effects (`src/sfx.py`) are a second example, with the bank 6 room
+they need found by `TILEMIRROR` and `LDBIG` (Step 11).
+`tools/sfx.py check GAME_SFX [stream.json]` plays a fixed
 schedule through a model of the player, and `tools/soundtest.mjs disc out.json` records
 the real player's chip writes for the same schedule: two builds with the same effects give
 the same stream.
@@ -772,6 +778,7 @@ both machines.
 | `SOUND6=1` | the engine's sound effects player (`engine/sound6.s`) in place of `sound_tick`, playing your `GAME_SFX` effects (packed by `tools/sfx.py`): in bank 6, segment `SND6CODE` after the tile blitter (your `TOFF` clears it), the vsync paging it in after the tune (the Model B from `low.s` `irq_vret`, the Master's handler around it), so it is there under either image of bank 7 and costs bank 7 nothing; `sfx_request` and `sound_reset` in the kernel; its state in `LOWBSS`; `snd_write` moves to low RAM (`LOWCODE2`) for it, and `GATHERL` into `LOWBSS`.  Not with `GAMESOUND`.  (A game with code of its own in `LOWCODE2` -- low RAM, visible with any bank in -- sets `GAMELOWCODE = 1` before `cpu.inc`, so boot copies it down without `SOUND6` too) | `sound6.s`, `kernel.s`, `low.s`, `init.s`, `banks.cfg`, `build.sh`, `tools/sfx.py` |
 | `TALLMAP=1` | maps up to 256 tiles tall: the window's character row keeps its high bits (`wcyh`) for the tile blitter's map row.  On the Model B it needs `RINGARITH` (`cpu.inc` errors without): its 23-row ring does not divide 256, so `calc_ring` takes the window's slot from the full row (`wcyh:wcy` mod 23, as `wcy + 3*wcyh`) and `RINGARITH` puts every other row relative to it | `cpu.inc`, `vars.s`, `frame.s`, `kernel.s` |
 | `TILEMIRROR=1` | mirrored full tiles: an id drawn as a stored full tile reversed (chars right to left, each byte's two game pixels swapped; `tiles.s` `@mir`).  Your packer gives them the ids from `mir0`, after the halves (before the flats), and the level file's `mir` section (`MIRTAB`) each one's source's id; `LV_PAGE0` gives them kind `GL_MIRROR` (3) in the low byte.  The Model B's gather reads `MIRTAB` (bank 5, `MAXMIR` bytes from your `assets.inc`; 32 bytes of code more), the baker draws them, and the blitter costs 7 cycles more a full-tile run | `gather.s`, `tiles.s`, `ldprog.s`, `levelfile.py` |
+| `LDBIG=1` | the Model B's load-time program (`LDPROG`, from $0E00) up to 2.75K, not 2.5K: `STAGE`, the shared files' stage, starts at $1900, so a shared file is 15.75K at most -- your packer must hold its files to it.  Cleo needs it for `TILEMIRROR`'s baker | `defs.inc`, `ldprog.s` |
 | `DRAWFLAGS=1` | the sprite list's x high byte carries draw flags: bit 7 mirrors the image, so one image is drawn either way round from the list | `frame.s` `draw_sprites`, `draw_sprite` |
 | `TIGHTBSS=1` | the engine's bank 7 variables packed: 9-byte sprite records as arrays (`RECSZ`), `ENGBSS` not page aligned (the driver edits the cfg) | `engine/defs.s`, `build.sh` |
 | `DIRSPLIT=1` | the directory's resident part out of bank 7: your packer numbers the ids every level draws alike first (`0` .. `RES_N`-1), writes their entries (`levelfile.directory()` of them: `RES_N` low bytes, `RES_N` high) into `SPRC` at `RESDIR` in bank `RESDIR_BANK`, and the level files' `dir` and `DIR_TABLE` keep the ids from `RES_N` (2 bytes each).  `draw_sprite` reads a resident id's entry through low RAM's `dir_res`, which pages the bank in and bank 7 back: 28 cycles a resident sprite, 5 a level one, for `2*RES_N` bytes of bank 7 | `banks.s`, `frame.s`, `lowram.s`, `ldprog.s`, `levelfile.py` |

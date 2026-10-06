@@ -974,7 +974,7 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
 `GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
-UDATA5 ALLLEVELS`, and `MAXSPR=n`.
+UDATA5 LDBIG ALLLEVELS`, and `MAXSPR=n`.
 `TALLMAP` on the Model B needs `RINGARITH`; `SOUND6` excludes `GAMESOUND` (`cpu.inc` errors).
 Every build is both machines'.
 `SKIP_ASSETS=1` skips the music and asset steps.
@@ -1079,7 +1079,8 @@ Inside `.if .not BHW` the Master's code is written natively (`stz`, `inc a`, `ld
 - No anonymous labels (`:`, referenced as `:+`/`:-`), in the engine or a game: they count
   across the whole assembly unit, macro expansions and conditional arms included, so one
   added or removed silently retargets branches elsewhere, and a cold path escapes every
-  test.  `tools/build.sh` rejects them (`tools/noanon.py`).  A macro's own labels are
+  test.  `tools/build.sh` rejects them (`tools/noanon.py`): in the engine always, in a game's
+  sources when it sets `GAME_NOANON=1` (Cleo does).  A macro's own labels are
   cheap ones (a `.local` name is a normal symbol and would end the caller's `@` scope):
   a fixed name prefixed with the macro's where it expands at most once in a scope, else
   passed in by the caller (`pagestep`'s and `runn`'s `done`, `print`'s `loop` and

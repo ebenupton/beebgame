@@ -405,6 +405,9 @@ ld_go:  pha                        ; A and X across the load, on the stack
         txa
         pha
         jsr music_stop
+  .if SOUND6
+        jsr sound_reset            ; the effects too: none held or asked for, as the
+  .endif                           ;  player is not stepped through a load
         jsr load_begin
         sei
         ldx DRV_NMILEN             ; the driver's NMI stub to its page
