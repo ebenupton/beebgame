@@ -321,8 +321,8 @@ for m in re.finditer(r'^sym\tid=\d+,name="(\w+)",[^\n]*\bscope=0,[^\n]*\bval=0x(
 open(BD + '/gamesyms.inc', 'w').write('\n'.join(out) + '\n')
 EOF
         fi
-        ca65 --cpu 6502 $DEFS -I $BD -I $BG/src $LDINC --bin-include-dir $BD -o $BD/ldprog.o $BG/src/ldprog.s -l $BD/ldprog.lst
-        ld65 -C $BG/cfg/ldprog.cfg -o $BD/LDPROG $BD/ldprog.o
+        ca65 -g --cpu 6502 $DEFS -I $BD -I $BG/src $LDINC --bin-include-dir $BD -o $BD/ldprog.o $BG/src/ldprog.s -l $BD/ldprog.lst
+        ld65 -C $BG/cfg/ldprog.cfg -o $BD/LDPROG $BD/ldprog.o --dbgfile $BD/ldprog.dbg   # (the debug file: tools' analyses)
         # BANKS: the fixed pieces with their table, then the bank-number patch list (every
         # byte of the pieces that holds a bank number, cpu.inc BANKREF) ending in $FF: the
         # boot loader rewrites those bytes to the banks it found RAM in.  Each entry is
