@@ -7,16 +7,15 @@
 // Timing plays no part, so two builds with the same player and effects give the same stream,
 // and tools/sfx.py check compares its model of the player with it.  The labels are the
 // disc's directory's master/labels.txt (build.sh's).
-import { readdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { homedir } from "node:os";
 import path from "node:path";
-function findJsbeeb() { const npx = path.join(homedir(), ".npm", "_npx"); for (const d of readdirSync(npx)) { const p = path.join(npx, d, "node_modules", "jsbeeb", "src", "machine-session.js"); if (existsSync(p)) return p; } }
+import { findJsbeeb, shiftKey } from "../test/lib/harness.mjs";
 const { MachineSession } = await import(pathToFileURL(findJsbeeb()));
 const disc = path.resolve(process.argv[2]), outf = process.argv[3];
 const A = {}; for (const m of readFileSync(path.join(path.dirname(disc), "master", "labels.txt"), "utf8").matchAll(/^al ([0-9A-F]+) \.(\w+)$/gm)) A[m[2]] = parseInt(m[1], 16);
 const s = new MachineSession("Master"); await s.initialise(); await s.boot(30); s.loadDisc(disc);
-s.keyDown(16); s.reset(true); await s.runFor(2_000_000); s.keyUp(16);
+s.keyDown(shiftKey()); s.reset(true); await s.runFor(2_000_000); s.keyUp(shiftKey());
 await s.runFor(40_000_000);                              // the title
 const cpu = s._machine.processor;
 const rd = (a) => cpu.readmem(a), wr = (a, v) => cpu.writemem(a, v);
