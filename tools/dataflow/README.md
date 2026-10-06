@@ -229,3 +229,49 @@ A Python file of assignments: `GAME_DIR`, `ISR_ROOTS`, `ISR_DATA_POINTERS`,
 `INLINE_HELPERS`, `HELPER_SCRATCH`, `HELPER_CARRY_X0`, `SCREEN_POINTERS`, `VAR_SEGMENTS`,
 `LOADER_DBG`, `OBJECTS` -- gamecfg.py documents each.  Commando's is
 `tools/dataflow_commando.py` in its repository; Cleo runs with none.
+
+## Using the annotations to shrink code: a suggested farm
+
+The annotations were written to be read by an agent hunting for smaller code.  What worked
+for Commando (two passes, 171 proposals, about 400 bytes accepted behind its replay gate):
+cut the game's sources into overlapping windows (64 instructions at a stride of 32, never
+across a routine), replace each window's text with the annotated lines, deal the windows
+into batches of about eight, and give each batch a reviewer and then a skeptic.  Apply the
+proposals the skeptic did not refute one small batch at a time behind the game's own
+equivalence test (a step-by-step replay against a reference), bisecting failures; then have
+a second skeptic audit everything accepted against a snapshot of the source, hunting paths
+the replays never run -- the audit is not optional (Commando's caught two accepted rewrites
+that together broke a mission no replay reached).
+
+A reviewer's prompt, to adapt (the {braces} are the game's):
+
+> You are one reviewer in a farm shrinking the code of {a BBC Micro game}, ca65 6502 source
+> in {src/}.  Bytes are the metric; a rewrite may cost at most {2} cycles per frame for each
+> byte it saves.  New code must be {plain NMOS 6502}.  Your windows are in {batch_NN.md}:
+> each source line is followed by `;|` and the state before it from a whole-program range
+> analysis (beebgame/tools/dataflow/README.md, "The annotations", explains the notation:
+> register ranges, `≡name` a register equal to a memory byte, flags, the operand's range,
+> `ty=` the object types possible, `never`/`always` branch feasibility, `in:`/`out:`
+> liveness).  Look hard for what the annotations make visible: branches marked never (dead
+> code); reloads of a value a register already holds (`≡`), or held a few instructions
+> earlier where a dead register (absent from `out:`) could have carried the intermediate
+> value instead -- e.g. `lda health / cmp #2 / bcc x / lda damage / beq y / bmi y /
+> lda health / sbc damage` becomes `lda health / cmp #2 / bcc x / ldx damage / beq y /
+> sbc damage` when damage is never negative and X is dead; tests the ranges decide; flags
+> already known; per-type facts inside a type's handler; values that are only ever one
+> constant; then the classics (staging through temporaries a dead register could carry,
+> shared tails, jsr/rts -> jmp).  The ranges are sound over-approximations (summary.md
+> lists the assumptions): `never` is reliable, `?` proves nothing.  Check every register
+> and flag a rewrite relies on against `out:`; keep the count of anonymous `:` labels;
+> keep calls with side effects in the same order with the same arguments.  Return each
+> proposal as hunks {file, original (copied verbatim from the source, never from the
+> annotated copy), proposal}, the byte and cycle saving, and an argument that cites the
+> annotations for every fact it relies on.  Be conservative: few, solid proposals.
+
+A skeptic's prompt: the same rules, then "for each proposal, REFUTE it if there is any
+reachable path on which it changes behaviour; default to refuted when you cannot convince
+yourself it is exactly equivalent; check in particular that every range a claim rests on
+holds on every path into that point, flags and registers consumed after the change, every
+entry point and jump target, anonymous labels, and the claimed saving".  Commando's
+versions, with its Workflow scripts, are in its repository (opt/RANGES_BRIEF.md,
+opt/workflows/).
