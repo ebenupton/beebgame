@@ -107,6 +107,13 @@ reference game: the documents' examples are its.  The level file format is the e
 the asset packer that writes it is each game's own, on `tools/levelfile.py` and
 `tools/sprpack.py`.
 
+## Related
+
+beeb-port-kit (`github.com/kieranhj/beeb-port-kit`, MIT), a kit for porting C64 games to the BBC
+Micro with a coding agent, runs `tools/dataflow` on Baron and beebasm builds (vendored at a pinned
+commit and hash-checked) and carries `test/lib/boards.mjs` for its own harnesses.  Its
+`docs/related-beebgame.md` lists what it takes from this repository and what it has sent back.
+
 ## Licence
 
 MIT: see `LICENSE`.  It covers the whole repository -- the engine, its tools, tests and
