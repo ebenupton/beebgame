@@ -11,7 +11,7 @@
 # debug file, the generated includes (files.inc, levelfmt.inc, defs_ld.inc, img7fix.inc,
 # gamename.inc) and the pieces.  The checks it runs: levelfile.py check on the level files,
 # the two machines' shared files and assets.inc compared, the boot header's addresses
-# compared, and layoutcheck.py.
+# compared, layoutcheck.py, and imagecheck.py (each machine's: the two bank 7 images apart).
 #
 #   GAME_MAIN    the game's root source (it includes the engine's: see README.md)
 #   GAME_SRC     the game's include directory
@@ -424,6 +424,8 @@ LDA=$(cfgval $BG/cfg/loader.cfg LOAD start)
 python3 $BG/tools/mkdfs.py build $DISC_OUT "$DISC_TITLE" \
     "!BOOT:build/BOOT:0000:FFFF" "LOADER:build/LOADER:$LDA:$LDA" \
     $(echo $DISC | tr ' ' '\n' | grep -v '^!BOOT\|^LOADER' | tr '\n' ' ')
+# neither bank 7 image reaches into the other (they are read from the disc over each other)
+for t in $TARGETS; do python3 $BG/tools/imagecheck.py build/$t/game.dbg > /dev/null || { python3 $BG/tools/imagecheck.py build/$t/game.dbg; exit 1; }; done
 if [ "$MASTERONLY" = 1 ]; then
 ls -l $M/BANKS $DISC_OUT
 else

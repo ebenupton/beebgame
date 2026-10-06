@@ -85,6 +85,7 @@ TIGHTBSS ALLLEVELS` (each `=1`) and `MAXSPR=n`; `SKIP_ASSETS=1` skips the asset 
 | `tools/mkdfs.py` | a DFS `.ssd` from a file list, or the sector table (`files.inc`) |
 | `tools/pincfg.py` | the Master's linker config pinned to the Model B's segment starts |
 | `tools/layoutcheck.py` | fail if the two machines' segments or data labels differ |
+| `tools/imagecheck.py` | fail if code in one bank 7 image (the game's, the menus') uses a symbol of the other |
 | `tools/pagecheck.py` | every taken branch that crosses a page, by segment, with its source line |
 | `tools/sprpack.py` | sprite placement within a bank against page crossings (imported by the game's packer) |
 | `tools/levelfile.py` | the level file format: writer, reader/checker, `levelfmt.inc` |

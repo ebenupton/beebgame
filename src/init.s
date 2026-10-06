@@ -79,7 +79,7 @@ boot:
         inx
         cpx #<__LOWCODE_SIZE__
         bne @lc
-  .if SOUND6                       ; and LOWCODE2 (snd_write), into the low BSS's room
+  .if SOUND6 .or GAMELOWCODE       ; and LOWCODE2 (snd_write, the game's), into the low BSS's room
         .import __LOWCODE2_LOAD__: absolute, __LOWCODE2_RUN__: absolute, __LOWCODE2_SIZE__: absolute
         .assert __LOWCODE2_SIZE__ > 0 && __LOWCODE2_SIZE__ < 256, error, "LOWCODE2 is copied a byte at a time"
         ldx #<__LOWCODE2_SIZE__

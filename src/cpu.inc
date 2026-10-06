@@ -62,6 +62,9 @@ SOUND6 = 0                         ; the engine's effects player in bank 6 (soun
   .if SOUND6 && GAMESOUND          ;  in the low BSS's room
         .error "SOUND6 is the engine's sound player, GAMESOUND the game's own: one or the other"
   .endif
+  .ifndef GAMELOWCODE
+GAMELOWCODE = 0                    ; the game has code in LOWCODE2 (low RAM, the low BSS's
+  .endif                           ;  room: boot copies it down; SOUND6 has snd_write there)
   .ifndef TILEMIRROR
 TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): kind GL_MIRROR from the
   .endif                           ;  Master's LV_PAGE0, the Model B's gather from MIRTAB
