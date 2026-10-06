@@ -52,6 +52,17 @@ map_row:
 ; the caller to ignore.
 ; ----------------------------------------------------------------------------
 map_col:
+        lda map_ptr                ; tp = the row below (C = 0: the caller's, tile_coord's)
+        adc map_stride
+        sta tp
+        lda map_ptr+1
+        adc map_stride+1
+        sta tp+1
+        bankimm lda, BANK_MAP, 0
+        sta ROMSEL_CPY
+        sta ROMSEL
+        lda (tp),y
+        tax                        ; below
         lda map_ptr                ; tp = the row above
         sec
         sbc map_stride
@@ -59,21 +70,9 @@ map_col:
         lda map_ptr+1
         sbc map_stride+1
         sta tp+1
-        bankimm lda, BANK_MAP, 0
-        sta ROMSEL_CPY
-        sta ROMSEL
         lda (tp),y
-        tax                        ; above
-        lda map_ptr                ; tp = the row below
-        clc
-        adc map_stride
-        sta tp
-        lda map_ptr+1
-        adc map_stride+1
-        sta tp+1
-        lda (tp),y
-        sta tp+1                   ; below
-        stx tp                     ; above
+        sta tp                     ; above
+        stx tp+1                   ; below
         lda (map_ptr),y            ; this row's, last: A keeps it
         bankimm ldx, BANK_LVL, 0   ; bank 7 back (page_logic's, in line, through X)
         stx ROMSEL_CPY

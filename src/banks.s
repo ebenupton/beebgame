@@ -101,7 +101,8 @@ lv_reset:
         lda #BUF_INVALID
         sta BUF_CXH                ; a window x a buffer can never hold
         sta BUF_CXH+1
-        lda #0                     ; (the caller stores this A: it must be 0)
+        asl                        ; A = 0: BUF_INVALID ($80) shifted out (the caller
+        .assert BUF_INVALID = $80, error, "lv_reset: BUF_INVALID shifted out is 0" ; stores this A: it must be 0)
         sta RECCNT
         sta RECCNT+1
         sta DIRTYCNT

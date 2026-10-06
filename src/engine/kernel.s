@@ -353,10 +353,10 @@ build_sections:
         lda tmp4                   ; M: the rest
         sec
         sbc tmp2
-        sta tmp4
+        bcs @rest                  ; (always: tmp2 < tmp4)
   .endif
 @one:   lda tmp4
-        sta tmp2
+@rest:  sta tmp2
         jsr @emit                  ; w16 = the row below the playfield
         jsr @addr                  ; P2's address, or Q's
         lda wfine
@@ -438,13 +438,13 @@ build_sections:
         lda wfine
         beq @nop2
         lda SECTAB-2*SECENT+SE_T1L,x
-        sec
-        sbc #P2EARLY
+        .assert .not BHW, error, "P2EARLY: C = 0 here only on the Master's path"
+        sbc #P2EARLY-1             ; C = 0 (the adc #SECENT): - P2EARLY
         sta SECTAB-2*SECENT+SE_T1L,x
         bcs @p2dur
         dec SECTAB-2*SECENT+SE_T1H,x
+        sec                        ; (C = 1 both ways into @p2dur)
 @p2dur: lda SECTAB-SECENT+SE_T1L,x
-        sec
         sbc #STEPLATE+QLEAD-P2EARLY
         bra @qlead                 ; (Master-only by P2EARLY's value)
 @nop2:
@@ -459,17 +459,19 @@ build_sections:
 @qlead: sta SECTAB-SECENT+SE_T1L,x
         bcs @barlead
         dec SECTAB-SECENT+SE_T1H,x
+  .if BARLEAD
+        sec                        ; (C = 1 both ways into @barlead)
+  .endif
 @barlead:
   .if BARLEAD
         ; ---- the section after the bar (entry 0's duration) runs BARLEAD +
         ;      STEPLATE longer: the bar's step ended the bar BARLEAD early, and
         ;      the steps after the D step fire STEPLATE late
-        clc
         ldx cur_buf
         beq @e0
         ldx #SECBYTES
 @e0:    lda SECTAB+SE_T1L,x
-        adc #BARLEAD+STEPLATE      ; (C = 0: the clc)
+        adc #BARLEAD+STEPLATE-1    ; C = 1: + BARLEAD+STEPLATE
         sta SECTAB+SE_T1L,x
         bcc @e0done
         inc SECTAB+SE_T1H,x
@@ -525,15 +527,15 @@ build_sections:
 @emit:  jsr @addr
         lda tmp2
         jsr @lines                 ; X = the run's entry
-        lda tmp2
-        sbc #0                     ; R4 = tmp2 - 1 (C = 0 from @lines)
-        sta SECTAB+SE_R4,x
         lda #CHARLINES-1
         sta SECTAB+SE_R9,x
         lda #R7_NEVER              ; R6 = R7 = R7_NEVER, more rows than the run:
         sta SECTAB+SE_R6,x         ;  the display stays on, no vsync falls in it
         sta SECTAB+SE_R7,x
         lda tmp2
+        sbc #0                     ; R4 = tmp2 - 1 (C = 0 from @lines)
+        sta SECTAB+SE_R4,x
+        adc #0                     ; A = tmp2 (C = 1: tmp2 >= 1, no borrow)
 
 ; ---- @advance: w16 += A rows (A <= RINGROWS), folded into 0..RINGCHARS-1
 ;   Uses:  A Y
@@ -552,6 +554,7 @@ build_sections:
 ;   Uses:  A
 @wrap:  cmp #>RINGCHARS
         bcc @wrapped
+  .if .lobyte(RINGCHARS)
         bne @fold
         lda w16
         cmp #<RINGCHARS
@@ -560,7 +563,8 @@ build_sections:
         sbc #<RINGCHARS
         sta w16
         lda w16+1
-        sbc #>RINGCHARS
+  .endif
+        sbc #>RINGCHARS            ; (<RINGCHARS = 0: A = w16+1, C = 1 from the cmp)
         sta w16+1
 @wrapped:
         rts
@@ -582,10 +586,9 @@ build_sections:
         lsr tmp3
         ror                        ; C = 0: A's bit 0 was 0
         sbc #1                     ; - T1_RELOAD
-        bcs @durhi
-        dec tmp3
-@durhi: sta SECTAB+SE_T1L,x
+        sta SECTAB+SE_T1L,x
         lda tmp3
+        sbc #0                     ; the low byte's borrow
         sta SECTAB+SE_T1H,x
         txa
         clc
@@ -673,6 +676,7 @@ calc_ring:
         tay
         cmp #>RINGCHARS            ; fold into 0..RINGCHARS-1
         bcc @div0
+  .if .lobyte(RINGCHARS)
         bne @sub
         lda ring_s
         cmp #<RINGCHARS
@@ -681,7 +685,8 @@ calc_ring:
         sbc #<RINGCHARS
         sta ring_s
         tya
-        sbc #>RINGCHARS
+  .endif
+        sbc #>RINGCHARS            ; (<RINGCHARS = 0: A = Y, C = 1 from the cmp)
         sta ring_s+1
         tay
         ; ---- barq = ring_s / 80, by subtraction: the low byte in A, the high

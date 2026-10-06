@@ -104,10 +104,11 @@ mirror_copy:
         tay
         bpl :+
         dec w16b+1                 ; L < $80
-:       lda #0
-        sta w16
-        lda #<RING_A               ; the base's low byte, $80 (asserted above)
+        .assert <(RING_A << 1) = 0, error, "the base's low byte doubled is 0"
+:       lda #<RING_A               ; the base's low byte, $80 (asserted above)
         sta w16b
+        asl                        ; $80 << 1 = 0: the source's low byte
+        sta w16
 @char:  .repeat CHARBYTES
         lda (w16),y
         sta (w16b),y

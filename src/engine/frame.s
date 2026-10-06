@@ -228,6 +228,7 @@ draw_sprites:
         lda SPR_ID,x
         sta (rp)                   ; offset 0: no index
     .endif
+        stx spi                    ; spi is read only after draw_sprite: kept here alone
         jsr draw_sprite
         ldx spi                    ; X = the sprite's number again (the skips kept it)
         sec                        ; C = 1, as at the skips' arrivals
@@ -237,8 +238,7 @@ draw_sprites:
         sta rp
         bcs @rpc                   ; the carry, out of line (after the rts)
 @rpb:   inx
-@chk:   stx spi
-        cpx nspr
+@chk:   cpx nspr
         bcc @l
 @endpass:
         lsr dpass                  ; 1 -> 0 with C = 1: pass 0 next; 0 -> 0 with
@@ -532,7 +532,7 @@ match_sprites:
         ; the scroll's tiles, or slots reused since)
 @moved: ldy #REC_H
         lda (rp),y
-        bmi @zero2                 ; cut at an edge
+        bmi @zero                  ; cut at an edge
         sta tmp3                   ; its height
         dey
         dey                        ; REC_CY
@@ -541,11 +541,11 @@ match_sprites:
         sec
         sbc wcy                    ; its row in this window
         cmp krlo
-        bcc @zero2                 ; above the shared rows
+        bcc @zero                  ; above the shared rows
         adc tmp3                   ; C = 1: row + height + 1
-        bcs @zero2                 ; (past 255)
+        bcs @zero                  ; (past 255)
         cmp krhi2
-        bcs @zero2                 ; below them
+        bcs @zero                  ; below them
         dey
         dey                        ; REC_CX
         lda (rp),y
@@ -555,17 +555,16 @@ match_sprites:
         iny
         lda (rp),y
         sbc wcx+1
-        bne @zero2                 ; not 0..255: outside
+        bne @zero                  ; not 0..255: outside
         lda tmp3
         cmp kclo
-        bcc @zero2                 ; left of the shared columns
+        bcc @zero                  ; left of the shared columns
         ldy #REC_W
         adc (rp),y                 ; C = 1: column + width + 1
-        bcs @zero2                 ; (past 255)
+        bcs @zero                  ; (past 255)
         cmp kchi2
-        bcs @zero2                 ; right of them
-        jmp @next
-@zero2: jmp @zero
+        bcs @zero                  ; right of them
+        bcc @next                  ; always: C = 0, the bcs not taken
   .endif
 
 ; ----------------------------------------------------------------------------
@@ -874,9 +873,10 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
 @sxp:   eor #$FF
         sec
         adc spx                    ; the low byte of spx - refx; C = no borrow
-        bcs @sxb
+        bcs @sxb                   ; (C = 1 taken: the sbc's sec is the borrow's only)
         dex
-@sxb:   sec
+        sec
+@sxb:
         sbc wx
         sta w16
         txa
@@ -922,26 +922,22 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
         ; ---- vertical: sy = spy - refy - wy; lb0 = 2*sy + wfine, the sprite's
         ; first scanline below the window's top (16 bit, signed)
 @vert:
-        lda sprg_ry,y
-        and #$80                   ; tmp3 = refy's sign extension
-        beq @rpos
-        lda #$FF
-@rpos:  sta tmp3
-        lda spy
+        ldx spy+1                  ; as @sxp: X = the high byte of spy - refy, + 1
+        lda sprg_ry,y              ;  for a negative refy, - 1 on the low byte's borrow
+        bpl @rpos
+        inx                        ; refy < 0
+@rpos:  eor #$FF
         sec
-        sbc sprg_ry,y
-        tax
-        lda spy+1
-        sbc tmp3
-        tay
-        txa
-        sec
+        adc spy                    ; the low byte of spy - refy; C = no borrow
+        bcs @ryb
+        dex
+@ryb:   sec
         sbc wy
-        tax
-        tya
+        tay                        ; Y = sy low (Y dead: the tay below reloads it)
+        txa
         sbc wy+1
         sta sp_lb0+1
-        txa
+        tya
         asl                        ; 2*sy: the low byte's bit 7 into the high byte
         rol sp_lb0+1
         clc
@@ -1091,28 +1087,30 @@ ds_dirback = *                     ; (an equate: no new @ scope) dir_res's way b
         ; ---- the first image column, sp_c.  Mirrored, image column W - 1 - c is
         ; drawn at window column c (the row loop then steps the source backwards)
         lda sp_flags
-        bitimm SPF_MIRROR
-        beq @nomirror
+        lsr                        ; C = SPF_MIRROR, A = sp_flags >> 1
+        .assert SPF_MIRROR = 1, error, "draw_sprite: one shift puts SPF_MIRROR in C"
+        bcc @nomirror
         clc
         lda sp_w
         sbc sp_c                   ; C = 0 takes the extra 1: W - sp_c - 1
         sta sp_c
         lda sp_flags               ; (only this arm clobbers A)
+        lsr                        ; C = 1 again (SPF_MIRROR), A = sp_flags >> 1
 @nomirror:
         ; ---- the blitter, once a sprite: sp_disp = its first entry in the row
         ; loop's sprrow_tab (sprloops.s) -- SPRDISP_FC the copy blitter (SPF_COPY),
         ; SPRDISP_FM the mirrored 4-bit (SPF_MIRROR), SPRDISP_FN the 4-bit.  Each
-        ; row patches its column jump from there.
-        ldx #SPRDISP_FC
-        bitimm SPF_COPY
-        bne @setdisp
-        ldx #SPRDISP_FN
-        lsr                        ; A is still sp_flags (bitimm keeps it): bit 0,
-        .assert SPF_MIRROR = 1, error, "draw_sprite: one shift puts SPF_MIRROR in C"
-        bcc @setdisp               ;  SPF_MIRROR, to C
-        ldx #SPRDISP_FM
+        ; row patches its column jump from there.  The and keeps C (SPF_MIRROR).
+        and #SPF_COPY >> 1
+        bne @copy
+        bcc @setdisp               ; A = 0 = SPRDISP_FN
+        .assert SPRDISP_FN = 0, error, "draw_sprite: A = 0 is the 4-bit blitter"
+        lda #SPRDISP_FM
+        .assert SPRDISP_FM <> 0, error, "draw_sprite: the mirrored entry's bne is always taken"
+        bne @setdisp               ; always
+@copy:  lda #SPRDISP_FC
 @setdisp:
-        stx sp_disp
+        sta sp_disp
         ; ---- the screen address of the first row, sp_rb = (wcx + c0, wcy + r0):
         ; one ring_addr7 (w16 = wcx + sp_c0 is built with the record); the row loop
         ; adds a row's bytes a row
@@ -1251,9 +1249,8 @@ draw_dirty:
         stx lidx                   ; the buffer's first entry: entry n is at 2n + the
                                    ;  buffer (mark_dirty), so entry 0 is X = cur_buf
   .else
-        lda #0                     ; the buffer's list: 0, or 2*DIRTYMAX for buffer 1
-        cpx #1
-        bcc @d0
+        txa                        ; the buffer's list: 0, or 2*DIRTYMAX for buffer 1
+        beq @d0
         lda #2*DIRTYMAX
 @d0:    sta lidx
   .endif

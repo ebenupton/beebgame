@@ -529,7 +529,6 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
         sta rc_lim
         lda rc_w
         sta cnt                    ; chars left in the row
-        clc
         ldx #0                     ; the run's index into GATHERL/H, kept in rc_gi
         ; ---- a run: its kind from GATHERH.  Bit 7 set: a stored tile's page.
         ; Clear: a fill -- 0 the level's solid, straight on (the commonest run);
@@ -692,9 +691,9 @@ RINGHIOP := * + 1                  ; the adc's operand: the buffer's high-byte t
 ; ----------------------------------------------------------------------------
 @hfill:
         ; ---- a half's fill: its colour in the level's palette, GATHERL's bits
-        ; 0-2.  The loader patches both loads' operands (HPAIR0, HPAIR1: the
-        ; palette's first bytes, then its second).
-        lda GATHERL,x
+        ; 0-2 (A = GATHERL,x already: @half's load, kept by its bit).  The
+        ; loader patches both loads' operands (HPAIR0, HPAIR1: the palette's
+        ; first bytes, then its second).
         and #GL_COLMASK
         tay
 @hp0:   lda $FFFF,y                ; HPAIR0
@@ -869,10 +868,11 @@ select_backbuf:
         ldx cur_buf
         lda @bhi,x
         sta ringbhi
-        lda @ehi,x
+        clc                        ; the end: the base's page plus the ring's pages
+        adc #>RINGEND_A - >RING_A  ;  (the same for both: bases at xx80, asserted)
+        .assert >RINGEND_A - >RING_A = >RINGEND_B - >RING_B, error, "select_backbuf: both rings span the same pages"
         sta ringehi
-        sec
-        sbc #>RINGEND_A - >(RING_A + (RINGROWS-1)*ROWBYTES)
+        sbc #>RINGEND_A - >(RING_A + (RINGROWS-1)*ROWBYTES) - 1   ; C = 0: the end <= $80
         sta ringe3
   .else
         ; ---- ACCCON's X bit.  The ISR writes ACCCON's D bit: tsb and trb are
@@ -968,7 +968,6 @@ select_backbuf:
 @thl:   .byte <ringhi, <ringhi_b   ;  tables lie in one page, asserted above)
     .endif
 @bhi:   .byte >RING_A, >RING_B
-@ehi:   .byte >RINGEND_A, >RINGEND_B
   .else
         rts
   .endif
@@ -1045,9 +1044,8 @@ draw_rect_clip:
         ; whose high byte comes out exactly 0 survives: anything else is the
         ; whole rect off the left edge.
         tax                        ; rel's high byte, kept in X (this path's alone)
-        tya
-        clc
-        adc rc_w                   ; the low sum: the width, if it survives
+        tya                        ; C = 0 from the sbc: rc_x and wcx are both under
+        adc rc_w                   ;  $8000, so rel < 0 is a borrow.  The low sum: the width
         beq @none
         inx                        ; hi + C = 0 only for hi = $FF with a carry out
         bne @none

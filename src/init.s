@@ -110,7 +110,7 @@ boot:
         ; the chain tables (vars.s)
         CLEAR8 __MRAMBSS_RUN__, __MRAMBSS_SIZE__
         ; Q's black row (defs.s QBLANK): ROWBYTES zeros, three overlapping pages
-        ldx #0                     ; (already 0 out of CLEAR8; A = 0 too)
+                                   ; (X = 0 and A = 0 out of CLEAR8)
         .assert ROWBYTES > 512 && ROWBYTES <= 768, error, "QBLANK's zeroing: three overlapping pages"
 @qz:    sta QBLANK,x
         sta QBLANK+256,x

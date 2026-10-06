@@ -44,11 +44,8 @@ music_tick:
         ; ---- the next record: its frames, or (0) back to the top
 @rec:   jsr mus_byte
         bne @dur
-        lda #<music_seq
-        sta mus_ptr
-        lda #>music_seq
-        sta mus_ptr+1
-        bne @rec                   ; always: the tune is in bank 7, so A >= $80
+        jsr mus_top                ; (A = 1: Z = 0; the record read next sets mus_dur)
+        bne @rec                   ; always
 @dur:   sta mus_dur
         ; ---- its three notes, X = the voice
         ldx #0
@@ -122,14 +119,17 @@ mus_vol: .byte 3, 8, 8
 ;   Uses:  A
 ;   Keeps: X Y
 ;   Pre:   mus_on = 0 (the one caller, the game's title menu, tests it)
+; mus_top: music_tick's way back to the top: mus_on is 1 there, and the record it
+; reads next sets mus_dur
 ; ----------------------------------------------------------------------------
 music_start:
+        zero MUSNOTE, MUSNOTE+1, MUSNOTE+2
+mus_top:
         lda #<music_seq
         sta mus_ptr
         lda #>music_seq
         sta mus_ptr+1
         lda #1
         sta mus_dur
-        zero MUSNOTE, MUSNOTE+1, MUSNOTE+2
-        inc mus_on                 ; 0 -> 1 (Pre)
+        sta mus_on                 ; last: the vsync steps the tune from here
         rts
