@@ -43,9 +43,24 @@ sprx_ok:   .res 1                  ;  (the Master) SPRX in HAZEL/ANDY: ldprog.s'
 ; What the interrupt stores, in main RAM so that it stores into no bank and needs no
 ; write bank of its own (cpu.inc: the write bank is 7's but for short windows)
 mus_dur:   .res 1                  ; the tune's player (menus.s music_tick, from the
-MUSNOTE:   .res 3                  ;  interrupt's tail; music_start): the record's
-isr_t1:    .res 1                  ;  frames to go, each voice's note, and two bytes
-isr_t2:    .res 1                  ;  of scratch
+  .if TUNEFX                       ;  interrupt's tail; music_start): the record's
+MUSNOTE:   .res 5                  ;  frames to go, each voice's note (TUNEFX: the
+  .else                            ;  melody, the bass, the chord's three), and two
+MUSNOTE:   .res 3                  ;  bytes of scratch
+  .endif
+isr_t1:    .res 1
+isr_t2:    .res 1
+  .if TUNEFX                       ; (TUNEFX: menus.s's player)
+MFX_L:     .res 3                  ; each envelope's level: the melody's, the bass's,
+                                   ;  the chord's (0..255)
+MFX_A:     .res 4                  ; what each channel was last given: the attenuation,
+MFX_PL:    .res 3                  ;  and the tones' periods (the player writes only
+MFX_PH:    .res 3                  ;  what changes)
+mfx_age:   .res 1                  ; the melody's note's vsyncs (its vibrato's clock)
+mfx_ai:    .res 1                  ; the chord's arpeggio: its note, and the vsyncs to
+mfx_ac:    .res 1                  ;  the next
+mfx_d:     .res 2                  ; the vibrato's depth
+  .endif
   .if .not SOUND6
         .segment "LOWBSS2"         ; the rest of low RAM, above the code
   .endif                           ; (SOUND6: here, low RAM's code has snd_write's call)

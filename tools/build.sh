@@ -47,6 +47,11 @@
 #                MIRTAB, bank 5, the source's id by id - mir0, from the level file's mir
 #                section); the baker (ldprog.s) draws them too.  The game's assets.inc
 #                gives MAXMIR, MIRTAB's length
+#   TUNEFX=1     the title tune's richer player (engine/menus.s): each note struck with an
+#                envelope, the melody with a delayed vibrato, the chord as an arpeggio on one
+#                tone, the bass on the noise channel (periodic noise clocked by tone 2: its
+#                true pitch, below the tones' range).  The game's GAME_MUSIC runs
+#                tools/midi2snd.py --fx for its stream
 #   LDBIG=1      the Model B: the load-time program (LDPROG, from $0E00) up to 2.75K, not
 #                2.5K -- STAGE, the shared files' stage, starts a page later ($1900), so
 #                they are 15.75K at most (the game's packer must hold them to it)
@@ -103,7 +108,7 @@ mkdir -p build
 python3 $BG/tools/noanon.py $BG/src $([ "$GAME_NOANON" = 1 ] && echo "$GAME_SRC")
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5 LDBIG; do
+for o in GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5 LDBIG TUNEFX; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o

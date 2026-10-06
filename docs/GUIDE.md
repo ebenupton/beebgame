@@ -589,6 +589,18 @@ from a MIDI file; the voices argument picks each voice's note from the MIDI chan
 interrupt only while `mus_on` is set, which `music_start` sets and `music_stop` clears;
 it lives in the menus' image, so the tune plays in the menus and stops at every load.
 
+**The tune, richer (`TUNEFX=1`).**  `midi2snd.py --fx <in.mid> <out> [MEL [BASS [CHORD [SPLIT]]]]`
+writes a stream for a fuller player: a melody on tone 0 (a struck envelope, a delayed
+vibrato), a chord on tone 1 (the backing's notes from `SPLIT` up, arpeggiated a note every
+two vsyncs), and a bass on the noise channel -- periodic noise clocked by a silent tone 2,
+which sounds at the note's own pitch (a fifteenth of tone 2's), below the tones' 122 Hz
+floor.  Every note is struck where the MIDI starts it; the bass and the chord ring on through
+their rests, falling to silence, as plucked strings do.  The envelopes, the vibrato and the
+arpeggio's rate are the stream's header (`midi2snd.py` documents it).  The player is about
+380 bytes more in the menus' image and its state 20 bytes of low RAM; a vsync's step costs
+about 680 cycles on average, 1,940 at most (after the chain's writes: the menus' rupture
+timing is unchanged).  Cleo's `build.sh` is the example.
+
 ## Step 8: the assets
 
 `GAME_ASSETS` runs once per machine with `TARGET` and `BD` set, and must write the same
