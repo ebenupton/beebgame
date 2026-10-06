@@ -61,6 +61,8 @@
 ;   engine/frame.s     bank 7: render_frame and what it calls
 ;   engine/kernel.s    the kernel: the CRTC chain, the interrupt, keyboard, sound,
 ;                      load mode, ring_addr7
+;   engine/sound6.s    (SOUND6) the sound effects player, bank 6, and its
+;                      requests (the kernel)
 ;   engine/menus.s     the menus' image: the tune's player
 ;   engine/boot.s      start-up: the interrupt's takeover, the CRTC's first frame
 ;   engine/lowram.s    low RAM: the map access, page_logic
@@ -92,6 +94,9 @@
         .include "engine/sprloops.s"
         .include "engine/frame.s"
         .include "engine/kernel.s"
+  .if SOUND6
+        .include "engine/sound6.s"
+  .endif
         .include "engine/menus.s"
         .include "engine/boot.s"
         .include "engine/lowram.s"

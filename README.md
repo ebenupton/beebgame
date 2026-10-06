@@ -25,7 +25,9 @@ that boots on either machine.
   Watford and Solidisk write-select boards, the machine, the drive and the controller, and
   patches the code for what it found (`src/loader.s`, `src/cpu.inc`).
 - Sound effects stepped from the vsync and a three-voice tune player, with a MIDI
-  converter (`src/engine/kernel.s`, `src/engine/menus.s`, `tools/midi2snd.py`).
+  converter (`src/engine/kernel.s`, `src/engine/menus.s`, `tools/midi2snd.py`); or
+  (`SOUND6`) a four-voice effects player in bank 6 with sweeps, jitter and priorities,
+  the game's effects packed from a Python file (`src/engine/sound6.s`, `tools/sfx.py`).
 - A keyboard scan from a game-supplied key table, the MODE 1 palette, and the swap of bank
   7 between the game's image and the menus'.
 - A build driver that assembles both machines, lays out bank 7 from the object sizes, pins
@@ -66,6 +68,7 @@ TIGHTBSS ALLLEVELS` (each `=1`) and `MAXSPR=n`; `SKIP_ASSETS=1` skips the asset 
 | `src/engine/sprloops.s` | banks 4 and 5: the sprite row loop and its three blitters |
 | `src/engine/frame.s` | bank 7: `render_frame`, the sprite prologue, the records, the dirty tiles |
 | `src/engine/kernel.s` | the kernel: the CRTC chain, the interrupt, load mode, keys, sound, the palette |
+| `src/engine/sound6.s` | (`SOUND6`) bank 6: the sound effects player; the kernel's `sfx_request`, `sound_reset` |
 | `src/engine/menus.s` | the menus' image: the tune's player |
 | `src/engine/boot.s` | start-up: the interrupt's takeover, the CRTC's first frame |
 | `src/engine/lowram.s` | low RAM: the map access, `page_logic` |
@@ -86,6 +89,8 @@ TIGHTBSS ALLLEVELS` (each `=1`) and `MAXSPR=n`; `SKIP_ASSETS=1` skips the asset 
 | `tools/sprpack.py` | sprite placement within a bank against page crossings (imported by the game's packer) |
 | `tools/levelfile.py` | the level file format: writer, reader/checker, `levelfmt.inc` |
 | `tools/midi2snd.py` | MIDI to the three-voice 50 Hz note stream |
+| `tools/sfx.py` | (`SOUND6`) a game's sound effects packed for `sound6.s`; `check` models the player |
+| `tools/soundtest.mjs` | (`SOUND6`) the player's chip writes for a fixed schedule, in jsbeeb |
 | `tools/codecmp.py` | compare two sources' code ignoring comments and layout |
 | `test/test_levelfile.py` | the level file writer against its reader (`python3 -m unittest discover -s test`) |
 | `test/lib/harness.mjs` | the frame-exact jsbeeb driver: `frame_top` breaks, bank- and image-aware, scene fingerprint, render meter |

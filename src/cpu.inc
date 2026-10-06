@@ -57,10 +57,10 @@ GAMEHAZEL = 0                      ; the game's code in HAZEL too (the Master al
 GAMESOUND = 0                      ; the game's own sound player (hook_sound)
   .endif
   .ifndef SOUND6
-SOUND6 = 0                         ; GAMESOUND's hook_sound in bank 6 (GAME6CODE), the vsync
-  .endif                           ;  paging it in; snd_write and GATHERL in the low BSS's room
-  .if SOUND6 && (.not GAMESOUND)
-        .error "SOUND6 is GAMESOUND's player in bank 6: set GAMESOUND too"
+SOUND6 = 0                         ; the engine's effects player in bank 6 (sound6.s), the
+  .endif                           ;  game's effects packed from GAME_SFX; snd_write and GATHERL
+  .if SOUND6 && GAMESOUND          ;  in the low BSS's room
+        .error "SOUND6 is the engine's sound player, GAMESOUND the game's own: one or the other"
   .endif
   .ifndef TILEMIRROR
 TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): kind GL_MIRROR from the

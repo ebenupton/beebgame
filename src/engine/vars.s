@@ -42,8 +42,10 @@ nspr:      .res 1                  ; the sprite list's length: add_sprite counts
                                    ;  match_sprites read it
 bar_dirty: .res 1                  ; the bar's digits want redrawing: the game sets
                                    ;  it (1); render_frame calls hook_hud and clears it
+  .if .not SOUND6                  ; (the built-in player's: SOUND6's is sound6.s's)
 sfx_req:   .res 1                  ; a sound effect to start, 1-based into sfx_tab:
                                    ;  the game sets it; sound_tick takes and clears it
+  .endif
 mtmp:      .res 1                  ; cpu.inc bitimm's scratch (the Model B's expansion)
 ringbhi:   .res 1                  ; (Model B) the buffer being drawn, select_backbuf's:
 ringehi:   .res 1                  ;  its ring's base page, its end page (the fold test
@@ -109,8 +111,10 @@ load_req:  .res 1                  ; the load mode's state, LDR_RUN / LDR_STOP /
                                    ;  LDR_STOPPED / LDR_RESUME (defs.inc):
                                    ;  load_begin asks, the bar step stops, ldprog.s
                                    ;  asks the resume, the vsync runs again
+  .if .not SOUND6
 sfx_dur:   .res 1                  ; the sound effect's frames left in its step
                                    ;  (sound_tick's alone)
+  .endif
 tmp3:      .res 1                  ; build_sections' (a run's first ring row, @dur's
 tmp4:      .res 1                  ;  high byte; the rows in a run), match_sprites'
                                    ;  and draw_sprite's, mirror_copy's, the game's
@@ -235,7 +239,9 @@ keys:      .res 1                  ; the K_ bits held, scan_keys' (the vsync); t
 map_ptr:   .res 2                  ; a map row's address in bank 5: map_row's (and the
                                    ;  game's own row table), for map_byte, map_put,
                                    ;  map_col and draw_rect
+  .if .not SOUND6
 sfx_ptr:   .res 2                  ; the sound effect's next step; +1 = 0: none playing
+  .endif
 mus_ptr:   .res 2                  ; the tune's next record (music_tick, menus.s)
 
 ; ---------------------------------------------------------------- the Model B's gather

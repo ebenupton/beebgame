@@ -960,10 +960,9 @@ irq_handler:
         ; ---- the keys and the sound
 @keys:  jsr scan_keys
   .if GAMESOUND
-    .if .not SOUND6                ; (SOUND6: in bank 6, after the tune, below and low.s
-        jsr hook_sound             ;  irq_vret) the game's own sound
-    .endif
-  .else
+        jsr hook_sound             ; the game's own sound
+  .elseif .not SOUND6              ; (SOUND6: sound6.s sfx_tick, in bank 6, after the tune:
+                                   ;  below, and low.s irq_vret)
         ; ---- sound_tick: the sound effect's step, then the tune's.  An sfx is
         ;      steps of SFXSTEP_LEN bytes: three for the chip, then the vsyncs
         ;      to hold them; a first byte of SFX_END ends it.  sfx_req: 1-based
@@ -979,7 +978,7 @@ irq_handler:
         ; ---- the tune: its player, music_tick, is in the menus' image of bank
         ;      7 (menus.s), and mus_on is set only while that image is in
 @tune:  lda mus_on
-  .if BHW .or GAMESOUND
+  .if BHW .or GAMESOUND .or SOUND6
         sta mus_tick               ; (the Model B's stub reads it: low.s)
   .endif
   .if BHW                          ; blessed placement: the stub steps the tune
@@ -994,8 +993,8 @@ irq_handler:
         dec mus_tick
         jsr page_logic             ; bank 7, for the menus' image
         jsr music_tick
-@snd:   jsr page6                  ; the game's sound, in bank 6
-        jsr hook_sound
+@snd:   jsr page6                  ; the effects, in bank 6 (sound6.s)
+        jsr sfx_tick
     .else
         beq @vexit
       .if GAMESOUND
@@ -1014,7 +1013,7 @@ irq_handler:
         lda MOS_IRQA
         rti
   .endif
-  .if .not GAMESOUND
+  .if .not (GAMESOUND .or SOUND6)
         ; ---- a new sfx: its first step at once
 @sfstart:
         asl
@@ -1106,7 +1105,7 @@ scan_keys:
         rts
         .include "keymap.inc"      ; the game's: KEYN, key_tab, key_bits
 
-  .if SOUND6                       ; in low RAM: bank 6's player writes the chip too
+  .if SOUND6                       ; in low RAM: bank 6's player (sound6.s) writes the chip too
         .segment "LOWCODE2"
   .endif
 ; ----------------------------------------------------------------------------
@@ -1120,7 +1119,7 @@ scan_keys:
 ; The byte goes out on port A; the addressable latch's SL_SND bit is the chip's
 ; write enable, held low through 8 nops (16 cycles).  Autoscan is turned on
 ; first so the keyboard does not drive PA7.  Placed with the interrupt's work;
-; SOUND6: in low RAM (LOWCODE2), for bank 6's sound player and bank 7 alike.
+; SOUND6: in low RAM (LOWCODE2), for bank 6's effects player and bank 7 alike.
 ; ----------------------------------------------------------------------------
 snd_write:
         pha

@@ -91,11 +91,11 @@ irq_handler:
         jmp isr_body
 
 ; ----------------------------------------------------------------------------
-; irq_vret: the vsync's way back: step the title tune, (SOUND6) the game's sound in
-; bank 6, then irq_ret
+; irq_vret: the vsync's way back: step the title tune, (SOUND6) the effects in bank 6
+; (sound6.s sfx_tick), then irq_ret
 ;   In:    mus_tick = mus_on, raised by the vsync's sound_tick; bank 7 paged in
 ;   Out:   mus_tick = 0; the tune stepped (menus.s music_tick) if it was set; SOUND6:
-;          hook_sound run with bank 6 paged
+;          sfx_tick run with bank 6 paged
 ; The player is in the menus' image of bank 7, and mus_on is set only while that
 ; image is in (music_stop clears it before any load).
 ; ----------------------------------------------------------------------------
@@ -108,9 +108,9 @@ irq_vret:
   .endif
         dec mus_tick               ; 1 -> 0: mus_on's value, which is 0 or 1
         jsr music_tick             ; (bank 7: paged above)
-  .if SOUND6                       ; the game's sound, in bank 6 (irq_ret pages the
-@snd:   jsr page6                  ;  interrupted bank back)
-        jsr hook_sound
+  .if SOUND6                       ; the effects, in bank 6 (sound6.s; irq_ret pages
+@snd:   jsr page6                  ;  the interrupted bank back)
+        jsr sfx_tick
   .endif
 ; ----------------------------------------------------------------------------
 ; irq_ret: a step's way back

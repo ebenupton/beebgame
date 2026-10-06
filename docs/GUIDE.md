@@ -273,7 +273,7 @@ assembled into the engine's own code.
 | `hook_image` | `ldprog.s` `ld_image` (`jsr`) | the menus' image called `go_game`: the game's image has been read in, its bank numbers and write-bank stores patched, `GAME_BSS` zeroed and the bar's template (`BAR`) read to `BARADDR` | the game's image is in; **interrupts are off and the chain parked** (the load has not ended: `ld_open` = 1); A is undefined; the stack reset | returns; A, X, Y free |
 | `hook_play` | `disc.s` `game_in` (`jmp`), straight after `hook_image` | the same | as `hook_image` left it | never returns: it ends in `go_menu`.  Its first act must be a level load (`load_level_b`), which with `ld_open` set goes straight on and ends in `ld_resume`: only then do the vsyncs count and the flips land |
 | `hook_hud` | `frame.s` `render_frame` (`jsr`), after its wait for the last flip | once a rendered frame when `bar_dirty` is non-zero; `render_frame` then clears it (`stz01`: set it to 1 and no other value) | bank 7 paged (the game's image); the bar at `BARADDR` is on display and single buffered: the digits must be finished before the CRTC reaches it, (`QROWS`-`QVSYNC`)*8 scanlines after the vsync | returns; A, X, Y free |
-| `hook_sound` | `kernel.s`, the vsync's step of the interrupt, after `scan_keys` -- only with `GAMESOUND=1`, in place of the engine's `sound_tick` | every vsync, whichever image is in bank 7 | the interrupt's: A, X, Y saved by the handler (`irq_x`, `irq_y`, `MOS_IRQA`); the engine still copies `mus_on` to `mus_tick` after it | returns; it must store into no sideways bank (the interrupt's rule, `vars.s`: what it keeps goes in zero page or `LOWBSS`) and so must live outside both images: HAZEL (`GAMEHAZEL`), the kernel's segments, or bank 6 (`SOUND6`: segment `GAME6CODE`, called with bank 6 paged, after the tune's step) |
+| `hook_sound` | `kernel.s`, the vsync's step of the interrupt, after `scan_keys` -- only with `GAMESOUND=1`, in place of the engine's `sound_tick` | every vsync, whichever image is in bank 7 | the interrupt's: A, X, Y saved by the handler (`irq_x`, `irq_y`, `MOS_IRQA`); the engine still copies `mus_on` to `mus_tick` after it | returns; it must store into no sideways bank (the interrupt's rule, `vars.s`: what it keeps goes in zero page or `LOWBSS`) and so must live outside both images: HAZEL (`GAMEHAZEL`), the kernel's segments |
 | `ld_game` (only with `GAMELDINIT=1`) | `ldprog.s` `ld_entry` (`jsr`), after `lv_load` | every level load, before the load ends | the level in the banks, `LV_HDR` and `LV_OBJS` in place; bank 7 paged and write-selected; interrupts off; your `ldgame.s`, assembled into LDPROG (Step 11) | returns with bank 7 paged and write-selected; A, X, Y free; then `ld_resume` and `load_level_b`'s return |
 
 Two facts about the image hooks: the stack is reset to `STACKTOP` before each, so
@@ -547,6 +547,29 @@ An effect must not sit in page 0 (`sound_tick` tests its address's high byte for
 playing").  With `GAMESOUND=1` none of this is assembled and the vsync calls your
 `hook_sound` instead (Step 3).
 
+**Sound effects, the bank 6 player (`SOUND6=1`).**  A richer player, in bank 6 where it
+costs bank 7 nothing: four voices (the three tones and the noise), each playing a script of
+segments that hold a period and a level for some frames while sweeping them, with an
+effect's priority deciding which voice it may take.  Write your effects in a Python file
+and name it `GAME_SFX`; `tools/sfx.py` (its docstring has the format) packs them into
+each machine's `sfxdata.inc`, which defines `SFX_<NAME>` for each:
+
+```python
+EFFECTS = [
+    # a short pew falling an octave, on voice 1
+    ('blob', 3, [(1, [S(6, 120, 200, -32, 20, 0)])]),
+    # a ding, F up to C: two segments
+    ('mission', 6, [(0, [S(4, 179, 240, -10, 0, 0), S(10, 119, 240, -22, 0, 0)])]),
+]
+```
+
+Ask for one with `lda #SFX_BLOB / jsr sfx_request` (any number in a frame; X and Y kept),
+silence everything with `sound_reset`: both are in the kernel, so the menus' image calls
+them as the game's does.  `tools/sfx.py check GAME_SFX [stream.json]` plays a fixed
+schedule through a model of the player, and `tools/soundtest.mjs disc out.json` records
+the real player's chip writes for the same schedule: two builds with the same effects give
+the same stream.
+
 **The tune.**  Your `MNUDATA` provides `music_addr`: `MUS_TAB_LEN` (144) bytes of
 periods for MIDI notes `MUS_NOTE0` .. +`MUS_NNOTES`-1 (24..95), then 4-byte records --
 frames, then a note for each of the three voices (0 a rest) -- with frames = 0 to loop
@@ -745,7 +768,7 @@ both machines.
 | `MASTERONLY=1` | the Master alone: no Model B assembly, link or files; the Master linked unpinned, its own layout the level files'.  The boot loader stops on a Model B with "needs a BBC Master 128" | `build.sh`, `loader.s` |
 | `GAMEHAZEL=1` | your code in HAZEL as well: segments `HAZCODE`, `HAZDATA`, `HAZBSS`, a piece of `BANKS` the boot loader copies once (`PIECE_HAZEL`).  Needs `MASTERONLY`; `SPRX` is then read at every level load (nothing is kept in HAZEL/ANDY) | `build.sh`, `banks.cfg`, `ldprog.s` `SPRXKEEP` |
 | `GAMESOUND=1` | the vsync calls your `hook_sound` in place of `sound_tick`; the tune's step is still raised | `kernel.s` |
-| `SOUND6=1` | (with `GAMESOUND`) your `hook_sound` in bank 6, segment `GAME6CODE` after the tile blitter (your `TOFF` clears it): the vsync pages bank 6 in for it after the tune (the Model B from `low.s` `irq_vret`, the Master's handler around it), so it is there under either image of bank 7 and costs bank 7 nothing.  It may read only bank 6, zero page and low RAM; `snd_write` moves to low RAM (`LOWCODE2`) for it, and `GATHERL` into `LOWBSS` | `kernel.s`, `low.s`, `init.s`, `banks.cfg` |
+| `SOUND6=1` | the engine's sound effects player (`engine/sound6.s`) in place of `sound_tick`, playing your `GAME_SFX` effects (packed by `tools/sfx.py`): in bank 6, segment `SND6CODE` after the tile blitter (your `TOFF` clears it), the vsync paging it in after the tune (the Model B from `low.s` `irq_vret`, the Master's handler around it), so it is there under either image of bank 7 and costs bank 7 nothing; `sfx_request` and `sound_reset` in the kernel; its state in `LOWBSS`; `snd_write` moves to low RAM (`LOWCODE2`) for it, and `GATHERL` into `LOWBSS`.  Not with `GAMESOUND` | `sound6.s`, `kernel.s`, `low.s`, `init.s`, `banks.cfg`, `build.sh`, `tools/sfx.py` |
 | `TALLMAP=1` | maps up to 256 tiles tall: the window's character row keeps its high bits (`wcyh`) for the tile blitter's map row.  On the Model B it needs `RINGARITH` (`cpu.inc` errors without): its 23-row ring does not divide 256, so `calc_ring` takes the window's slot from the full row (`wcyh:wcy` mod 23, as `wcy + 3*wcyh`) and `RINGARITH` puts every other row relative to it | `cpu.inc`, `vars.s`, `frame.s`, `kernel.s` |
 | `TILEMIRROR=1` | mirrored full tiles: an id drawn as a stored full tile reversed (chars right to left, each byte's two game pixels swapped; `tiles.s` `@mir`).  Your packer gives them the ids from `mir0`, after the halves (before the flats), and the level file's `mir` section (`MIRTAB`) each one's source's id; `LV_PAGE0` gives them kind `GL_MIRROR` (3) in the low byte.  The Model B's gather reads `MIRTAB` (bank 5, `MAXMIR` bytes from your `assets.inc`; 32 bytes of code more), the baker draws them, and the blitter costs 7 cycles more a full-tile run | `gather.s`, `tiles.s`, `ldprog.s`, `levelfile.py` |
 | `DRAWFLAGS=1` | the sprite list's x high byte carries draw flags: bit 7 mirrors the image, so one image is drawn either way round from the list | `frame.s` `draw_sprites`, `draw_sprite` |

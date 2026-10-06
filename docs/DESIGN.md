@@ -947,8 +947,10 @@ second byte, a data byte, replaces the noise control (`hw.inc`: bit 2 `SN_WHITE`
 the rate) just as the latch's low bits set it, so an effect there repeats the control in it.  `sfx_ptr`, `sfx_dur` are the
 player's state; `sfx_ptr+1 = 0` means none playing.  `sound_tick` is a step of the vsync
 handler on both machines (inlined; the effects themselves sit with it under `PLACEH`).  With
-`GAMESOUND` the vsync calls the game's `hook_sound` instead; with `SOUND6` that is in bank 6
-(`GAME6CODE`), paged in by the vsync after the tune, `snd_write` in low RAM beside it.
+`GAMESOUND` the vsync calls the game's `hook_sound` instead.  `SOUND6` the engine's bank 6
+player (`sound6.s`, `SND6CODE`) plays the game's effects (`GAME_SFX`, packed by
+`tools/sfx.py`), paged in by the vsync after the tune, its state in `LOWBSS`,
+`snd_write` in low RAM beside it, `sfx_request` and `sound_reset` in the kernel.
 
 ### The tune
 

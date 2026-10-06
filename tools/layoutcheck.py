@@ -23,7 +23,7 @@ def dbgfile(d):
     return g if os.path.exists(g) else os.path.join(d, 'cleo.dbg')
 
 CODE = {'MRAMCODE', 'TILCODE', 'GAMECODE', 'SPR4CODE', 'SPR5CODE', 'MAP5CODE',
-        'TIL6ENT', 'MNUCODE', 'LOWCODE', 'LOWCODE2', 'GAME6CODE', 'D8271C', 'D1770C', 'D8271N', 'D1770N', 'KRNCODE', 'ENGCODE', 'MUSCODE'}
+        'TIL6ENT', 'MNUCODE', 'LOWCODE', 'LOWCODE2', 'SND6CODE', 'D8271C', 'D1770C', 'D8271N', 'D1770N', 'KRNCODE', 'ENGCODE', 'MUSCODE'}
 # run once at start-up, then overwritten
 STARTUP = {'BOOT', 'BOOTHDR', 'BANKFIX', 'WRFIX'}
 # one machine's own, placed after the shared data

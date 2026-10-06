@@ -19,6 +19,8 @@
 #                assets.inc, the level files, SPRC, SPRX, BAR, img_tab.bin and what the
 #                game's own sources .incbin -- and build/TILES0-2
 #   GAME_MUSIC   run once first (may be empty)
+#   GAME_SFX     (SOUND6) the game's sound effects: a Python file setting EFFECTS
+#                (tools/sfx.py), packed into each machine's sfxdata.inc
 #   DISC_TITLE   the disc's title; DISC_OUT the disc image (build/game.ssd); GAME_NAME the
 #                game's name, for the boot loader's messages (DISC_TITLE by default)
 #   SKIP_ASSETS=1 skips GAME_MUSIC and GAME_ASSETS
@@ -32,14 +34,16 @@
 #                HAZEL and ANDY)
 #   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound effects
 #                (kernel.s)
-#   SOUND6=1     (with GAMESOUND) hook_sound is in bank 6, the game's segment GAME6CODE after
-#                the tile blitter (so the tiles start that much higher: the game's TOFF): the
-#                vsync pages bank 6 in for it, after the tune -- the Model B's in low RAM
-#                (low.s irq_vret), the Master's handler around it -- so the player is there
-#                under either image of bank 7 and reads no bank 7.  What it keeps must be in
-#                low RAM (the interrupt stores into no bank).  snd_write moves to low RAM
-#                (LOWCODE2, in the low BSS's room after its variables, copied down by boot)
-#                for bank 6 and bank 7 alike, and GATHERL into LOWBSS
+#   SOUND6=1     the engine's sound effects player (engine/sound6.s) in place of sound_tick:
+#                in bank 6 (segment SND6CODE, after the tile blitter, so the tiles start that
+#                much higher: the game's TOFF), the vsync paging it in after the tune -- the
+#                Model B from low RAM (low.s irq_vret), the Master's handler around it -- so
+#                it is there under either image of bank 7 and costs bank 7 nothing; its state
+#                in LOWBSS.  The game's effects are GAME_SFX's, packed by tools/sfx.py into
+#                sfxdata.inc (SFX_* ids for sfx_request, in the kernel with sound_reset).
+#                snd_write moves to low RAM (LOWCODE2, in the low BSS's room after its
+#                variables, copied down by boot) for bank 6 and bank 7 alike, and GATHERL
+#                into LOWBSS.  Not with GAMESOUND
 #   TILEMIRROR=1 mirrored full tiles: the tile blitter draws a stored tile right to left
 #                (tiles.s @mir) where the gather gives kind GL_MIRROR -- the Master's
 #                LV_PAGE0, the Model B's gather5 for the ids from mir0 (after the halves:
@@ -129,6 +133,7 @@ for t in $TARGETS; do
     settarget $t
     mkdir -p $BD
     [ -n "$SKIP_ASSETS" ] || sh -c "$GAME_ASSETS"
+    [ "$SOUND6" = 0 ] || python3 $BG/tools/sfx.py "${GAME_SFX:?SOUND6 needs GAME_SFX: the game effects file}" $BD/sfxdata.inc
     sed "s#\"build/#\"$BD/#g" $CFG > $BD/game.cfg
     # TIGHTBSS: ENGBSS where GAMEBSS ends, not at the next page
     [ "$TIGHTBSS" = 1 ] && sed -i.bak '/^ *ENGBSS:/s#, align = \$100##' $BD/game.cfg
