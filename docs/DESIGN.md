@@ -947,7 +947,8 @@ second byte, a data byte, replaces the noise control (`hw.inc`: bit 2 `SN_WHITE`
 the rate) just as the latch's low bits set it, so an effect there repeats the control in it.  `sfx_ptr`, `sfx_dur` are the
 player's state; `sfx_ptr+1 = 0` means none playing.  `sound_tick` is a step of the vsync
 handler on both machines (inlined; the effects themselves sit with it under `PLACEH`).  With
-`GAMESOUND` the vsync calls the game's `hook_sound` instead.
+`GAMESOUND` the vsync calls the game's `hook_sound` instead; with `SOUND6` that is in bank 6
+(`GAME6CODE`), paged in by the vsync after the tune, `snd_write` in low RAM beside it.
 
 ### The tune
 
@@ -970,7 +971,7 @@ exports `GAME_MAIN` (the root source, which includes the engine's), `GAME_SRC`, 
 (run once per machine with `TARGET` and `BD` set), `GAME_MUSIC` (once, first), `DISC_TITLE`,
 `DISC_OUT`, `GAME_NAME`.  Cleo's is nineteen lines (`beeb/build.sh`).  Options, each a `-D`
 flag (`cpu.inc` defaults them to 0; the header of `build.sh` says what each does):
-`MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
+`MASTERONLY GAMEHAZEL GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS DIRSPLIT TILEMIRROR GAMELDINIT
 UDATA5 ALLLEVELS`, and `MAXSPR=n`.
 `GAMEHAZEL` needs `MASTERONLY`; `TALLMAP` on the Model B needs `RINGARITH` (`cpu.inc` errors).
 `SKIP_ASSETS=1` skips the music and asset steps.

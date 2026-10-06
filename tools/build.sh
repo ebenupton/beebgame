@@ -32,6 +32,14 @@
 #                HAZEL and ANDY)
 #   GAMESOUND=1  the vsync calls the game's hook_sound instead of the engine's sound effects
 #                (kernel.s)
+#   SOUND6=1     (with GAMESOUND) hook_sound is in bank 6, the game's segment GAME6CODE after
+#                the tile blitter (so the tiles start that much higher: the game's TOFF): the
+#                vsync pages bank 6 in for it, after the tune -- the Model B's in low RAM
+#                (low.s irq_vret), the Master's handler around it -- so the player is there
+#                under either image of bank 7 and reads no bank 7.  What it keeps must be in
+#                low RAM (the interrupt stores into no bank).  snd_write moves to low RAM
+#                (LOWCODE2, in the low BSS's room after its variables, copied down by boot)
+#                for bank 6 and bank 7 alike, and GATHERL into LOWBSS
 #   TILEMIRROR=1 mirrored full tiles: the tile blitter draws a stored tile right to left
 #                (tiles.s @mir) where the gather gives kind GL_MIRROR -- the Master's
 #                LV_PAGE0, the Model B's gather5 for the ids from mir0 (after the halves:
@@ -88,7 +96,7 @@ set -e
 mkdir -p build
 # the options as the assembler's flags; each is exported as 1 or 0 for the Python below
 OPTDEFS=""
-for o in MASTERONLY GAMEHAZEL GAMESOUND DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5; do
+for o in MASTERONLY GAMEHAZEL GAMESOUND SOUND6 DRAWFLAGS TALLMAP TIGHTBSS ALLLEVELS TILEMIRROR RINGARITH B6PACK NOPADS DIRSPLIT GAMELDINIT UDATA5; do
     eval "v=\$$o"
     if [ "$v" = 1 ]; then OPTDEFS="$OPTDEFS -D $o=1"; else eval "$o=0"; fi
     export $o

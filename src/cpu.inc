@@ -56,6 +56,12 @@ GAMEHAZEL = 0                      ; the game's code in HAZEL too (the Master al
   .ifndef GAMESOUND
 GAMESOUND = 0                      ; the game's own sound player (hook_sound)
   .endif
+  .ifndef SOUND6
+SOUND6 = 0                         ; GAMESOUND's hook_sound in bank 6 (GAME6CODE), the vsync
+  .endif                           ;  paging it in; snd_write and GATHERL in the low BSS's room
+  .if SOUND6 && (.not GAMESOUND)
+        .error "SOUND6 is GAMESOUND's player in bank 6: set GAMESOUND too"
+  .endif
   .ifndef TILEMIRROR
 TILEMIRROR = 0                     ; mirrored full tiles (tiles.s @mir): kind GL_MIRROR from the
   .endif                           ;  Master's LV_PAGE0, the Model B's gather from MIRTAB

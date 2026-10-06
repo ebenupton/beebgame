@@ -18,7 +18,7 @@
 ;   call_bank    a bank's entry (BANKENTRY), A = the bank, then bank 7 back
 ;
 ; Segments: LOWCODE (the code, copied down), LOWBSS, LOWBSS2 (GATHERL, above the
-; code), LOWHW (the Model B's mirror notes, after the shared).  The .if BHW blocks
+; code; SOUND6: in LOWBSS, and LOWCODE2, kernel.s snd_write, after it), LOWHW (the Model B's mirror notes, after the shared).  The .if BHW blocks
 ; are the first blessed placement (the Master's handler is at IRQ1V itself) and
 ; hardware (the mirror).
 ; ============================================================================
@@ -46,7 +46,9 @@ mus_dur:   .res 1                  ; the tune's player (menus.s music_tick, from
 MUSNOTE:   .res 3                  ;  interrupt's tail; music_start): the record's
 isr_t1:    .res 1                  ;  frames to go, each voice's note, and two bytes
 isr_t2:    .res 1                  ;  of scratch
+  .if .not SOUND6
         .segment "LOWBSS2"         ; the rest of low RAM, above the code
+  .endif                           ; (SOUND6: here, low RAM's code has snd_write's call)
 GATHERL:   .res GATHERN            ; the gather's low bytes (GATHERH's pair)
   .if BHW                          ; hardware: the mirror (mirror.s)
         .segment "LOWHW"           ; (after the shared)
@@ -89,17 +91,27 @@ irq_handler:
         jmp isr_body
 
 ; ----------------------------------------------------------------------------
-; irq_vret: the vsync's way back: step the title tune, then irq_ret
+; irq_vret: the vsync's way back: step the title tune, (SOUND6) the game's sound in
+; bank 6, then irq_ret
 ;   In:    mus_tick = mus_on, raised by the vsync's sound_tick; bank 7 paged in
-;   Out:   mus_tick = 0; the tune stepped (menus.s music_tick) if it was set
+;   Out:   mus_tick = 0; the tune stepped (menus.s music_tick) if it was set; SOUND6:
+;          hook_sound run with bank 6 paged
 ; The player is in the menus' image of bank 7, and mus_on is set only while that
 ; image is in (music_stop clears it before any load).
 ; ----------------------------------------------------------------------------
 irq_vret:
         lda mus_tick
+  .if SOUND6
+        beq @snd
+  .else
         beq irq_ret
+  .endif
         dec mus_tick               ; 1 -> 0: mus_on's value, which is 0 or 1
         jsr music_tick             ; (bank 7: paged above)
+  .if SOUND6                       ; the game's sound, in bank 6 (irq_ret pages the
+@snd:   jsr page6                  ;  interrupted bank back)
+        jsr hook_sound
+  .endif
 ; ----------------------------------------------------------------------------
 ; irq_ret: a step's way back
 ;   In:    the interrupted ROMSEL_CPY on the stack (irq_handler's pha)

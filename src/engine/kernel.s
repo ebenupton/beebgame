@@ -960,7 +960,9 @@ irq_handler:
         ; ---- the keys and the sound
 @keys:  jsr scan_keys
   .if GAMESOUND
-        jsr hook_sound             ; the game's own sound
+    .if .not SOUND6                ; (SOUND6: in bank 6, after the tune, below and low.s
+        jsr hook_sound             ;  irq_vret) the game's own sound
+    .endif
   .else
         ; ---- sound_tick: the sound effect's step, then the tune's.  An sfx is
         ;      steps of SFXSTEP_LEN bytes: three for the chip, then the vsyncs
@@ -983,14 +985,27 @@ irq_handler:
   .if BHW                          ; blessed placement: the stub steps the tune
         jmp irq_vret
   .else
-        beq @vexit
-    .if GAMESOUND
+    .if SOUND6
+        tay                        ; (Z: mus_on)
+        lda ROMSEL_CPY             ; the interrupted code's bank: back after
+        pha
+        tya
+        beq @snd
         dec mus_tick
-    .endif
+        jsr page_logic             ; bank 7, for the menus' image
+        jsr music_tick
+@snd:   jsr page6                  ; the game's sound, in bank 6
+        jsr hook_sound
+    .else
+        beq @vexit
+      .if GAMESOUND
+        dec mus_tick
+      .endif
         lda ROMSEL_CPY             ; the interrupted code's bank: back after
         pha
         jsr page_logic             ; bank 7, for the menus' image
         jsr music_tick
+    .endif
         pla
         sta ROMSEL_CPY
         sta ROMSEL
@@ -1091,6 +1106,9 @@ scan_keys:
         rts
         .include "keymap.inc"      ; the game's: KEYN, key_tab, key_bits
 
+  .if SOUND6                       ; in low RAM: bank 6's player writes the chip too
+        .segment "LOWCODE2"
+  .endif
 ; ----------------------------------------------------------------------------
 ; snd_write: a byte to the SN76489
 ;   In:    A = the byte
@@ -1101,7 +1119,8 @@ scan_keys:
 ;          autoscan on
 ; The byte goes out on port A; the addressable latch's SL_SND bit is the chip's
 ; write enable, held low through 8 nops (16 cycles).  Autoscan is turned on
-; first so the keyboard does not drive PA7.  Placed with the interrupt's work.
+; first so the keyboard does not drive PA7.  Placed with the interrupt's work;
+; SOUND6: in low RAM (LOWCODE2), for bank 6's sound player and bank 7 alike.
 ; ----------------------------------------------------------------------------
 snd_write:
         pha
