@@ -99,4 +99,9 @@ The engine was split out of Cleo on 27 September 2026 (the first commit), and Cl
 (`github.com/ebenupton/cleo`, where this repository is the submodule `beeb/beebgame`) is the
 reference game: the documents' examples are its.  The level file format is the engine's;
 the asset packer that writes it is each game's own, on `tools/levelfile.py` and
-`tools/sprpack.py`.  There is no licence file yet.
+`tools/sprpack.py`.
+
+## Licence
+
+MIT: see `LICENSE`.  It covers the whole repository -- the engine, its tools, tests and
+documents.
