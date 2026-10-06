@@ -127,7 +127,9 @@ class Source:
     def short(self, fid):
         n = self.names[fid]
         ap = n if os.path.isabs(n) else os.path.join(self.root, n)
-        return os.path.relpath(ap, self.root)
+        # '/' on every host: callers compare with it (game_dir + '/'), and a
+        # Windows relpath has backslashes
+        return os.path.relpath(ap, self.root).replace(os.sep, '/')
 
 
 _LABEL = re.compile(r'^\s*(?:(?:[@A-Za-z_][\w@.]*|):)?\s*')
