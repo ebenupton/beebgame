@@ -194,12 +194,15 @@ are kept apart by stack height.  The interrupt's writes are never tracked.
 
 ## The object model (optional: the config's OBJECTS)
 A game whose objects live in an array of fixed-size records with a type byte, processed
-one at a time through a zero-page pointer and dispatched by type, can have per-type facts:
+one at a time through a zero-page pointer and dispatched by type, can have per-type facts
+(or in one array a field, the current record the one whose index a register holds, equal
+to the current-record byte: `layout='soa'`):
 each (type, field) has a range over every record of that type, all game long (a fixpoint
 over rounds of the whole analysis, widened to converge; a run that does not converge says
 so at the top of every annotated file); a record read through the current-record pointer
 gives a value per type, and the dispatch (an RTS through a table indexed by the type)
-splits the state, so a handler sees only its own type's fields.  When the game's loader
+splits the state, so a handler sees only its own type's fields -- as does a `jmp (ind)`
+through a pointer loaded from a table by the type, or a `jmp (abs,x)` with X the type.  When the game's loader
 builds the records (Commando's ld_game in the load-time program), that program is analysed
 first, the type bound where the loader loads it (the config's `bind`).
 
@@ -230,7 +233,9 @@ Each is a candidate: check it, and gate it.
 A Python file of assignments: `GAME_DIR`, `ISR_ROOTS`, `ISR_DATA_POINTERS`,
 `INLINE_HELPERS`, `HELPER_SCRATCH`, `HELPER_CARRY_X0`, `SCREEN_POINTERS`, `VAR_SEGMENTS`,
 `LOADER_DBG`, `OBJECTS` -- gamecfg.py documents each.  Commando's is
-`tools/dataflow_commando.py` in its repository; Cleo runs with none.
+`tools/dataflow_commando.py` in its repository; Cleo's is `tools/dataflow_cleo.py` in its
+(the objects one array a field, indexed by `obj`, built by level_init: `layout='soa'`,
+`game_bind`).
 
 ## Using the annotations to shrink code: a suggested farm
 

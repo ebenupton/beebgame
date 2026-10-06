@@ -194,6 +194,11 @@ class Ranges:
         self.an = an
         self.types = frozenset(types)
         self.objst = objst                    # (base, nrec, stride) or None
+        # the records' layout: 'aos', a record of `stride` bytes after another (field =
+        # offset in the record), or 'soa', one array of nrec bytes a field (`stride` the
+        # field count: field = which array), the current record the index register equal
+        # to the current-record byte (hints 'op')
+        self.soa = bool((hints or {}).get('soa'))
         self.I = iread or {}                  # (t, field) -> abstract byte (the reads)
         self.Iw = collections.defaultdict(lambda: None)   # (t, field) -> written
         self.notes = notes if notes is not None else []
@@ -477,6 +482,10 @@ class Ranges:
 
     def project(self, st, keep):
         """st with only the bytes in keep tracked (the rest read as their defaults)"""
+        if self.soa and self.hints.get('op') is not None:
+            # the current record's index: a callee's indexed field accesses are keyed on it
+            # (a register equal to it), whether or not the callee names it
+            keep = set(keep) | {self.hints['op']}
         s = st.clone()
         s.mem = {a: v for a, v in st.mem.items() if a in keep}
         s.mir = {r: a for r, a in st.mir.items() if a in keep}
@@ -492,7 +501,7 @@ class Ranges:
             return None
         base, n, stride = self.objst
         if base <= a < base + n * stride:
-            return (a - base) % stride
+            return (a - base) // n if self.soa else (a - base) % stride
         return None
 
     def trackable(self, a):
@@ -562,7 +571,7 @@ class Ranges:
             self._kill_loc(st, ('m', a))
         # the per-type keying follows `op`: a new current record, nothing known of it
         op = self.hints.get('op')
-        if op is not None and (op in addrs or op + 1 in addrs):
+        if op is not None and (op in addrs or (not self.soa and op + 1 in addrs)):
             self._rekey(st)
 
     def extent(self, o):
@@ -597,8 +606,7 @@ class Ranges:
         aset = addrs if isinstance(addrs, (set, frozenset)) else set(addrs)
         self._note_pw(aset, i)
         if self.objst is not None and (i is None or (i.game and (via_op or i.key not in self.prebuild))):
-            base, n, stride = self.objst
-            hit = {(a - base) % stride for a in aset if base <= a < base + n * stride}
+            hit = {self.objfield(a) for a in aset} - {None}
             c = collapse(v, st.ty)
             for f in hit:
                 for t in (st.ty if via_op else self.types):
@@ -612,7 +620,7 @@ class Ranges:
         if st.cmpp and st.cmpp[0][0] == 'm' and st.cmpp[0][1] in aset:
             st.cmpp = None
         op = self.hints.get('op')
-        if op is not None and (op in aset or op + 1 in aset):
+        if op is not None and (op in aset or (not self.soa and op + 1 in aset)):
             self._rekey(st)
 
     def _rekey(self, st):
@@ -658,6 +666,17 @@ class Ranges:
             if mode in ('zpx', 'zpy'):
                 return sorted({(o + v) & 0xFF for v in rv}), False
             out = sorted({(o + v) & 0xFFFF for v in rv})
+            f = self.objfield(o) if self.soa else None
+            if f is not None and self.hints.get('op') is not None and \
+                    st.mir.get('X' if mode == 'abx' else 'Y') == self.hints['op']:
+                # a field array indexed by the current record's index: that record's field
+                # (the index taken to stay inside the array, as any sized array's)
+                base, n, _ = self.objst
+                fb = base + f * n
+                hit = [a for a in out if fb <= a < fb + n]
+                if len(hit) != len(out):
+                    self.op_assumed[i.key] += 1
+                return (hit or list(range(fb, fb + n))), True
             ext = self.extent(o)
             if ext and any(not (ext[0] <= a < ext[1]) for a in out):
                 # an index into a sized array (its base a `.res` label) stays inside it
@@ -677,7 +696,7 @@ class Ranges:
             lo = collapse(self.mread(st, p, i), st.ty) or TOP
             hi = collapse(self.mread(st, (p + 1) & 0xFF, i), st.ty) or TOP
             ys = [0] if mode in ('zpi', 'inx') else dom.values(collapse(st.r['Y'], st.ty), 256)
-            if p == self.hints.get('op') and self.objst is not None and ys is not None and \
+            if p == self.hints.get('op') and self.objst is not None and not self.soa and ys is not None and \
                     (dom.values(hi, 2) is None or dom.values(lo, 16) is None):
                 # the current-record pointer: always one of the records (the record count;
                 # an assumption, summary.md) when the analysis lost it
@@ -702,10 +721,10 @@ class Ranges:
                     out.update(range(h * 256 + lo_min + min(ys), h * 256 + lo_max + max(ys) + 1))
                 if len(out) > 8192:
                     return None, False
-                via = (p == self.hints.get('op'))
+                via = (p == self.hints.get('op')) and not self.soa
                 return sorted(a & 0xFFFF for a in out), via
             out = sorted({(h * 256 + l + y) & 0xFFFF for h in his for l in los for y in ys})
-            via = (p == self.hints.get('op'))
+            via = (p == self.hints.get('op')) and not self.soa
             return out, via
         return None, False
 
@@ -1526,31 +1545,46 @@ class Ranges:
         return out
 
     def jmp_ind(self, st, i):
+        """JMP (ind) / JMP (abs,X): [(insn key, state)] -- split by object type when the
+        pointer or the index is a value per type (a dispatch on the type)"""
         P = self.P
         if i.mode == 'ind':
-            lo = collapse(self.mread(st, i.opnd, i), st.ty)
-            hi = collapse(self.mread(st, i.opnd + 1, i), st.ty)
-            ls, hs = dom.values(lo, 16), dom.values(hi, 16)
-            if ls is None or hs is None:
-                return None
-            tg = {b * 256 + a for a in ls for b in hs}
+            lo, hi = self.mread(st, i.opnd, i), self.mread(st, i.opnd + 1, i)
+            per = isP(lo) or isP(hi)
         else:
-            xs = dom.values(collapse(st.r['X'], st.ty), 64)
-            if xs is None:
-                return None
-            tg = set()
-            for x in xs:
-                a = i.opnd + x
-                l = self.default(a, i, st); h = self.default(a + 1, i, st)
-                if not (single(l) and single(h)):
+            per = isP(st.r['X'])
+        groups = collections.defaultdict(set)
+        for t in (sorted(st.ty) if per else [None]):
+            if i.mode == 'ind':
+                l = comp(lo, t) if t is not None else collapse(lo, st.ty)
+                h = comp(hi, t) if t is not None else collapse(hi, st.ty)
+                ls, hs = dom.values(l, 16), dom.values(h, 16)
+                if ls is None or hs is None:
                     return None
-                tg.add(h[0] * 256 + l[0])
+                tg = {b * 256 + a for a in ls for b in hs}
+            else:
+                x = comp(st.r['X'], t) if t is not None else collapse(st.r['X'], st.ty)
+                xs = dom.values(x, 64)
+                if xs is None:
+                    return None
+                tg = set()
+                for xv in xs:
+                    a = i.opnd + xv
+                    l = self.default(a, i, st); h = self.default(a + 1, i, st)
+                    if not (single(l) and single(h)):
+                        return None
+                    tg.add(h[0] * 256 + l[0])
+            for g in tg:
+                groups[g].add(t)
         out = []
-        for t in tg:
-            j = P.resolve(t, i.seg)
+        for g, ts in groups.items():
+            j = P.resolve(g, i.seg)
             if j is None:
                 return None
-            out.append((j.key, st.clone()))
+            s = st.clone()
+            if None not in ts:
+                self._narrow_types(s, frozenset(ts))
+            out.append((j.key, s))
         return out
 
 
@@ -1652,13 +1686,27 @@ def analyse(build, out=None, quiet=False, rounds=12):
         nobj = OB['count'] if isinstance(OB['count'], int) else (find_sym(PG, OB['count']) or 32)
         stride = OB['stride']
         tf = find_sym(PG, OB['type_field'])
+        soa = OB.get('layout', 'aos') == 'soa'
+        if soa:
+            tf = (tf - objst) // nobj           # (the type array's label: which field)
+            O = {n: (v - objst) // nobj if v is not None else None for n, v in O.items()}
         op = find_sym(PG, OB['current'])
         otype = find_sym(PG, OB.get('type_var')) if OB.get('type_var') else None
         rec = (objst, nobj, stride)
     else:
-        types, O, rec, op, tf, otype = [0], {}, None, None, None, None
+        types, O, rec, op, tf, otype, soa = [0], {}, None, None, None, None, False
     scr = {find_sym(PG, n) for n in C.SCREEN_POINTERS} - {None}
-    hintsG = dict(op=op, O_TYPE=tf, screen_ptrs=scr)
+    hintsG = dict(op=op, O_TYPE=tf, screen_ptrs=scr, soa=soa)
+    if OB and OB.get('game_bind'):
+        # the game builds the records itself (no load-time program): where its own code
+        # stores a record's type into the type variable, the type is bound -- (file,
+        # a regex of the instruction, the routine it is in)
+        gf, grx, gproc = OB['game_bind']
+        hintsG['bind'] = {i.key: otype for i in PG.insns.values()
+                          if i.game and PG.src.short(i.outer['file']).endswith(gf)
+                          and re.match(grx, PG.text(i).split(';')[0].strip())
+                          and PG.routine_of(i) == gproc}
+        notes.append(f"game binds the record type at {len(hintsG['bind'])} instruction(s)")
     # ---- the load-time program, when it builds the records
     I0, RL_ = {}, None
     if OB and C.LOADER_DBG and os.path.exists(os.path.join(build, C.LOADER_DBG)):
@@ -1675,7 +1723,7 @@ def analyse(build, out=None, quiet=False, rounds=12):
         # the loader's stores that are not through the current-record pointer: its clear
         prebuild = [i.key for i in PL.insns.values()
                     if lf and PL.src.short(i.outer['file']).endswith(lf) and i.mn in STORES and i.mode != 'iny']
-        hintsL = dict(op=op, O_TYPE=tf, bind=bind, prebuild=prebuild)
+        hintsL = dict(op=op, O_TYPE=tf, bind=bind, prebuild=prebuild, soa=soa)
         # summaries of the game's routines for the loader's calls out (what they may write)
         mwG = {}
         for t, s_ in anG.S.items():

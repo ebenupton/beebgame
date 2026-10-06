@@ -36,6 +36,15 @@ these features (no inline-operand helpers, no object model) needs no config at a
         loader_file   the source file of the loader's record builder (its stores through
                       `current` build the records; its other stores into them are its clear)
         bind          a regex of the loader's store that binds the record's type
+        layout        'aos' (the default: records of `stride` bytes, `current` a pointer to
+                      one, fields at offsets) or 'soa' (one array of `count` bytes a field,
+                      `stride` the number of fields, `records` the first array, the fields'
+                      labels the arrays; `current` the byte holding the current record's
+                      index -- an access is that record's when its index register equals
+                      that byte, as after `ldy obj`)
+        game_bind     (file, regex, routine): when the game's own code builds the records
+                      (no load-time program), the instruction in that routine of that file
+                      that stores the record's type into `type_var` binds it
 """
 import os, importlib.util
 
